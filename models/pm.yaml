@@ -1,0 +1,102 @@
+domain: pm
+version: 1
+entities:
+  project_snapshot:
+    table: project_snapshot
+    primary_key: project
+    permissions:
+      tags: ["pm"]
+    dimensions:
+      - name: project
+        column: project
+        type: string
+      - name: department
+        column: department
+        type: string
+      - name: manager
+        column: manager
+        type: string
+      - name: region
+        column: region
+        type: string
+      - name: status
+        column: status
+        type: string
+      - name: score
+        column: score
+        type: number
+      - name: employee_id
+        column: employee_id
+        type: string
+      - name: salary
+        column: salary
+        type: number
+metrics:
+  - name: project_count
+    label: 项目总数
+    entity: project_snapshot
+    kind: count_distinct
+    column: project
+    description: Distinct projects in scope.
+    synonyms: ["project count", "项目总数"]
+
+  - name: active_project_count
+    label: 进行中项目数
+    entity: project_snapshot
+    kind: count_distinct
+    column: project
+    where:
+      - field: status
+        op: eq
+        value: active
+    description: Distinct active projects.
+    synonyms: ["active projects", "进行中项目数"]
+
+  - name: delayed_project_count
+    label: 延迟项目数
+    entity: project_snapshot
+    kind: count_distinct
+    column: project
+    where:
+      - field: status
+        op: eq
+        value: delayed
+    description: Distinct delayed projects.
+    synonyms: ["delayed projects", "延迟项目数"]
+
+  - name: high_risk_project_count
+    label: 高风险项目数
+    entity: project_snapshot
+    kind: count_distinct
+    column: project
+    where:
+      - field: score
+        op: lt
+        value: 60
+    description: Distinct projects with score lower than 60.
+    synonyms: ["high risk projects", "高风险项目"]
+
+  - name: project_health_score_avg
+    label: 项目健康度均分
+    entity: project_snapshot
+    kind: avg
+    column: score
+    description: Average project health score.
+    synonyms: ["project health score", "项目健康度"]
+
+  - name: project_manager_count
+    label: 项目经理数
+    entity: project_snapshot
+    kind: count_distinct
+    column: manager
+    description: Distinct project managers.
+    synonyms: ["manager count", "项目经理数"]
+
+  - name: delayed_project_rate
+    label: 项目延期率
+    entity: project_snapshot
+    kind: ratio
+    numerator_metric: delayed_project_count
+    denominator_metric: project_count
+    description: delayed_project_count / project_count.
+    synonyms: ["project delay rate", "项目延期率"]

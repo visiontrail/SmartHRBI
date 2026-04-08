@@ -1,0 +1,74 @@
+name: smarthrbi
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smarthrbi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smarthrbi
+      POSTGRES_PASSWORD: smarthrbi
+      POSTGRES_DB: smarthrbi
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smarthrbi"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - smarthrbi_postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: smarthrbi-api
+    restart: unless-stopped
+    environment:
+      APP_NAME: SmartHRBI API
+      APP_ENV: production
+      DATABASE_URL: postgresql://smarthrbi:smarthrbi@postgres:5432/smarthrbi
+      MODEL_PROVIDER_URL: http://127.0.0.1:11434
+      AUTH_SECRET: docker-dev-secret
+      LOG_LEVEL: INFO
+      UPLOAD_DIR: /app/data/uploads
+      CORS_ALLOW_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - smarthrbi_upload_data:/app/data/uploads
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    container_name: smarthrbi-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      NEXTAUTH_SECRET: docker-dev-secret
+      LOG_LEVEL: INFO
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  smarthrbi_postgres_data:
+  smarthrbi_upload_data:

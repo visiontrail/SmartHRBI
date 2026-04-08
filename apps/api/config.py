@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_ENV_FILE_PATH = Path(__file__).resolve().parent / ".env"
+LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+class Settings(BaseSettings):
+    app_name: str = Field(default="SmartHRBI API", alias="APP_NAME")
+    app_env: str = Field(default="development", alias="APP_ENV")
+    database_url: str = Field(alias="DATABASE_URL")
+    model_provider_url: str = Field(alias="MODEL_PROVIDER_URL")
+    auth_secret: str = Field(alias="AUTH_SECRET")
+    log_level: str = Field(alias="LOG_LEVEL")
+    upload_dir: Path = Field(alias="UPLOAD_DIR")
+    cors_allow_origins: str = Field(
+        default="http://127.0.0.1:3000,http://localhost:3000",
+        alias="CORS_ALLOW_ORIGINS",
+    )
+
+    model_config = SettingsConfigDict(env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        upper = value.upper()
+        if upper not in LOG_LEVELS:
+            allowed = ", ".join(sorted(LOG_LEVELS))
+            raise ValueError(f"LOG_LEVEL must be one of: {allowed}")
+        return upper
+
+    @field_validator("upload_dir")
+    @classmethod
+    def normalize_upload_dir(cls, value: Path) -> Path:
+        if value.is_absolute():
+            return value
+        return (Path(__file__).resolve().parent / value).resolve()
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    env_file_override = os.getenv("API_ENV_FILE")
+    env_file = (
+        Path(env_file_override).expanduser().resolve()
+        if env_file_override
+        else DEFAULT_ENV_FILE_PATH
+    )
+    try:
+        return Settings(_env_file=env_file)
+    except ValidationError as exc:
+        raise RuntimeError(f"Invalid API configuration: {exc}") from exc

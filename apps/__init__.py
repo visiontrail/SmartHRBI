@@ -1,0 +1,1 @@
+# SmartHRBI apps namespace package.

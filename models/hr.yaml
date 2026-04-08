@@ -1,0 +1,131 @@
+domain: hr
+version: 1
+entities:
+  workforce:
+    table: workforce
+    primary_key: employee_id
+    permissions:
+      tags: ["hr", "pii"]
+    dimensions:
+      - name: employee_id
+        column: employee_id
+        type: string
+      - name: employee_name
+        column: employee_name
+        type: string
+      - name: department
+        column: department
+        type: string
+      - name: status
+        column: status
+        type: string
+      - name: salary
+        column: salary
+        type: number
+      - name: hire_date
+        column: hire_date
+        type: datetime
+      - name: attrition_date
+        column: attrition_date
+        type: datetime
+      - name: manager
+        column: manager
+        type: string
+      - name: region
+        column: region
+        type: string
+      - name: score
+        column: score
+        type: number
+      - name: project
+        column: project
+        type: string
+metrics:
+  - name: headcount_total
+    label: 总人数
+    entity: workforce
+    kind: count_distinct
+    column: employee_id
+    description: Distinct employee count.
+    synonyms: ["headcount", "员工总数", "总人数"]
+
+  - name: active_employee_count
+    label: 在职人数
+    entity: workforce
+    kind: count_distinct
+    column: employee_id
+    where:
+      - field: status
+        op: eq
+        value: active
+    description: Distinct active employees.
+    synonyms: ["active employees", "在职人数"]
+
+  - name: inactive_employee_count
+    label: 离职人数
+    entity: workforce
+    kind: count_distinct
+    column: employee_id
+    where:
+      - field: status
+        op: neq
+        value: active
+    description: Distinct inactive employees.
+    synonyms: ["inactive employees", "离职人数"]
+
+  - name: attrition_count
+    label: 离职员工数
+    entity: workforce
+    kind: count_distinct
+    column: employee_id
+    where:
+      - field: status
+        op: eq
+        value: inactive
+    description: Distinct employees marked as inactive.
+    synonyms: ["attrition count", "离职员工数"]
+
+  - name: attrition_rate
+    label: 离职率
+    entity: workforce
+    kind: ratio
+    numerator_metric: attrition_count
+    denominator_metric: headcount_total
+    description: Attrition_count / headcount_total.
+    synonyms: ["attrition rate", "离职率"]
+
+  - name: new_hire_count
+    label: 新入职人数
+    entity: workforce
+    kind: count_distinct
+    column: employee_id
+    where:
+      - field: hire_date
+        op: gte
+        value: "2026-01-01"
+    description: Distinct employees with recent hire_date.
+    synonyms: ["new hires", "新入职人数"]
+
+  - name: avg_salary
+    label: 平均薪资
+    entity: workforce
+    kind: avg
+    column: salary
+    description: Average salary for in-scope rows.
+    synonyms: ["average salary", "平均薪资"]
+
+  - name: salary_total
+    label: 薪资总额
+    entity: workforce
+    kind: sum
+    column: salary
+    description: Total salary for in-scope rows.
+    synonyms: ["salary total", "薪资总额"]
+
+  - name: workforce_health_score_avg
+    label: 人员健康度均分
+    entity: workforce
+    kind: avg
+    column: score
+    description: Average workforce score.
+    synonyms: ["workforce health score", "人员健康度"]
