@@ -8,9 +8,16 @@ WEB_DIR="$ROOT_DIR/apps/web"
 HOST="${WEB_HOST:-127.0.0.1}"
 PORT="${WEB_PORT:-3000}"
 BASE_CMD=(npm run --prefix "$WEB_DIR" dev -- --hostname "$HOST" --port "$PORT")
+LOG_FILE="${WEB_LOG_FILE:-}"
+
+if [[ -n "$LOG_FILE" ]]; then
+  mkdir -p "$(dirname "$LOG_FILE")"
+  : >"$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+fi
 
 if [[ "${ONE_SHOT:-0}" == "1" ]]; then
-  LOG_FILE="/tmp/smarthrbi-dev-web.log"
+  LOG_FILE="${LOG_FILE:-/tmp/smarthrbi-dev-web.log}"
   "${BASE_CMD[@]}" >"$LOG_FILE" 2>&1 &
   PID=$!
   trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT

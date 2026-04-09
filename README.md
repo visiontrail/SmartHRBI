@@ -33,6 +33,22 @@ make dev
 `make dev` starts web/api processes locally and ensures PostgreSQL is reachable.
 If local PostgreSQL is not running, it attempts to start `postgres` via Docker Compose.
 
+## Local Debug Start (No Docker)
+
+If you only want local debug startup and do not want any Docker auto-bootstrap:
+
+```bash
+make dev-local
+```
+
+Equivalent direct script:
+
+```bash
+bash scripts/dev_local_debug.sh
+```
+
+`dev-local` is intended for debug only. It requires local PostgreSQL to be already running and reachable from `DATABASE_URL`.
+
 ## Local Smoke Validation
 
 Run complete smoke flow:
@@ -100,9 +116,23 @@ make lint
 make test
 make build
 make dev
+make dev-local
 make smoke-local
 make smoke-docker
 make test-all
 make docker-up
 make docker-down
 ```
+
+## OpenAI Compatible LLM Setup
+
+`apps/api` now supports OpenAI-compatible chat completion endpoints for tool routing.
+
+Set these in `apps/api/.env`:
+
+- `MODEL_PROVIDER_URL`: provider base URL (for example `https://api.openai.com`)
+- `AI_API_KEY`: API key used in `Authorization: Bearer ...`
+- `AI_MODEL`: model name (for example `gpt-4o-mini`, `qwen-plus`, etc.)
+- `AI_TIMEOUT_SECONDS`: HTTP timeout for LLM routing calls
+
+When `AI_API_KEY` is empty, chat falls back to deterministic rule routing.

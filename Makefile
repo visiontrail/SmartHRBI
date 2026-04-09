@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap env-check lint test build dev dev-web dev-api smoke smoke-local smoke-docker test-all docker-up docker-down
+.PHONY: help bootstrap env-check lint test build dev dev-local dev-web dev-api smoke smoke-local smoke-docker test-all docker-up docker-down
 
 help: ## Show all available commands
 	@awk 'BEGIN {FS = ":.*##"; print "Available targets:"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -23,6 +23,9 @@ build: ## Build web and verify backend compile
 
 dev: ## Run web/api locally and ensure postgres is reachable
 	@bash scripts/dev_all.sh
+
+dev-local: ## Run local debug stack without Docker bootstrap (requires local postgres)
+	@bash scripts/dev_local_debug.sh
 
 dev-web: ## Run Next.js frontend dev server
 	@bash scripts/dev_web.sh

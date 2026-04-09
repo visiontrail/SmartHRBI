@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -107,10 +108,30 @@ class RollbackViewRequest(BaseModel):
     clearance: int = 0
 
 
+def configure_application_logging(level_name: str) -> None:
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    app_logger = logging.getLogger("smarthrbi")
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+
+    app_logger.setLevel(level)
+    if uvicorn_error_logger.handlers:
+        app_logger.handlers = uvicorn_error_logger.handlers
+        app_logger.propagate = False
+    elif not app_logger.handlers:
+        logging.basicConfig(level=level)
+        app_logger.propagate = True
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     settings = get_settings()
+    configure_application_logging(settings.log_level)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    logging.getLogger("smarthrbi").info(
+        "application_logging_configured level=%s upload_dir=%s",
+        settings.log_level,
+        settings.upload_dir,
+    )
 
 
 @app.post("/auth/login")

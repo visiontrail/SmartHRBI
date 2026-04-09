@@ -28,6 +28,19 @@ test("covers upload -> query -> save -> share rehydration flow", async ({ page }
       return;
     }
 
+    if (url.pathname === "/auth/login" && method === "POST") {
+      await route.fulfill({
+        status: 200,
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          access_token: "e2e-token",
+          token_type: "bearer",
+          expires_at: 4102444800
+        })
+      });
+      return;
+    }
+
     if (url.pathname === "/datasets/upload" && method === "POST") {
       await route.fulfill({
         status: 200,

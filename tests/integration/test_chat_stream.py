@@ -203,3 +203,51 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
     assert [item["id"] for item in replay_events] == [3, 4]
     assert [item["event"] for item in replay_events] == ["spec", "final"]
     assert replay_events[-1]["data"]["status"] in {"completed", "failed"}
+
+
+def test_chat_stream_falls_back_when_llm_selector_times_out(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AI_API_KEY", "test-api-key")
+    get_settings.cache_clear()
+    clear_chat_stream_service_cache()
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        _ = (request, timeout)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("apps.api.llm_openai.urllib_request.urlopen", fake_urlopen)
+
+    with TestClient(app) as client:
+        dataset_table = _upload_dataset(client)
+        headers = auth_headers(
+            client,
+            user_id="alice",
+            project_id="north",
+            role="viewer",
+            department="HR",
+            clearance=1,
+        )
+
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={
+                "conversation_id": "conv-stream-timeout",
+                "request_id": "chat-req-timeout",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": dataset_table,
+                "role": "viewer",
+                "department": "HR",
+                "clearance": 1,
+                "message": "Hi",
+            },
+            headers=headers,
+        ) as response:
+            assert response.status_code == 200
+            events, _ = _read_sse_events(response)
+
+    assert [item["event"] for item in events] == ["reasoning", "tool", "spec", "final"]
+    assert events[0]["data"]["tool_name"] == "query_metrics"
+    assert events[1]["data"]["status"] == "error"
+    assert events[-1]["data"]["status"] == "failed"

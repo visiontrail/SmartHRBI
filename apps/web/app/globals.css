@@ -224,6 +224,86 @@ td {
   gap: 10px;
 }
 
+.upload-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(21, 93, 252, 0.08), transparent 55%),
+    linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+}
+
+.upload-panel__copy {
+  display: grid;
+  gap: 4px;
+}
+
+.upload-panel__copy h3 {
+  font-size: 0.96rem;
+  font-weight: 800;
+}
+
+.upload-panel__copy p,
+.upload-panel__hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.upload-panel input[type="file"] {
+  width: 100%;
+  border: 1px dashed #9bb7ff;
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  font: inherit;
+}
+
+.upload-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.upload-panel__actions button {
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #155dfc 0%, #1d4ed8 100%);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+
+.upload-panel__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.upload-panel__actions button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.upload-error {
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
+.upload-summary {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(21, 93, 252, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 0.88rem;
+}
+
 .context-grid label {
   display: grid;
   gap: 6px;

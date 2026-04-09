@@ -13,9 +13,16 @@ fi
 HOST="${API_HOST:-127.0.0.1}"
 PORT="${API_PORT:-8000}"
 BASE_CMD=("$PYTHON_BIN" -m uvicorn apps.api.main:app --host "$HOST" --port "$PORT")
+LOG_FILE="${API_LOG_FILE:-}"
+
+if [[ -n "$LOG_FILE" ]]; then
+  mkdir -p "$(dirname "$LOG_FILE")"
+  : >"$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+fi
 
 if [[ "${ONE_SHOT:-0}" == "1" ]]; then
-  LOG_FILE="/tmp/smarthrbi-dev-api.log"
+  LOG_FILE="${LOG_FILE:-/tmp/smarthrbi-dev-api.log}"
   "${BASE_CMD[@]}" >"$LOG_FILE" 2>&1 &
   PID=$!
   trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT

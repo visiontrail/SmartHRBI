@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
     database_url: str = Field(alias="DATABASE_URL")
     model_provider_url: str = Field(alias="MODEL_PROVIDER_URL")
+    ai_api_key: str = Field(default="", alias="AI_API_KEY")
+    ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
+    ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
     auth_secret: str = Field(alias="AUTH_SECRET")
     log_level: str = Field(alias="LOG_LEVEL")
     upload_dir: Path = Field(alias="UPLOAD_DIR")
@@ -41,6 +44,13 @@ class Settings(BaseSettings):
         if value.is_absolute():
             return value
         return (Path(__file__).resolve().parent / value).resolve()
+
+    @field_validator("ai_timeout_seconds")
+    @classmethod
+    def validate_ai_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("AI_TIMEOUT_SECONDS must be greater than 0")
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

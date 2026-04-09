@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel } from "../genui/state-panels";
+import { getAuthorizationHeader } from "../../lib/auth/session";
 import { parseSSEStream } from "../../lib/chat/sse";
 import {
   SESSION_STORAGE_KEY,
@@ -23,11 +24,15 @@ type Message = {
 
 type StreamStatus = "idle" | "streaming";
 type SaveStatus = "idle" | "saving";
+type UploadStatus = "idle" | "uploading";
 
 type PersistedWorkbenchState = {
   conversationId: string;
   userId: string;
   projectId: string;
+  role: string;
+  department: string;
+  clearance: number;
   datasetTable: string;
   composer: string;
   messages: Message[];
@@ -38,12 +43,19 @@ type PersistedWorkbenchState = {
 
 const DEFAULT_USER_ID = "demo-user";
 const DEFAULT_PROJECT_ID = "demo-project";
+const DEFAULT_ROLE = "hr";
+const DEFAULT_DEPARTMENT = "HR";
+const DEFAULT_CLEARANCE = 1;
 const DEFAULT_DATASET = "employees_wide";
 
 export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [conversationId, setConversationId] = useState<string>(makeRequestId());
   const [userId, setUserId] = useState(DEFAULT_USER_ID);
   const [projectId, setProjectId] = useState(DEFAULT_PROJECT_ID);
+  const [role, setRole] = useState(DEFAULT_ROLE);
+  const [department, setDepartment] = useState(DEFAULT_DEPARTMENT);
+  const [clearance, setClearance] = useState(DEFAULT_CLEARANCE);
   const [datasetTable, setDatasetTable] = useState(DEFAULT_DATASET);
   const [composer, setComposer] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -54,6 +66,12 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadBatchId, setUploadBatchId] = useState<string | null>(null);
+  const [uploadDiagnostics, setUploadDiagnostics] = useState<Record<string, unknown> | null>(null);
+  const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
   const [isRestored, setIsRestored] = useState(false);
 
   useEffect(() => {
@@ -62,6 +80,9 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
       setConversationId(persisted.conversationId || makeRequestId());
       setUserId(persisted.userId || DEFAULT_USER_ID);
       setProjectId(persisted.projectId || DEFAULT_PROJECT_ID);
+      setRole(persisted.role || DEFAULT_ROLE);
+      setDepartment(persisted.department || DEFAULT_DEPARTMENT);
+      setClearance(Number.isFinite(persisted.clearance) ? persisted.clearance : DEFAULT_CLEARANCE);
       setDatasetTable(persisted.datasetTable || DEFAULT_DATASET);
       setComposer(persisted.composer || "");
       setMessages(Array.isArray(persisted.messages) ? persisted.messages : []);
@@ -80,6 +101,9 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
       conversationId,
       userId,
       projectId,
+      role,
+      department,
+      clearance,
       datasetTable,
       composer,
       messages,
@@ -92,10 +116,13 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     composer,
     conversationId,
     datasetTable,
+    department,
     isRestored,
     lastToolEvent,
     messages,
     projectId,
+    role,
+    clearance,
     shareLink,
     userId
   ]);
@@ -113,14 +140,25 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     setMessages((previous) => [...previous, { id: makeRequestId(), role: "user", text: message }]);
 
     try {
+      const authorizationHeader = await getAuthorizationHeader(apiBaseUrl, {
+        userId,
+        projectId,
+        role,
+        department,
+        clearance
+      });
       const response = await fetch(`${apiBaseUrl}/chat/stream`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...authorizationHeader
         },
         body: JSON.stringify({
           user_id: userId,
           project_id: projectId,
+          role,
+          department,
+          clearance,
           dataset_table: datasetTable,
           message,
           conversation_id: conversationId,
@@ -168,22 +206,35 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     setSaveStatus("saving");
     setSaveError(null);
     try {
+      const authorizationHeader = await getAuthorizationHeader(apiBaseUrl, {
+        userId,
+        projectId,
+        role,
+        department,
+        clearance
+      });
       const response = await fetch(`${apiBaseUrl}/views`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...authorizationHeader
         },
         body: JSON.stringify({
           user_id: userId,
           project_id: projectId,
+          role,
+          department,
+          clearance,
           dataset_table: datasetTable,
-          role: "viewer",
           title: "Saved from Workbench",
           conversation_id: conversationId,
           ai_state: {
             conversation_id: conversationId,
             user_id: userId,
             project_id: projectId,
+            role,
+            department,
+            clearance,
             dataset_table: datasetTable,
             messages,
             active_spec: activeSpec,
@@ -211,6 +262,86 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     }
   }
 
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    setUploadError(null);
+    setSelectedFiles(Array.from(event.target.files ?? []));
+  }
+
+  async function handleUploadFiles() {
+    if (selectedFiles.length === 0 || uploadStatus === "uploading") {
+      return;
+    }
+
+    setUploadStatus("uploading");
+    setUploadError(null);
+
+    try {
+      const authorizationHeader = await getAuthorizationHeader(apiBaseUrl, {
+        userId,
+        projectId,
+        role,
+        department,
+        clearance
+      });
+
+      const formData = new FormData();
+      formData.set("user_id", userId);
+      formData.set("project_id", projectId);
+      selectedFiles.forEach((file) => {
+        formData.append("files", file);
+      });
+
+      const uploadResponse = await fetch(`${apiBaseUrl}/datasets/upload`, {
+        method: "POST",
+        headers: authorizationHeader,
+        body: formData
+      });
+      const uploadPayload = await uploadResponse.json().catch(() => null);
+
+      if (!uploadResponse.ok) {
+        throw new Error(readApiErrorMessage(uploadPayload, `upload_failed_${uploadResponse.status}`));
+      }
+      if (!isRecord(uploadPayload)) {
+        throw new Error("upload_invalid_payload");
+      }
+
+      const nextDatasetTable = String(uploadPayload.dataset_table ?? "");
+      const nextBatchId = String(uploadPayload.batch_id ?? "");
+      const diagnostics = isRecord(uploadPayload.diagnostics) ? uploadPayload.diagnostics : null;
+      if (!nextDatasetTable || !nextBatchId) {
+        throw new Error("upload_missing_dataset_metadata");
+      }
+
+      setDatasetTable(nextDatasetTable);
+      setUploadBatchId(nextBatchId);
+      setUploadDiagnostics(diagnostics);
+
+      const qualityResponse = await fetch(`${apiBaseUrl}/datasets/${nextBatchId}/quality-report`, {
+        headers: authorizationHeader
+      });
+      const qualityPayload = await qualityResponse.json().catch(() => null);
+      if (!qualityResponse.ok) {
+        throw new Error(readApiErrorMessage(qualityPayload, `quality_report_failed_${qualityResponse.status}`));
+      }
+      if (!isRecord(qualityPayload)) {
+        throw new Error("quality_report_invalid_payload");
+      }
+
+      setQualityReport(qualityPayload);
+      appendAssistantMessage(
+        `Uploaded ${selectedFiles.length} Excel file(s). Active dataset table switched to ${nextDatasetTable}.`
+      );
+      setSelectedFiles([]);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "上传失败");
+    } finally {
+      setUploadStatus("idle");
+    }
+  }
+
   function appendAssistantMessage(text: string) {
     setMessages((previous) => [...previous, { id: makeRequestId(), role: "assistant", text }]);
   }
@@ -221,6 +352,35 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     }
     return "Idle";
   }, [streamStatus]);
+
+  const selectedFilesLabel = useMemo(() => {
+    if (selectedFiles.length === 0) {
+      return "尚未选择文件";
+    }
+    if (selectedFiles.length === 1) {
+      return selectedFiles[0]?.name ?? "1 file selected";
+    }
+    return `已选择 ${selectedFiles.length} 个文件`;
+  }, [selectedFiles]);
+
+  const uploadSummary = useMemo(() => {
+    if (!isRecord(qualityReport)) {
+      return null;
+    }
+
+    const summary = isRecord(qualityReport.summary) ? qualityReport.summary : null;
+    const blockingIssues = Array.isArray(qualityReport.blocking_issues) ? qualityReport.blocking_issues : [];
+    const canPublish = Boolean(qualityReport.can_publish_to_semantic_layer);
+    const diagnosticsRowCount = Number(uploadDiagnostics?.result_row_count ?? 0);
+    const diagnosticsColumnCount = Number(uploadDiagnostics?.result_column_count ?? 0);
+
+    return {
+      rowCount: Number(summary?.row_count ?? diagnosticsRowCount ?? 0),
+      columnCount: Number(summary?.column_count ?? diagnosticsColumnCount ?? 0),
+      issueCount: blockingIssues.length,
+      canPublish
+    };
+  }, [qualityReport, uploadDiagnostics]);
 
   return (
     <main className="workspace">
@@ -281,6 +441,44 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
 
         <section className="workspace-card">
           <h2>Dataset Context</h2>
+          <section className="upload-panel">
+            <div className="upload-panel__copy">
+              <h3>Excel Upload</h3>
+              <p>上传 `.xlsx` 后会自动创建数据表，并回填到当前会话的 `Dataset Table`。</p>
+            </div>
+            <input
+              ref={uploadInputRef}
+              aria-label="Excel Upload"
+              type="file"
+              accept=".xlsx"
+              multiple
+              onChange={handleFileSelection}
+            />
+            <div className="upload-panel__actions">
+              <button type="button" onClick={handleUploadFiles} disabled={!selectedFiles.length || uploadStatus === "uploading"}>
+                {uploadStatus === "uploading" ? "Uploading..." : "Upload Excel"}
+              </button>
+              <p className="muted">{selectedFilesLabel}</p>
+            </div>
+            <p className="upload-panel__hint">限制：单文件 10MB，单次最多 20 个 `.xlsx` 文件。</p>
+            {uploadError ? <p className="upload-error">{uploadError}</p> : null}
+            {uploadBatchId ? (
+              <div className="upload-summary" data-testid="upload-summary">
+                <p>
+                  Batch ID: <strong>{uploadBatchId}</strong>
+                </p>
+                <p>
+                  Dataset Table: <strong>{datasetTable}</strong>
+                </p>
+                {uploadSummary ? (
+                  <p>
+                    Rows {uploadSummary.rowCount}, Columns {uploadSummary.columnCount}, Blocking issues {uploadSummary.issueCount},
+                    Semantic layer {uploadSummary.canPublish ? "ready" : "blocked"}.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
           <div className="context-grid">
             <label>
               User ID
@@ -289,6 +487,30 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
             <label>
               Project ID
               <input value={projectId} onChange={(event) => setProjectId(event.target.value)} />
+            </label>
+            <label>
+              Role
+              <select aria-label="Role" value={role} onChange={(event) => setRole(event.target.value)}>
+                <option value="admin">admin</option>
+                <option value="hr">hr</option>
+                <option value="pm">pm</option>
+                <option value="viewer">viewer</option>
+              </select>
+            </label>
+            <label>
+              Department
+              <input value={department} onChange={(event) => setDepartment(event.target.value)} />
+            </label>
+            <label>
+              Clearance
+              <input
+                aria-label="Clearance"
+                type="number"
+                min={0}
+                step={1}
+                value={clearance}
+                onChange={(event) => setClearance(Number(event.target.value) || 0)}
+              />
             </label>
             <label>
               Dataset Table
@@ -323,4 +545,19 @@ function makeRequestId(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readApiErrorMessage(payload: unknown, fallback: string): string {
+  if (!isRecord(payload)) {
+    return fallback;
+  }
+
+  const detail = isRecord(payload.detail) ? payload.detail : null;
+  const detailMessage = detail ? String(detail.message ?? "") : "";
+  if (detailMessage) {
+    return detailMessage;
+  }
+
+  const payloadMessage = String(payload.message ?? "");
+  return payloadMessage || fallback;
 }

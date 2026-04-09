@@ -29,7 +29,10 @@ services:
       APP_NAME: SmartHRBI API
       APP_ENV: production
       DATABASE_URL: postgresql://smarthrbi:smarthrbi@postgres:5432/smarthrbi
-      MODEL_PROVIDER_URL: http://127.0.0.1:11434
+      MODEL_PROVIDER_URL: ${MODEL_PROVIDER_URL:-http://127.0.0.1:11434}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-20}
       AUTH_SECRET: docker-dev-secret
       LOG_LEVEL: INFO
       UPLOAD_DIR: /app/data/uploads

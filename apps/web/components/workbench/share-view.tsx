@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel, SkeletonPanel } from "../genui/state-panels";
+import { getAuthorizationHeader } from "../../lib/auth/session";
 
 type ShareViewProps = {
   apiBaseUrl: string;
@@ -37,7 +38,16 @@ export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`${apiBaseUrl}/share/${encodeURIComponent(viewId)}`);
+        const authorizationHeader = await getAuthorizationHeader(apiBaseUrl, {
+          userId: "share-viewer",
+          projectId: "shared-views",
+          role: "viewer",
+          department: null,
+          clearance: 0
+        });
+        const response = await fetch(`${apiBaseUrl}/share/${encodeURIComponent(viewId)}`, {
+          headers: authorizationHeader
+        });
         const body = (await response.json()) as SharePayload | { detail?: { message?: string } };
 
         if (!response.ok) {

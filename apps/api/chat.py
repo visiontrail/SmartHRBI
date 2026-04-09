@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -11,7 +12,11 @@ from pydantic import BaseModel, Field
 
 from .chart_strategy import ChartStrategyRouter
 from .config import get_settings
+from .llm_openai import OpenAICompatibleToolSelector, ToolSelectionError
+from .semantic import get_semantic_registry
 from .tool_calling import ToolCall, ToolCallRequest, ToolCallResponse, get_tool_calling_service
+
+logger = logging.getLogger("smarthrbi.chat")
 
 
 class ChatStreamRequest(BaseModel):
@@ -96,9 +101,17 @@ class ChatSessionStore:
 
 class ChatStreamService:
     def __init__(self) -> None:
+        settings = get_settings()
         self.tool_service = get_tool_calling_service()
         self.router = ChartStrategyRouter()
         self.sessions = ChatSessionStore()
+        self.llm_selector = OpenAICompatibleToolSelector(
+            base_url=settings.model_provider_url,
+            api_key=settings.ai_api_key,
+            model=settings.ai_model,
+            timeout_seconds=settings.ai_timeout_seconds,
+            metric_catalog=get_semantic_registry().list_metrics(),
+        )
 
     def stream(
         self,
@@ -123,20 +136,26 @@ class ChatStreamService:
 
         new_events: list[ChatEvent] = []
         if request.message:
-            generated = self._generate_event_payloads(request=request, conversation_id=conversation_id)
+            try:
+                generated = self._generate_event_payloads(request=request, conversation_id=conversation_id)
+            except Exception:
+                logger.exception(
+                    "chat_stream_generation_failed conversation_id=%s request_id=%s",
+                    conversation_id,
+                    request.request_id,
+                )
+                generated = self._build_terminal_failure_events(
+                    conversation_id=conversation_id,
+                    request_id=request.request_id,
+                    text="Unable to process the request right now. Please retry.",
+                )
             new_events = self.sessions.append_events(conversation_id=conversation_id, events=generated)
         elif last_event_id is None:
-            generated = [
-                (
-                    "final",
-                    {
-                        "conversation_id": conversation_id,
-                        "request_id": request.request_id,
-                        "status": "failed",
-                        "text": "message is required when not replaying a previous stream",
-                    },
-                )
-            ]
+            generated = self._build_terminal_failure_events(
+                conversation_id=conversation_id,
+                request_id=request.request_id,
+                text="message is required when not replaying a previous stream",
+            )
             new_events = self.sessions.append_events(conversation_id=conversation_id, events=generated)
 
         for event in [*replay_events, *new_events]:
@@ -204,6 +223,33 @@ class ChatStreamService:
         ]
 
     def _select_tool(self, *, message: str, conversation_id: str) -> tuple[str, dict[str, Any]]:
+        context = self.sessions.get_context(conversation_id=conversation_id)
+        if self.llm_selector.enabled:
+            try:
+                selected = self.llm_selector.select_tool(
+                    message=message,
+                    conversation_id=conversation_id,
+                    context=context,
+                )
+                return selected.tool_name, selected.arguments
+            except ToolSelectionError as exc:
+                logger.warning(
+                    "chat_tool_selection_fallback conversation_id=%s message=%r reason=%s context=%s",
+                    conversation_id,
+                    message,
+                    exc.message,
+                    json.dumps(context, ensure_ascii=False, default=str),
+                )
+                # Fallback to deterministic rule routing if LLM routing is unavailable.
+            except Exception:
+                logger.exception(
+                    "chat_tool_selection_unexpected_error conversation_id=%s",
+                    conversation_id,
+                )
+
+        return self._select_tool_with_rules(message=message, conversation_id=conversation_id)
+
+    def _select_tool_with_rules(self, *, message: str, conversation_id: str) -> tuple[str, dict[str, Any]]:
         normalized = message.lower()
         if any(token in normalized for token in ["schema", "字段", "列", "describe", "数据集"]):
             return "describe_dataset", {"sample_limit": 10}
@@ -362,6 +408,25 @@ class ChatStreamService:
         }
         return spec, final
 
+    def _build_terminal_failure_events(
+        self,
+        *,
+        conversation_id: str,
+        request_id: str,
+        text: str,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        return [
+            (
+                "final",
+                {
+                    "conversation_id": conversation_id,
+                    "request_id": request_id,
+                    "status": "failed",
+                    "text": text,
+                },
+            )
+        ]
+
 
 def _format_sse(event: ChatEvent) -> str:
     return (
@@ -379,7 +444,15 @@ def _cached_chat_stream_service(settings_key: str) -> ChatStreamService:
 
 def get_chat_stream_service() -> ChatStreamService:
     settings = get_settings()
-    return _cached_chat_stream_service(str(settings.upload_dir.resolve()))
+    settings_key = "|".join(
+        [
+            str(settings.upload_dir.resolve()),
+            settings.model_provider_url.strip(),
+            settings.ai_model.strip(),
+            "enabled" if bool(settings.ai_api_key.strip()) else "disabled",
+        ]
+    )
+    return _cached_chat_stream_service(settings_key)
 
 
 def clear_chat_stream_service_cache() -> None:

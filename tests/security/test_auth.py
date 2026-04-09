@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -30,12 +31,14 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_view_storage_service_cache()
 
 
-def test_core_api_requires_bearer_token(monkeypatch, tmp_path: Path) -> None:
+def test_core_api_requires_bearer_token(monkeypatch, tmp_path: Path, caplog) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
-    with TestClient(app) as client:
-        response = client.get("/semantic/metrics")
+    with caplog.at_level(logging.WARNING, logger="smarthrbi.auth"):
+        with TestClient(app) as client:
+            response = client.get("/semantic/metrics")
 
+    assert "reason=missing_token" in caplog.text
     expect_error_code(response, "AUTH_REQUIRED", status_code=401)
 
 

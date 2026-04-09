@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -71,6 +72,7 @@ DEFAULT_TOKEN_TTL_SECONDS = 3600
 MAX_TOKEN_TTL_SECONDS = 24 * 3600
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger("smarthrbi.auth")
 
 
 @dataclass(slots=True)
@@ -364,15 +366,35 @@ def get_current_identity(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> AuthIdentity:
     audit = get_audit_logger()
+    header_snapshot = _authorization_header_snapshot(request)
 
     if credentials is None or credentials.scheme.lower() != "bearer":
+        reason = "missing_token"
+        if header_snapshot["has_auth_header"] and header_snapshot["auth_scheme"] != "bearer":
+            reason = "invalid_auth_scheme"
+        elif (
+            header_snapshot["has_auth_header"]
+            and header_snapshot["auth_scheme"] == "bearer"
+            and header_snapshot["token_length"] == 0
+        ):
+            reason = "empty_bearer_token"
+
         audit.log(
             event_type="authentication",
             action="access",
             status="denied",
             severity="ALERT",
             resource=str(request.url.path),
-            detail={"reason": "missing_token"},
+            detail={"reason": reason},
+        )
+        logger.warning(
+            "auth_denied path=%s method=%s reason=%s has_auth_header=%s auth_scheme=%s token_length=%d",
+            request.url.path,
+            request.method,
+            reason,
+            header_snapshot["has_auth_header"],
+            header_snapshot["auth_scheme"],
+            header_snapshot["token_length"],
         )
         raise HTTPException(
             status_code=401,
@@ -390,6 +412,14 @@ def get_current_identity(
             resource=str(request.url.path),
             detail={"reason": exc.code},
         )
+        logger.warning(
+            "auth_denied path=%s method=%s reason=%s token_fingerprint=%s token_length=%d",
+            request.url.path,
+            request.method,
+            exc.code,
+            _token_fingerprint(credentials.credentials),
+            len(credentials.credentials),
+        )
         raise HTTPException(status_code=401, detail={"code": exc.code, "message": exc.message}) from exc
     except AuthTokenError as exc:
         audit.log(
@@ -399,6 +429,14 @@ def get_current_identity(
             severity="ALERT",
             resource=str(request.url.path),
             detail={"reason": exc.code},
+        )
+        logger.warning(
+            "auth_denied path=%s method=%s reason=%s token_fingerprint=%s token_length=%d",
+            request.url.path,
+            request.method,
+            exc.code,
+            _token_fingerprint(credentials.credentials),
+            len(credentials.credentials),
         )
         raise HTTPException(status_code=401, detail={"code": exc.code, "message": exc.message}) from exc
 
@@ -450,6 +488,30 @@ def _optional_string(value: Any) -> str | None:
         stripped = value.strip()
         return stripped or None
     return None
+
+
+def _authorization_header_snapshot(request: Request) -> dict[str, Any]:
+    raw_header = request.headers.get("authorization", "").strip()
+    if not raw_header:
+        return {
+            "has_auth_header": False,
+            "auth_scheme": "",
+            "token_length": 0,
+        }
+
+    scheme, _, rest = raw_header.partition(" ")
+    token = rest.strip()
+    return {
+        "has_auth_header": True,
+        "auth_scheme": scheme.strip().lower(),
+        "token_length": len(token),
+    }
+
+
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return "none"
+    return hashlib.sha1(token.encode("utf-8")).hexdigest()[:12]
 
 
 def _b64url_encode(raw: bytes) -> str:

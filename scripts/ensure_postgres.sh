@@ -69,6 +69,12 @@ if [[ "$DB_HOST" != "127.0.0.1" && "$DB_HOST" != "localhost" ]]; then
   exit 1
 fi
 
+if [[ "${DISABLE_DOCKER_POSTGRES_BOOTSTRAP:-0}" == "1" ]]; then
+  echo "[postgres] PostgreSQL is not reachable at ${DB_HOST}:${DB_PORT}, and Docker auto-start is disabled"
+  echo "[postgres] Please start local PostgreSQL manually for debug mode"
+  exit 1
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "[postgres] PostgreSQL is not reachable at ${DB_HOST}:${DB_PORT}, and Docker is unavailable for auto-start"
   exit 1
