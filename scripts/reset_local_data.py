@@ -78,9 +78,9 @@ def parse_args() -> argparse.Namespace:
         help="Skip the confirmation prompt.",
     )
     parser.add_argument(
-        "--skip-db",
+        "--with-db-reset",
         action="store_true",
-        help="Do not reset the database referenced by DATABASE_URL.",
+        help="Also reset the database referenced by DATABASE_URL. Disabled by default.",
     )
     parser.add_argument(
         "--include-docker-volumes",
@@ -176,11 +176,15 @@ def build_db_target(database_url: str) -> DbTarget:
 def confirm_or_exit(config: ResetConfig, db_target: DbTarget, args: argparse.Namespace) -> None:
     print(f"[reset] Env file: {config.env_file}")
     print(f"[reset] Upload dir: {config.upload_dir}")
-    if args.skip_db:
-        print("[reset] Database reset: skipped by flag")
-    else:
+    if args.with_db_reset:
         print(f"[reset] Database target: {db_target.display_name}")
-    print("[reset] Test/runtime artifacts:")
+    else:
+        print("[reset] Database reset: skipped by default")
+    print("[reset] Local state to clear:")
+    print("  - uploaded raw files and metadata")
+    print("  - DuckDB runtime databases")
+    print("  - SQLite state databases and view/audit files under UPLOAD_DIR/state")
+    print("  - auth overrides and audit logs under UPLOAD_DIR")
     for item in STATIC_TEST_ARTIFACTS:
         print(f"  - {item}")
     print("  - all __pycache__ directories under the repo")
@@ -414,7 +418,7 @@ def main() -> int:
         artifact_paths.extend(discover_pycache_dirs(ROOT_DIR))
 
         if (
-            not args.skip_db
+            args.with_db_reset
             and db_target.scheme == "sqlite"
             and db_target.sqlite_path is not None
             and not is_within(db_target.sqlite_path, config.upload_dir)
@@ -426,15 +430,36 @@ def main() -> int:
         for artifact in dedupe_paths(artifact_paths):
             actions.extend(remove_path(artifact, dry_run=args.dry_run))
 
-        if not args.skip_db:
+        if args.with_db_reset:
             actions.extend(reset_database(db_target, dry_run=args.dry_run))
 
         if args.include_docker_volumes:
             actions.extend(cleanup_docker_volumes(dry_run=args.dry_run))
 
+        removed_count = sum(
+            1
+            for action in actions
+            if action.startswith("removed:")
+            or action.startswith("cleared directory contents:")
+            or action.startswith("completed:")
+            or action.startswith("ensured directory exists:")
+        )
+        planned_count = sum(
+            1
+            for action in actions
+            if action.startswith("would remove:")
+            or action.startswith("would clear directory contents:")
+            or action.startswith("would run:")
+            or action.startswith("would ensure directory exists:")
+        )
+
         print("[reset] Summary")
         for action in actions:
             print(f"  - {action}")
+        if args.dry_run:
+            print(f"[reset] Dry run complete. Planned operations: {planned_count}")
+        else:
+            print(f"[reset] Cleanup complete. Applied operations: {removed_count}")
         print("[reset] Done")
         return 0
     except ResetError as exc:

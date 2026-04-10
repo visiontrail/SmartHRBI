@@ -1,7 +1,7 @@
 """LLM-powered schema inference for arbitrary Excel uploads.
 
 When a file contains many unrecognized columns (e.g. pure Chinese headers),
-this module calls Claude to infer:
+this module calls an OpenAI-compatible LLM to infer:
   1. A canonical snake_case English name for every column
   2. A semantic type (string | number | datetime | boolean)
   3. A set of auto-generated metrics appropriate for the data
@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
+import time
 from pathlib import Path
 from typing import Any
-
-import anthropic
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 logger = logging.getLogger("smarthrbi.schema_inference")
 
@@ -66,45 +68,87 @@ def _build_user_prompt(
     return "\n".join(lines)
 
 
+def _chat_completions_endpoint(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
+
+
 def infer_schema(
     *,
     column_samples: dict[str, list[Any]],
     ai_api_key: str,
-    ai_model: str = "claude-sonnet-4-6",
+    ai_model: str = "claude-haiku-4-5-20251001",
+    ai_base_url: str = "https://api.anthropic.com/v1",
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """Call Claude to infer column mapping and metrics.
+    """Call an OpenAI-compatible LLM to infer column mapping and metrics.
 
     Returns a dict with keys ``columns`` and ``metrics`` as described in the
     system prompt.  On any failure, returns an empty overlay so the caller can
     continue without schema enrichment.
     """
-    client = anthropic.Anthropic(api_key=ai_api_key)
     user_msg = _build_user_prompt(column_samples)
 
     logger.info("schema_inference_request column_count=%d model=%s", len(column_samples), ai_model)
 
+    payload = {
+        "model": ai_model,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+    }
+
+    endpoint = _chat_completions_endpoint(ai_base_url)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {ai_api_key}",
+    }
+    req = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
+    started_at = time.perf_counter()
+
+    raw_text = ""
     try:
-        message = client.messages.create(
-            model=ai_model,
-            max_tokens=4096,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
-            timeout=timeout,
-        )
-        raw_text = message.content[0].text.strip()
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            raw_response = resp.read().decode("utf-8")
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        data = json.loads(raw_response)
+        choices = data.get("choices") or []
+        if not choices:
+            logger.warning("schema_inference_failed error=empty choices from LLM")
+            return {"columns": {}, "metrics": []}
+
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
+        raw_text = content.strip() if isinstance(content, str) else ""
+
         # Strip markdown code fences if the model added them anyway
         raw_text = re.sub(r"^```[a-z]*\n?", "", raw_text)
         raw_text = re.sub(r"\n?```$", "", raw_text)
         result: dict[str, Any] = json.loads(raw_text)
         logger.info(
-            "schema_inference_success column_count=%d metric_count=%d",
+            "schema_inference_success column_count=%d metric_count=%d elapsed_ms=%s",
             len(result.get("columns", {})),
             len(result.get("metrics", [])),
+            elapsed_ms,
         )
         return result
     except json.JSONDecodeError as exc:
         logger.warning("schema_inference_parse_error raw=%r error=%s", raw_text[:200], exc)
+        return {"columns": {}, "metrics": []}
+    except (TimeoutError, socket.timeout) as exc:
+        logger.warning("schema_inference_failed error=timeout: %s", exc)
+        return {"columns": {}, "metrics": []}
+    except urllib_error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+        logger.warning("schema_inference_failed error=HTTP %s: %s", exc.code, details or exc.reason)
         return {"columns": {}, "metrics": []}
     except Exception as exc:
         logger.warning("schema_inference_failed error=%s", exc)

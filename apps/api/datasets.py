@@ -204,6 +204,7 @@ class DatasetIngestionService:
         *,
         ai_api_key: str = "",
         ai_model: str = "claude-haiku-4-5-20251001",
+        ai_base_url: str = "",
         ai_timeout: float = 30.0,
     ) -> None:
         self.upload_root = upload_root
@@ -212,6 +213,7 @@ class DatasetIngestionService:
         self.session_manager = DuckDBSessionManager(upload_root / "duckdb")
         self._ai_api_key = ai_api_key
         self._ai_model = ai_model
+        self._ai_base_url = ai_base_url
         self._ai_timeout = ai_timeout
 
     async def upload_files(
@@ -261,6 +263,7 @@ class DatasetIngestionService:
                     column_samples=column_samples,
                     ai_api_key=self._ai_api_key,
                     ai_model=self._ai_model,
+                    ai_base_url=self._ai_base_url,
                     timeout=self._ai_timeout,
                 )
                 if overlay.get("columns"):
@@ -669,17 +672,18 @@ def _infer_series_type(series: pd.Series) -> str:
 
 
 @lru_cache(maxsize=8)
-def _service_cache(upload_root: str, ai_api_key: str, ai_model: str, ai_timeout: float) -> DatasetIngestionService:
+def _service_cache(upload_root: str, ai_api_key: str, ai_model: str, ai_base_url: str, ai_timeout: float) -> DatasetIngestionService:
     return DatasetIngestionService(
         Path(upload_root),
         ai_api_key=ai_api_key,
         ai_model=ai_model,
+        ai_base_url=ai_base_url,
         ai_timeout=ai_timeout,
     )
 
 
-def get_dataset_service(upload_root: Path, *, ai_api_key: str = "", ai_model: str = "claude-haiku-4-5-20251001", ai_timeout: float = 30.0) -> DatasetIngestionService:
-    return _service_cache(str(upload_root.resolve()), ai_api_key, ai_model, ai_timeout)
+def get_dataset_service(upload_root: Path, *, ai_api_key: str = "", ai_model: str = "claude-haiku-4-5-20251001", ai_base_url: str = "", ai_timeout: float = 30.0) -> DatasetIngestionService:
+    return _service_cache(str(upload_root.resolve()), ai_api_key, ai_model, ai_base_url, ai_timeout)
 
 
 def clear_dataset_service_cache() -> None:

@@ -89,7 +89,7 @@ make smoke-docker
 
 ## Reset Local Runtime/Test Data
 
-To clear local runtime state, uploaded datasets, persisted view/session state, local test artifacts, and the database referenced by `apps/api/.env`:
+To clear local runtime state, uploaded datasets, persisted chat/view session state, DuckDB/SQLite files under `UPLOAD_DIR`, and local test artifacts:
 
 ```bash
 .venv/bin/python scripts/reset_local_data.py
@@ -105,6 +105,12 @@ Preview what would be deleted without changing anything:
 
 ```bash
 .venv/bin/python scripts/reset_local_data.py --dry-run
+```
+
+If you explicitly also want to reset the database referenced by `apps/api/.env`:
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --with-db-reset
 ```
 
 If you also want to remove Docker Compose named volumes for the local stack:

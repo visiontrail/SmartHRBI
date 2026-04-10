@@ -1,19 +1,25 @@
 INFO:     Will watch for changes in these directories: ['/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI']
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [90370] using WatchFiles
-INFO:     Started server process [90397]
+INFO:     Started reloader process [12555] using WatchFiles
+INFO:     Started server process [12573]
 INFO:     Waiting for application startup.
 INFO:smarthrbi:application_logging_configured level=INFO upload_dir=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads
 INFO:smarthrbi:chat_runtime_config chat_engine=agent_primary allowlist_enabled=False claude_agent_sdk_enabled=False agent_max_tool_steps=6 agent_max_sql_rows=200 agent_timeout_seconds=25.0
 INFO:     Application startup complete.
-INFO:     127.0.0.1:58997 - "OPTIONS /auth/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58997 - "POST /auth/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58997 - "OPTIONS /datasets/upload HTTP/1.1" 200 OK
-INFO:smarthrbi.datasets:schema_inference_triggered batch_id=d2d15abdaf5d4ad3a2cea07609fb0ea9 unrecognized=59 total=62
+INFO:     127.0.0.1:64602 - "OPTIONS /auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64602 - "POST /auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64602 - "OPTIONS /datasets/upload HTTP/1.1" 200 OK
+INFO:smarthrbi.datasets:schema_inference_triggered batch_id=5380f17370f34b2e8f3d5634a00dfc83 unrecognized=59 total=62
 INFO:smarthrbi.schema_inference:schema_inference_request column_count=62 model=kimi-k2-0905-preview
-INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
-WARNING:smarthrbi.schema_inference:schema_inference_failed error=Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CZuvgijEmZ4AAQtpShQuY'}
-INFO:smarthrbi.datasets:upload_succeeded batch_id=d2d15abdaf5d4ad3a2cea07609fb0ea9 user_id=demo-user project_id=demo-project duration_ms=1247
-INFO:     127.0.0.1:58997 - "POST /datasets/upload HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58997 - "OPTIONS /datasets/d2d15abdaf5d4ad3a2cea07609fb0ea9/quality-report HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58998 - "GET /datasets/d2d15abdaf5d4ad3a2cea07609fb0ea9/quality-report HTTP/1.1" 200 OK
+INFO:smarthrbi.schema_inference:schema_inference_success column_count=62 metric_count=8 elapsed_ms=75721.97
+INFO:smarthrbi.schema_inference:schema_overlay_saved path=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads/metadata/5380f17370f34b2e8f3d5634a00dfc83_schema_overlay.json
+INFO:smarthrbi.datasets:upload_succeeded batch_id=5380f17370f34b2e8f3d5634a00dfc83 user_id=demo-user project_id=demo-project duration_ms=76102
+INFO:     127.0.0.1:64602 - "POST /datasets/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64602 - "OPTIONS /datasets/5380f17370f34b2e8f3d5634a00dfc83/quality-report HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64602 - "GET /datasets/5380f17370f34b2e8f3d5634a00dfc83/quality-report HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65111 - "OPTIONS /chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65111 - "POST /chat/stream HTTP/1.1" 200 OK
+INFO:smarthrbi.agent:agent_react_step conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 request_id=d9057fd1-86df-4f67-b617-49a4ff2b415b step=1/6
+INFO:smarthrbi.llm:agent_llm_request conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 step=1 endpoint=https://api.moonshot.cn/v1/chat/completions model=kimi-k2-0905-preview message_count=3
+INFO:smarthrbi.llm:agent_llm_response conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 step=1 elapsed_ms=13450.6
+INFO:smarthrbi.agent:agent_react_final_answer conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 request_id=d9057fd1-86df-4f67-b617-49a4ff2b415b step=1

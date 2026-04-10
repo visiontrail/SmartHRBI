@@ -247,6 +247,7 @@ async def upload_datasets(
         settings.upload_dir,
         ai_api_key=settings.ai_api_key,
         ai_model=settings.ai_model,
+        ai_base_url=settings.model_provider_url,
         ai_timeout=settings.ai_timeout_seconds,
     )
     audit = get_audit_logger()
