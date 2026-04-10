@@ -546,11 +546,29 @@ class AgentRuntime:
             if role in {"user", "assistant"} and content:
                 messages.append({"role": role, "content": str(content)})
 
-        # Context hint about active dataset
+        # Context hint about active dataset and all available tables
+        try:
+            all_tables = self.tool_service.dataset_service.list_tables(
+                user_id=request.user_id, project_id=request.project_id
+            )
+        except Exception:
+            all_tables = [request.dataset_table]
+
+        if len(all_tables) > 1:
+            other_tables = [t for t in all_tables if t != request.dataset_table]
+            tables_hint = (
+                f"Active dataset table: `{request.dataset_table}`. "
+                f"Other tables in this session: {', '.join(f'`{t}`' for t in other_tables)}. "
+                "You may JOIN across these tables in execute_readonly_sql when answering cross-table questions. "
+                "Always call describe_table on each table you plan to JOIN before writing SQL. "
+            )
+        else:
+            tables_hint = f"Active dataset table: `{request.dataset_table}`. "
+
         context_hint = (
-            f"Active dataset table: `{request.dataset_table}`. "
-            f"User role: {request.role}. "
-            "Row-level security is enforced automatically on all queries."
+            tables_hint
+            + f"User role: {request.role}. "
+            + "Row-level security is enforced automatically on all queries."
         )
         messages.append({"role": "system", "content": context_hint})
         messages.append({"role": "user", "content": request.message})

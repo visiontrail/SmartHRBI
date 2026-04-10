@@ -18,6 +18,14 @@ import duckdb
 import pandas as pd
 from fastapi import UploadFile
 
+from .schema_inference import (
+    apply_overlay_to_dataframe,
+    build_column_samples,
+    infer_schema,
+    save_schema_overlay,
+    should_run_inference,
+)
+
 logger = logging.getLogger("smarthrbi.datasets")
 
 ALLOWED_EXTENSIONS = {".xlsx"}
@@ -190,11 +198,21 @@ class DatasetStorage:
 
 
 class DatasetIngestionService:
-    def __init__(self, upload_root: Path) -> None:
+    def __init__(
+        self,
+        upload_root: Path,
+        *,
+        ai_api_key: str = "",
+        ai_model: str = "claude-haiku-4-5-20251001",
+        ai_timeout: float = 30.0,
+    ) -> None:
         self.upload_root = upload_root
         self.upload_root.mkdir(parents=True, exist_ok=True)
         self.storage = DatasetStorage(upload_root)
         self.session_manager = DuckDBSessionManager(upload_root / "duckdb")
+        self._ai_api_key = ai_api_key
+        self._ai_model = ai_model
+        self._ai_timeout = ai_timeout
 
     async def upload_files(
         self,
@@ -225,6 +243,46 @@ class DatasetIngestionService:
                 parsed_files.append(parsed)
 
             merged_df, diagnostics = self._merge_files(parsed_files)
+
+            # --- LLM schema inference on the final merged DataFrame ---
+            # Run after merge so the overlay covers all columns from all files.
+            total_cols = len(merged_df.columns)
+            all_unrecognized = list({c for f in parsed_files for c in f.unrecognized_columns})
+            if self._ai_api_key and should_run_inference(all_unrecognized, total_cols):
+                logger.info(
+                    "schema_inference_triggered batch_id=%s unrecognized=%d total=%d",
+                    batch_id,
+                    len(all_unrecognized),
+                    total_cols,
+                )
+                # Sample values from merged df using original-column names that survived
+                column_samples = build_column_samples(merged_df)
+                overlay = infer_schema(
+                    column_samples=column_samples,
+                    ai_api_key=self._ai_api_key,
+                    ai_model=self._ai_model,
+                    timeout=self._ai_timeout,
+                )
+                if overlay.get("columns"):
+                    merged_df = apply_overlay_to_dataframe(merged_df, overlay)
+                    # Rebuild each ParsedUploadFile's metadata to reflect renamed columns
+                    known = set(COLUMN_ALIASES.values())
+                    for item in parsed_files:
+                        new_cols = [
+                            overlay.get("columns", {}).get(c, {}).get("canonical", c)
+                            if isinstance(overlay.get("columns", {}).get(c), dict) else c
+                            for c in item.normalized_columns
+                        ]
+                        item.normalized_columns = new_cols
+                        item.unrecognized_columns = [c for c in new_cols if c not in known and c != "source_file"]
+                    save_schema_overlay(
+                        meta_dir=self.storage.meta_dir,
+                        batch_id=batch_id,
+                        overlay=overlay,
+                        column_mapping={c: merged_df.columns[i] for i, c in enumerate(merged_df.columns)},
+                    )
+            # --- end inference ---
+
             quality_report = self._build_quality_report(
                 batch_id=batch_id,
                 parsed_files=parsed_files,
@@ -363,6 +421,7 @@ class DatasetIngestionService:
         dataframe = self._read_excel(storage_path, filename=filename)
 
         normalized_df, mapping, unrecognized = _normalize_dataframe(dataframe)
+
         inferred_types = {
             column: _infer_series_type(normalized_df[column])
             for column in normalized_df.columns
@@ -610,12 +669,17 @@ def _infer_series_type(series: pd.Series) -> str:
 
 
 @lru_cache(maxsize=8)
-def _service_cache(upload_root: str) -> DatasetIngestionService:
-    return DatasetIngestionService(Path(upload_root))
+def _service_cache(upload_root: str, ai_api_key: str, ai_model: str, ai_timeout: float) -> DatasetIngestionService:
+    return DatasetIngestionService(
+        Path(upload_root),
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
+        ai_timeout=ai_timeout,
+    )
 
 
-def get_dataset_service(upload_root: Path) -> DatasetIngestionService:
-    return _service_cache(str(upload_root.resolve()))
+def get_dataset_service(upload_root: Path, *, ai_api_key: str = "", ai_model: str = "claude-haiku-4-5-20251001", ai_timeout: float = 30.0) -> DatasetIngestionService:
+    return _service_cache(str(upload_root.resolve()), ai_api_key, ai_model, ai_timeout)
 
 
 def clear_dataset_service_cache() -> None:

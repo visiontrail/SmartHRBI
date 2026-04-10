@@ -462,6 +462,83 @@ def clear_semantic_cache() -> None:
     _cached_compiler.cache_clear()
 
 
+def build_overlay_registry(overlay: dict[str, Any], *, entity_name: str = "overlay_entity") -> SemanticRegistry | None:
+    """Build a SemanticRegistry from a schema overlay JSON (LLM-inferred).
+
+    Returns None when the overlay lacks enough data to form a valid registry.
+    Metrics that reference unknown columns are silently skipped.
+    """
+    columns_info: dict[str, Any] = overlay.get("columns", {})
+    raw_metrics: list[dict[str, Any]] = overlay.get("metrics", [])
+    if not columns_info:
+        return None
+
+    # Build dimensions from all canonical columns
+    dimensions: list[DimensionDefinition] = []
+    seen_cols: set[str] = set()
+    # Identify primary key candidate: prefer something named *_id or first column
+    pk_candidate: str | None = None
+
+    for _orig, info in columns_info.items():
+        canonical = str(info.get("canonical", "")).strip()
+        if not canonical or not SAFE_IDENTIFIER_RE.match(canonical) or canonical in seen_cols:
+            continue
+        col_type = str(info.get("type", "string")).strip()
+        dimensions.append(DimensionDefinition(name=canonical, column=canonical, type=col_type))
+        seen_cols.add(canonical)
+        if pk_candidate is None or canonical.endswith("_id"):
+            pk_candidate = canonical
+
+    if not dimensions or pk_candidate is None:
+        return None
+
+    entity = EntityDefinition(
+        name=entity_name,
+        table=entity_name,  # will be overridden at compile time via table_override
+        primary_key=pk_candidate,
+        dimensions=dimensions,
+    )
+    known_cols = seen_cols
+
+    metrics: dict[str, MetricDefinition] = {}
+    for raw in raw_metrics:
+        name = str(raw.get("name", "")).strip()
+        label = str(raw.get("label", name)).strip()
+        kind = str(raw.get("kind", "")).strip()
+        column = str(raw.get("column", "")).strip() or None
+        description = str(raw.get("description", "")).strip()
+
+        if not name or not kind or not SAFE_IDENTIFIER_RE.match(name):
+            continue
+        if kind in {"count_distinct", "sum", "avg"} and (not column or column not in known_cols):
+            continue
+        if name in metrics:
+            continue
+
+        metrics[name] = MetricDefinition(
+            name=name,
+            label=label,
+            domain="overlay",
+            entity=entity_name,
+            kind=kind,
+            column=column,
+            description=description,
+            synonyms=[label] if label != name else [],
+        )
+
+    if not metrics:
+        return None
+
+    return SemanticRegistry(entities={entity_name: entity}, metrics=metrics)
+
+
+def merge_registries(base: SemanticRegistry, overlay: SemanticRegistry) -> SemanticRegistry:
+    """Return a new registry combining base + overlay (overlay wins on name collisions)."""
+    merged_entities = {**base.entities, **overlay.entities}
+    merged_metrics = {**base.metrics, **overlay.metrics}
+    return SemanticRegistry(entities=merged_entities, metrics=merged_metrics)
+
+
 def _load_model_payload(
     *,
     payload: dict[str, Any],

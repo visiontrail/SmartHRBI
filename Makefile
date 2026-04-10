@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap env-check lint test build dev dev-local dev-web dev-api smoke smoke-local smoke-docker test-all docker-up docker-down
+.PHONY: help bootstrap env-check lint test build dev dev-local dev-web dev-api smoke smoke-local smoke-docker test-all docker-up docker-down reset-local-data
 
 help: ## Show all available commands
 	@awk 'BEGIN {FS = ":.*##"; print "Available targets:"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -50,3 +50,6 @@ docker-up: ## Start docker compose stack
 
 docker-down: ## Stop docker compose stack
 	@bash scripts/docker_down.sh
+
+reset-local-data: ## Clear local runtime databases, uploads, logs, and test artifacts
+	@bash scripts/reset_local_data.sh

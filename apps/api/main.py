@@ -243,7 +243,12 @@ async def upload_datasets(
 ) -> dict[str, object]:
     ensure_scope(identity, user_id=user_id, project_id=project_id)
     settings = get_settings()
-    service = get_dataset_service(settings.upload_dir)
+    service = get_dataset_service(
+        settings.upload_dir,
+        ai_api_key=settings.ai_api_key,
+        ai_model=settings.ai_model,
+        ai_timeout=settings.ai_timeout_seconds,
+    )
     audit = get_audit_logger()
 
     try:

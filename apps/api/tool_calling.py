@@ -30,13 +30,18 @@ from .security import (
     SQLReadOnlyValidator,
     secure_query_sql,
 )
+from .schema_inference import load_schema_overlay
 from .semantic import (
     IntentParser,
     MetricCompileError,
+    MetricCompiler,
     QueryFilter,
     SemanticQueryAST,
+    SemanticRegistry,
+    build_overlay_registry,
     get_metric_compiler,
     get_semantic_registry,
+    merge_registries,
 )
 from .views import SaveViewInput, ViewStorageError, get_view_storage_service
 
@@ -114,7 +119,12 @@ class ToolContext:
 class ToolCallingService:
     def __init__(self) -> None:
         settings = get_settings()
-        self.dataset_service = get_dataset_service(settings.upload_dir)
+        self.dataset_service = get_dataset_service(
+            settings.upload_dir,
+            ai_api_key=settings.ai_api_key,
+            ai_model=settings.ai_model,
+            ai_timeout=settings.ai_timeout_seconds,
+        )
         self.registry = get_semantic_registry()
         self.compiler = get_metric_compiler()
         self.intent_parser = IntentParser(self.registry)
@@ -324,8 +334,9 @@ class ToolCallingService:
 
     def _tool_query_metrics(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
-            query_ast = self._build_query_ast(arguments)
-            compiled = self.compiler.compile(query_ast, table_override=context.dataset_table)
+            compiler = self._effective_compiler(context)
+            query_ast = self._build_query_ast(arguments, registry=compiler.registry)
+            compiled = compiler.compile(query_ast, table_override=context.dataset_table)
             logger.info(
                 "query_metrics_compiled user_id=%s project_id=%s dataset_table=%s metric=%s query_ast=%s explain=%s",
                 context.user_id,
@@ -362,7 +373,7 @@ class ToolCallingService:
             ) from exc
 
         guard = SQLReadOnlyValidator(
-            allowed_tables={context.dataset_table},
+            allowed_tables=self._all_session_tables(context),
             sensitive_tables={"raw_payroll", "security_audit_log"},
             sensitive_columns=forbidden_sensitive_columns(context.role),
         )
@@ -563,8 +574,9 @@ class ToolCallingService:
         }
 
     def _tool_get_metric_catalog(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-        _ = (context, arguments)
-        metrics = self.registry.list_metrics()
+        _ = arguments
+        compiler = self._effective_compiler(context)
+        metrics = compiler.registry.list_metrics()
         return {
             "count": len(metrics),
             "metrics": metrics,
@@ -592,7 +604,7 @@ class ToolCallingService:
             clearance=context.clearance,
         )
         guard = SQLReadOnlyValidator(
-            allowed_tables={context.dataset_table},
+            allowed_tables=self._all_session_tables(context),
             sensitive_tables={"raw_payroll", "security_audit_log"},
             sensitive_columns=forbidden_sensitive_columns(context.role),
         )
@@ -750,7 +762,7 @@ class ToolCallingService:
             "saved_at": result["saved_at"],
         }
 
-    def _build_query_ast(self, arguments: dict[str, Any]) -> SemanticQueryAST:
+    def _build_query_ast(self, arguments: dict[str, Any], registry: SemanticRegistry | None = None) -> SemanticQueryAST:
         explicit_filters = _parse_filters(arguments.get("filters", []))
         raw_group_by = arguments.get("group_by", [])
         if raw_group_by is None:
@@ -778,7 +790,9 @@ class ToolCallingService:
 
         intent = arguments.get("intent")
         if intent:
-            parsed = self.intent_parser.parse(str(intent))
+            from .semantic import IntentParser as _IntentParser
+            parser = _IntentParser(registry) if registry is not None else self.intent_parser
+            parsed = parser.parse(str(intent))
             merged_group_by = group_by or parsed.group_by
             merged_filters = [*parsed.filters, *explicit_filters]
             return SemanticQueryAST(
@@ -793,6 +807,33 @@ class ToolCallingService:
             message="query_metrics requires metric or intent",
             retryable=False,
         )
+
+    def _all_session_tables(self, context: ToolContext) -> set[str]:
+        """Return every table present in the user/project DuckDB session."""
+        try:
+            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+                rows = conn.execute("SHOW TABLES").fetchall()
+            return {str(row[0]) for row in rows}
+        except Exception:
+            return {context.dataset_table}
+
+    def _effective_compiler(self, context: ToolContext) -> MetricCompiler:
+        """Return a MetricCompiler augmented with any LLM-inferred overlay for this dataset."""
+        # dataset_table is e.g. "dataset_<batch_id>"
+        batch_id = context.dataset_table.removeprefix("dataset_")
+        overlay = load_schema_overlay(
+            meta_dir=self.dataset_service.storage.meta_dir,
+            batch_id=batch_id,
+        )
+        if overlay is None:
+            return self.compiler
+
+        overlay_registry = build_overlay_registry(overlay, entity_name=context.dataset_table)
+        if overlay_registry is None:
+            return self.compiler
+
+        merged = merge_registries(self.registry, overlay_registry)
+        return MetricCompiler(registry=merged)
 
     def _allowed_columns_for_role(self, context: ToolContext) -> set[str]:
         dataset_profile = self._tool_describe_table(

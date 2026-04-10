@@ -87,6 +87,38 @@ Run Docker smoke flow:
 make smoke-docker
 ```
 
+## Reset Local Runtime/Test Data
+
+To clear local runtime state, uploaded datasets, persisted view/session state, local test artifacts, and the database referenced by `apps/api/.env`:
+
+```bash
+.venv/bin/python scripts/reset_local_data.py
+```
+
+One-command shell wrapper:
+
+```bash
+bash scripts/reset_local_data.sh
+```
+
+Preview what would be deleted without changing anything:
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --dry-run
+```
+
+If you also want to remove Docker Compose named volumes for the local stack:
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --include-docker-volumes
+```
+
+Equivalent Make target:
+
+```bash
+make reset-local-data
+```
+
 ## Full Test Gate
 
 Run lint, backend/frontend tests, build, and local smoke in one command:

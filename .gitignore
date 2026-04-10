@@ -19,3 +19,4 @@ apps/api/data/
 infra/docker/.docker-data/
 
 .DS_Store
+logs/dev-local/*
