@@ -39,16 +39,32 @@ describe("Chat workbench streaming UI", () => {
           createSSEEventStream([
             {
               id: 1,
-              event: "reasoning",
-              data: { text: "Intent analyzed. Selected tool: query_metrics." }
+              event: "planning",
+              data: { text: "I will inspect schema and then query safely.", agent_session_id: "agent-session-1" }
             },
             {
               id: 2,
-              event: "tool",
-              data: { tool_name: "query_metrics", status: "success", attempts: 1 }
+              event: "tool_use",
+              data: {
+                tool_name: "describe_table",
+                step: 1,
+                agent_session_id: "agent-session-1",
+                arguments: { table: "employees_wide" }
+              }
             },
             {
               id: 3,
+              event: "tool_result",
+              data: {
+                tool_name: "describe_table",
+                status: "success",
+                step: 1,
+                agent_session_id: "agent-session-1",
+                result: { row_count: 2 }
+              }
+            },
+            {
+              id: 4,
               event: "spec",
               data: {
                 spec: {
@@ -61,7 +77,7 @@ describe("Chat workbench streaming UI", () => {
               }
             },
             {
-              id: 4,
+              id: 5,
               event: "final",
               data: { status: "completed", text: "Query completed for metric attrition_rate." }
             }
@@ -73,10 +89,11 @@ describe("Chat workbench streaming UI", () => {
     await userEvent.type(screen.getByLabelText("Chat Input"), "show attrition by department");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await screen.findByText("Intent analyzed. Selected tool: query_metrics.");
+    await screen.findByText("I will inspect schema and then query safely.");
     await screen.findByText("Query completed for metric attrition_rate.");
     expect(screen.getByText("Attrition Rate")).toBeInTheDocument();
-    expect(screen.getByTestId("tool-status")).toHaveTextContent("query_metrics");
+    expect(screen.getByTestId("tool-status")).toHaveTextContent("describe_table");
+    expect(screen.getByTestId("tool-status")).toHaveTextContent("agent-session-1");
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "http://localhost:8000/chat/stream",
@@ -148,11 +165,12 @@ describe("Chat workbench streaming UI", () => {
   it("rehydrates the last session from local storage", async () => {
     window.localStorage.setItem(
       SESSION_STORAGE_KEY,
-      JSON.stringify({
-        conversationId: "conv-1",
-        userId: "u-1",
-        projectId: "p-1",
-        role: "hr",
+        JSON.stringify({
+          conversationId: "conv-1",
+          agentSessionId: "agent-session-restored",
+          userId: "u-1",
+          projectId: "p-1",
+          role: "hr",
         department: "HR",
         clearance: 1,
         datasetTable: "employees_wide",
@@ -165,7 +183,8 @@ describe("Chat workbench streaming UI", () => {
           data: [{ metric_value: 42 }],
           config: { yKey: "metric_value" }
         },
-        lastToolEvent: { tool_name: "query_metrics", status: "success" }
+        lastToolEvent: { tool_name: "query_metrics", status: "success" },
+        toolTrace: [{ tool_name: "describe_table", status: "success" }]
       })
     );
 
@@ -181,7 +200,8 @@ describe("Chat workbench streaming UI", () => {
       expect(screen.getByDisplayValue("restored question")).toBeInTheDocument();
       expect(screen.getByText("restored message")).toBeInTheDocument();
       expect(screen.getByText("Restored KPI")).toBeInTheDocument();
-      expect(screen.getByTestId("tool-status")).toHaveTextContent("query_metrics");
+      expect(screen.getByTestId("tool-status")).toHaveTextContent("describe_table");
+      expect(screen.getByTestId("tool-status")).toHaveTextContent("agent-session-restored");
     });
   });
 

@@ -127,10 +127,21 @@ async def on_startup() -> None:
     settings = get_settings()
     configure_application_logging(settings.log_level)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
-    logging.getLogger("smarthrbi").info(
+    logger = logging.getLogger("smarthrbi")
+    logger.info(
         "application_logging_configured level=%s upload_dir=%s",
         settings.log_level,
         settings.upload_dir,
+    )
+    logger.info(
+        "chat_runtime_config chat_engine=%s allowlist_enabled=%s claude_agent_sdk_enabled=%s "
+        "agent_max_tool_steps=%s agent_max_sql_rows=%s agent_timeout_seconds=%s",
+        settings.chat_engine,
+        bool(settings.chat_engine_user_allowlist),
+        settings.claude_agent_sdk_enabled,
+        settings.agent_max_tool_steps,
+        settings.agent_max_sql_rows,
+        settings.agent_timeout_seconds,
     )
 
 
@@ -462,7 +473,10 @@ async def chat_stream(
         status="success",
         user_id=identity.user_id,
         project_id=identity.project_id,
-        detail={"conversation_id": enforced_request.conversation_id},
+        detail={
+            "conversation_id": enforced_request.conversation_id,
+            "chat_engine": get_settings().chat_engine,
+        },
     )
 
     service = get_chat_stream_service()

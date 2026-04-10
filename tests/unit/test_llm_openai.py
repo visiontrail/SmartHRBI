@@ -125,6 +125,47 @@ def test_openai_selector_drops_unknown_metric_and_falls_back_to_intent(monkeypat
     assert selected.arguments["group_by"] == ["department"]
 
 
+def test_openai_selector_reroutes_custom_distribution_requests_to_describe_dataset(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        _ = (request, timeout)
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "tool": "query_metrics",
+                                    "arguments": {"intent": "柱状图显示薪资分布统计"},
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("apps.api.llm_openai.urllib_request.urlopen", fake_urlopen)
+
+    selector = OpenAICompatibleToolSelector(
+        base_url="https://custom-llm.example.com/v1",
+        api_key="test-api-key",
+        model="qwen-plus",
+        timeout_seconds=6.0,
+        metric_catalog=[{"name": "avg_salary", "synonyms": ["平均薪资"]}],
+    )
+
+    selected = selector.select_tool(
+        message="柱状图显示薪资分布统计",
+        conversation_id="conv-003",
+        context={},
+    )
+
+    assert selected.tool_name == "describe_dataset"
+    assert selected.arguments == {"sample_limit": 10}
+
+
 def test_openai_selector_wraps_timeout_as_tool_selection_error(monkeypatch, caplog) -> None:
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
         _ = (request, timeout)

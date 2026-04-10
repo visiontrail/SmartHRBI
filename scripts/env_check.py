@@ -21,6 +21,12 @@ REQUIRED_KEYS = {
     ],
 }
 
+OPTIONAL_WARNINGS = {
+    "api": {
+        "CHAT_ENGINE": "CHAT_ENGINE is not set; chat will default to deterministic and agent mode will stay disabled.",
+    },
+}
+
 
 def parse_env_file(path: Path) -> Dict[str, str]:
     data: Dict[str, str] = {}
@@ -44,6 +50,14 @@ def validate_file(kind: str, path: Path) -> List[str]:
     return missing_keys(values, REQUIRED_KEYS[kind])
 
 
+def warning_messages(kind: str, path: Path) -> List[str]:
+    if not path.exists():
+        return []
+    values = parse_env_file(path)
+    warnings = OPTIONAL_WARNINGS.get(kind, {})
+    return [message for key, message in warnings.items() if not values.get(key)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate SmartHRBI environment variables")
     parser.add_argument("--web-env-file", default="apps/web/.env", type=Path)
@@ -60,6 +74,8 @@ def main() -> int:
             errors.extend([f"{kind}:{item}" for item in missing])
         else:
             print(f"[OK] {kind} env check passed for {path}")
+        for message in warning_messages(kind, path):
+            print(f"[WARN] {kind} env check warning for {path}: {message}")
 
     return 1 if errors else 0
 

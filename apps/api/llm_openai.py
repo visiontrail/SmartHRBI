@@ -12,6 +12,186 @@ from urllib import request as urllib_request
 logger = logging.getLogger("smarthrbi.llm")
 
 
+# ---------------------------------------------------------------------------
+# Agent loop LLM client
+# ---------------------------------------------------------------------------
+
+
+class AgentLLMError(Exception):
+    """Raised when the LLM call in the agent ReAct loop fails."""
+
+    def __init__(self, *, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+@dataclass(slots=True)
+class AgentLLMToolCall:
+    call_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(slots=True)
+class AgentLLMResponse:
+    """One turn of the LLM in the ReAct loop."""
+
+    content: str  # text thinking / final answer (may be empty when tool_calls present)
+    tool_calls: list[AgentLLMToolCall]
+    finish_reason: str  # "stop", "tool_calls", "length", ...
+
+
+class OpenAIAgentLoopClient:
+    """OpenAI-compatible chat-completions client used by the ReAct agent loop.
+
+    Sends a full conversation history including tool results and returns either
+    tool_calls (the model wants to call tools) or a final text response.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+        tool_definitions: list[dict[str, Any]],
+    ) -> None:
+        self.base_url = base_url.strip()
+        self.api_key = api_key.strip()
+        self.model = model.strip()
+        self.timeout_seconds = timeout_seconds
+        self.tool_definitions = tool_definitions
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.base_url and self.api_key and self.model)
+
+    def chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        conversation_id: str,
+        step: int,
+    ) -> AgentLLMResponse:
+        if not self.enabled:
+            raise AgentLLMError(message="LLM agent loop client is not configured")
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": messages,
+        }
+        if self.tool_definitions:
+            payload["tools"] = self.tool_definitions
+            payload["tool_choice"] = "auto"
+
+        endpoint = _chat_completions_endpoint(self.base_url)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        req = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
+        started_at = time.perf_counter()
+
+        logger.info(
+            "agent_llm_request conversation_id=%s step=%s endpoint=%s model=%s message_count=%s",
+            conversation_id,
+            step,
+            endpoint,
+            self.model,
+            len(messages),
+        )
+
+        try:
+            with urllib_request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                raw = resp.read().decode("utf-8")
+        except TimeoutError as exc:
+            self._log_failure(endpoint=endpoint, step=step, error=exc, started_at=started_at)
+            raise AgentLLMError(message="LLM request timed out") from exc
+        except socket.timeout as exc:
+            self._log_failure(endpoint=endpoint, step=step, error=exc, started_at=started_at)
+            raise AgentLLMError(message="LLM request timed out") from exc
+        except urllib_error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+            self._log_failure(endpoint=endpoint, step=step, error=exc, started_at=started_at, details=details)
+            raise AgentLLMError(
+                message=f"LLM HTTP error ({exc.code}): {details or exc.reason}",
+            ) from exc
+        except urllib_error.URLError as exc:
+            self._log_failure(endpoint=endpoint, step=step, error=exc, started_at=started_at)
+            raise AgentLLMError(message=f"LLM request failed: {exc.reason}") from exc
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.info(
+            "agent_llm_response conversation_id=%s step=%s elapsed_ms=%s",
+            conversation_id,
+            step,
+            elapsed_ms,
+        )
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AgentLLMError(message="LLM returned non-JSON response") from exc
+
+        return self._parse_response(data)
+
+    def _parse_response(self, data: dict[str, Any]) -> AgentLLMResponse:
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise AgentLLMError(message="LLM response missing choices")
+
+        first = choices[0]
+        if not isinstance(first, dict):
+            raise AgentLLMError(message="LLM choice is not an object")
+
+        finish_reason = str(first.get("finish_reason") or "stop")
+        message = first.get("message") or {}
+        content = str(message.get("content") or "").strip()
+
+        raw_tool_calls = message.get("tool_calls") or []
+        tool_calls: list[AgentLLMToolCall] = []
+        for tc in raw_tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            call_id = str(tc.get("id") or "")
+            fn = tc.get("function") or {}
+            tool_name = str(fn.get("name") or "").strip()
+            raw_args = fn.get("arguments") or "{}"
+            try:
+                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            if tool_name:
+                tool_calls.append(AgentLLMToolCall(call_id=call_id, tool_name=tool_name, arguments=arguments))
+
+        return AgentLLMResponse(content=content, tool_calls=tool_calls, finish_reason=finish_reason)
+
+    def _log_failure(
+        self,
+        *,
+        endpoint: str,
+        step: int,
+        error: Exception,
+        started_at: float,
+        details: str | None = None,
+    ) -> None:
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.warning(
+            "agent_llm_error endpoint=%s step=%s elapsed_ms=%s error_type=%s error=%s details=%s",
+            endpoint,
+            step,
+            elapsed_ms,
+            type(error).__name__,
+            str(error),
+            details or "",
+        )
+
+
 class ToolSelectionError(Exception):
     def __init__(self, *, message: str) -> None:
         super().__init__(message)
@@ -91,6 +271,19 @@ class OpenAICompatibleToolSelector:
         if not isinstance(arguments, dict):
             arguments = {}
 
+        if (
+            tool_name == "query_metrics"
+            and not str(arguments.get("metric") or "").strip()
+            and _looks_like_custom_dataset_analysis(message)
+        ):
+            logger.info(
+                "llm_tool_selector_reroute conversation_id=%s from_tool=%s to_tool=describe_dataset reason=custom_dataset_analysis",
+                conversation_id,
+                tool_name,
+            )
+            tool_name = "describe_dataset"
+            arguments = {"sample_limit": 10}
+
         return ToolSelectionResult(
             tool_name=tool_name,
             arguments=self._sanitize_arguments(
@@ -107,10 +300,12 @@ class OpenAICompatibleToolSelector:
             "You are a SmartHRBI router. Return only one JSON object with keys: tool, arguments. "
             "tool must be one of query_metrics, describe_dataset, save_view. "
             "Use describe_dataset for schema/field/column/sample requests. "
+            "Also use describe_dataset for custom raw-column analysis that is not directly covered by an available metric, "
+            "including distribution/histogram/bucketing/year-extraction requests such as salary distribution or hire year distribution. "
             "Use save_view when user asks to save/bookmark current result. "
             "Otherwise use query_metrics. "
             "For query_metrics arguments, prefer metric only when exactly matching an available metric name; "
-            "otherwise set intent to the original user message. "
+            "otherwise set intent to the original user message. Never guess a metric for unsupported long-tail analysis. "
             "Allowed group_by values: department, project, region, manager, status. "
             "Do not output markdown."
         )
@@ -343,3 +538,20 @@ def _chat_completions_endpoint(base_url: str) -> str:
 
 def _compact_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _looks_like_custom_dataset_analysis(message: str) -> bool:
+    normalized = message.lower()
+    return any(
+        token in normalized
+        for token in (
+            "分布",
+            "histogram",
+            "distribution",
+            "bucket",
+            "区间",
+            "年份统计",
+            "year distribution",
+            "hire year",
+        )
+    )

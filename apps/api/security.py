@@ -192,9 +192,11 @@ class RLSInjector:
         *,
         department_column: str = "department",
         status_column: str = "status",
+        enforce_viewer_status: bool = True,
     ) -> None:
         self.department_column = department_column
         self.status_column = status_column
+        self.enforce_viewer_status = enforce_viewer_status
 
     def inject(self, sql: str, *, context: AccessContext) -> str:
         condition = self._build_condition(context)
@@ -238,7 +240,7 @@ class RLSInjector:
             expression=exp.Literal.string(context.department),
         )
 
-        if role == "viewer":
+        if role == "viewer" and self.enforce_viewer_status:
             active_condition = exp.EQ(
                 this=exp.column(self.status_column),
                 expression=exp.Literal.string("active"),

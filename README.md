@@ -47,7 +47,7 @@ Equivalent direct script:
 bash scripts/dev_local_debug.sh
 ```
 
-`dev-local` is intended for debug only. It requires local PostgreSQL to be already running and reachable from `DATABASE_URL`.
+`dev-local` is intended for debug only. It skips PostgreSQL bootstrap and reachability checks, so API startup does not depend on a local PostgreSQL process.
 
 ## Local Smoke Validation
 
@@ -136,3 +136,43 @@ Set these in `apps/api/.env`:
 - `AI_TIMEOUT_SECONDS`: HTTP timeout for LLM routing calls
 
 When `AI_API_KEY` is empty, chat falls back to deterministic rule routing.
+
+## Agentic Query Mode
+
+M9 adds an Agentic Query runtime behind the same `POST /chat/stream` API.
+
+Set these in `apps/api/.env` to control rollout:
+
+- `CHAT_ENGINE`: `deterministic`, `agent_shadow`, or `agent_primary`
+- `CHAT_ENGINE_USERS`: optional comma-separated allowlist; non-listed users fall back to `deterministic`
+- `CLAUDE_AGENT_SDK_ENABLED`: enables the Claude Agent SDK adapter path when the SDK is installed
+- `AGENT_MAX_TOOL_STEPS`: maximum tool steps per query
+- `AGENT_MAX_SQL_ROWS`: maximum rows returned by `execute_readonly_sql`
+- `AGENT_MAX_SQL_SCAN_ROWS`: hard cap for SQL scan-oriented limits
+- `AGENT_TIMEOUT_SECONDS`: end-to-end agent timeout budget
+
+Agent mode uses a BI-only tool surface:
+
+- `list_tables`
+- `describe_table`
+- `sample_rows`
+- `get_metric_catalog`
+- `run_semantic_query`
+- `execute_readonly_sql`
+- `get_distinct_values`
+- `save_view`
+
+All agent SQL still goes through the existing readonly guard, RLS injection, sensitive-column filtering, response redaction, and audit logging.
+
+## M9 Verification
+
+Key M9 verification commands:
+
+```bash
+.venv/bin/python -m pytest tests/integration/test_agent_runtime.py tests/integration/test_agent_tools.py tests/integration/test_agent_chat_stream.py tests/integration/test_chat_engine_switch.py tests/security/test_agent_guardrails.py tests/evals/test_agent_prompting.py -q
+.venv/bin/python -m pytest tests -q
+npm --prefix apps/web run test
+npm --prefix apps/web run build
+```
+
+An ADR for the runtime design is available at [`docs/adr/0001-agentic-query-runtime.md`](/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/docs/adr/0001-agentic-query-runtime.md).

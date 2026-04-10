@@ -8,8 +8,11 @@
   - Environments: .env
 
  ✓ Starting...
- ✓ Ready in 2.7s
+ ✓ Ready in 3.7s
  ○ Compiling / ...
- ✓ Compiled / in 3.4s (2771 modules)
- GET / 200 in 4097ms
-[?25h
+ ✓ Compiled / in 4.2s (2771 modules)
+ GET / 200 in 4938ms
+ ○ Compiling /share/[viewId] ...
+ ✓ Compiled /share/[viewId] in 922ms (2778 modules)
+ GET /share/728808fb3a5d48c3bfad4cc87666129b 200 in 1894ms
+ GET / 200 in 48ms

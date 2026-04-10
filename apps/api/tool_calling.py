@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -39,10 +41,22 @@ from .semantic import (
 from .views import SaveViewInput, ViewStorageError, get_view_storage_service
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+logger = logging.getLogger("smarthrbi.tool_calling")
 
 
 class ToolCall(BaseModel):
-    name: Literal["query_metrics", "describe_dataset", "save_view"]
+    name: Literal[
+        "query_metrics",
+        "describe_dataset",
+        "save_view",
+        "list_tables",
+        "describe_table",
+        "sample_rows",
+        "get_metric_catalog",
+        "run_semantic_query",
+        "execute_readonly_sql",
+        "get_distinct_values",
+    ]
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -114,12 +128,39 @@ class ToolCallingService:
             "query_metrics": self._tool_query_metrics,
             "describe_dataset": self._tool_describe_dataset,
             "save_view": self._tool_save_view,
+            "list_tables": self._tool_list_tables,
+            "describe_table": self._tool_describe_table,
+            "sample_rows": self._tool_sample_rows,
+            "get_metric_catalog": self._tool_get_metric_catalog,
+            "run_semantic_query": self._tool_run_semantic_query,
+            "execute_readonly_sql": self._tool_execute_readonly_sql,
+            "get_distinct_values": self._tool_get_distinct_values,
+        }
+
+        self._tool_specs: dict[str, dict[str, Any]] = {
+            "list_tables": {"readOnlyHint": True},
+            "describe_table": {"readOnlyHint": True},
+            "sample_rows": {"readOnlyHint": True},
+            "get_metric_catalog": {"readOnlyHint": True},
+            "run_semantic_query": {"readOnlyHint": True},
+            "execute_readonly_sql": {"readOnlyHint": True},
+            "get_distinct_values": {"readOnlyHint": True},
+            "save_view": {"readOnlyHint": False},
+            "query_metrics": {"readOnlyHint": True},
+            "describe_dataset": {"readOnlyHint": True},
         }
 
     def invoke(self, request: ToolCallRequest) -> ToolCallResponse:
         with self._lock:
             cached = self._idempotency_cache.get(request.idempotency_key)
         if cached is not None:
+            logger.info(
+                "tool_call_cache_hit conversation_id=%s request_id=%s tool_name=%s idempotency_key=%s",
+                request.conversation_id,
+                request.request_id,
+                request.tool.name,
+                request.idempotency_key,
+            )
             return cached.model_copy(update={"from_cache": True})
 
         tool = self._tools.get(request.tool.name)
@@ -154,8 +195,24 @@ class ToolCallingService:
         attempts = 0
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
+            logger.info(
+                "tool_call_attempt conversation_id=%s request_id=%s tool_name=%s attempt=%s arguments=%s",
+                request.conversation_id,
+                request.request_id,
+                request.tool.name,
+                attempt,
+                json.dumps(request.tool.arguments, ensure_ascii=False, default=str),
+            )
             try:
                 result = tool(context, request.tool.arguments)
+                logger.info(
+                    "tool_call_success conversation_id=%s request_id=%s tool_name=%s attempt=%s result_summary=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    attempt,
+                    json.dumps(_summarize_tool_result(result), ensure_ascii=False, default=str),
+                )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,
@@ -170,6 +227,15 @@ class ToolCallingService:
                 return response
             except ToolExecutionError as exc:
                 if exc.retryable and attempt < max_attempts:
+                    logger.warning(
+                        "tool_call_retry conversation_id=%s request_id=%s tool_name=%s attempt=%s code=%s message=%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        exc.code,
+                        exc.message,
+                    )
                     continue
 
                 if exc.retryable:
@@ -182,6 +248,14 @@ class ToolCallingService:
                 else:
                     detail = exc.to_detail()
 
+                logger.warning(
+                    "tool_call_error conversation_id=%s request_id=%s tool_name=%s attempt=%s error=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    attempt,
+                    json.dumps(detail, ensure_ascii=False, default=str),
+                )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,
@@ -195,6 +269,13 @@ class ToolCallingService:
                     self._idempotency_cache[request.idempotency_key] = response
                 return response
             except Exception:
+                logger.exception(
+                    "tool_call_unexpected_error conversation_id=%s request_id=%s tool_name=%s attempt=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    attempt,
+                )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,
@@ -235,11 +316,45 @@ class ToolCallingService:
             self._idempotency_cache.clear()
             self._transient_failures.clear()
 
+    def list_tool_specs(self) -> list[dict[str, Any]]:
+        return [
+            {"name": name, **spec}
+            for name, spec in sorted(self._tool_specs.items())
+        ]
+
     def _tool_query_metrics(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             query_ast = self._build_query_ast(arguments)
             compiled = self.compiler.compile(query_ast, table_override=context.dataset_table)
+            logger.info(
+                "query_metrics_compiled user_id=%s project_id=%s dataset_table=%s metric=%s query_ast=%s explain=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                compiled.metric,
+                json.dumps(
+                    {
+                        "metric": query_ast.metric,
+                        "group_by": query_ast.group_by,
+                        "filters": [
+                            {"field": item.field, "op": item.op, "value": item.value}
+                            for item in query_ast.filters
+                        ],
+                        "limit": query_ast.limit,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                json.dumps(compiled.explain, ensure_ascii=False, default=str),
+            )
         except MetricCompileError as exc:
+            logger.warning(
+                "query_metrics_compile_failed user_id=%s project_id=%s dataset_table=%s error=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                json.dumps(exc.to_detail(), ensure_ascii=False, default=str),
+            )
             raise ToolExecutionError(
                 code=exc.code,
                 message=exc.message,
@@ -266,13 +381,37 @@ class ToolCallingService:
                 guard=guard,
                 rls_injector=rls_injector,
             )
+            logger.info(
+                "query_metrics_sql_secured user_id=%s project_id=%s dataset_table=%s metric=%s sql=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                compiled.metric,
+                secure_sql,
+            )
         except QueryAccessError as exc:
+            logger.warning(
+                "query_metrics_access_denied user_id=%s project_id=%s dataset_table=%s code=%s message=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                exc.code,
+                exc.message,
+            )
             raise ToolExecutionError(
                 code=exc.code,
                 message=exc.message,
                 retryable=False,
             ) from exc
         except (SQLGuardError, RLSError) as exc:
+            logger.warning(
+                "query_metrics_sql_rejected user_id=%s project_id=%s dataset_table=%s code=%s message=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                exc.code,
+                exc.message,
+            )
             raise ToolExecutionError(
                 code=exc.code,
                 message=exc.message,
@@ -285,6 +424,14 @@ class ToolCallingService:
                 columns = [column[0] for column in (cursor.description or [])]
                 rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
         except duckdb.Error as exc:
+            logger.warning(
+                "query_metrics_execution_failed user_id=%s project_id=%s dataset_table=%s metric=%s error=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                compiled.metric,
+                str(exc),
+            )
             raise ToolExecutionError(
                 code="QUERY_EXECUTION_FAILED",
                 message="Failed to execute semantic query",
@@ -292,6 +439,15 @@ class ToolCallingService:
             ) from exc
 
         safe_rows = redact_rows(rows, role=context.role)
+        logger.info(
+            "query_metrics_rows_returned user_id=%s project_id=%s dataset_table=%s metric=%s row_count=%s columns=%s",
+            context.user_id,
+            context.project_id,
+            context.dataset_table,
+            compiled.metric,
+            len(safe_rows),
+            json.dumps(columns, ensure_ascii=False, default=str),
+        )
 
         return {
             "metric": compiled.metric,
@@ -311,9 +467,37 @@ class ToolCallingService:
         }
 
     def _tool_describe_dataset(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._tool_describe_table(
+            context,
+            {
+                "table": context.dataset_table,
+                "sample_limit": arguments.get("sample_limit", 5),
+            },
+        )
+
+    def _tool_list_tables(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        _ = arguments
+        try:
+            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+                tables = [str(item[0]) for item in conn.execute("SHOW TABLES").fetchall()]
+        except duckdb.Error as exc:
+            raise ToolExecutionError(
+                code="LIST_TABLES_FAILED",
+                message="Failed to list dataset tables",
+                retryable=True,
+            ) from exc
+
+        ordered_tables = sorted(tables, key=lambda item: (item != context.dataset_table, item))
+        return {
+            "tables": ordered_tables,
+            "active_dataset_table": context.dataset_table,
+            "count": len(ordered_tables),
+        }
+
+    def _tool_describe_table(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         sample_limit = int(arguments.get("sample_limit", 5))
         sample_limit = max(1, min(sample_limit, 50))
-        table = _safe_identifier(context.dataset_table)
+        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
 
         try:
             with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
@@ -347,6 +531,153 @@ class ToolCallingService:
             "sample_limit": sample_limit,
             "columns": safe_columns,
             "sample_rows": safe_rows,
+        }
+
+    def _tool_sample_rows(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        limit = int(arguments.get("limit", 5))
+        limit = max(1, min(limit, 50))
+        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
+
+        try:
+            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+                cursor = conn.execute(f'SELECT * FROM "{table}" LIMIT {limit}')
+                columns = [column[0] for column in (cursor.description or [])]
+                rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except duckdb.Error as exc:
+            raise ToolExecutionError(
+                code="SAMPLE_ROWS_FAILED",
+                message="Failed to sample rows from dataset table",
+                retryable=True,
+            ) from exc
+
+        safe_rows = redact_rows(rows, role=context.role)
+        safe_columns = filter_schema_columns(
+            [{"name": name} for name in columns],
+            role=context.role,
+        )
+        return {
+            "table": table,
+            "row_count": len(safe_rows),
+            "columns": [str(item.get("name")) for item in safe_columns if isinstance(item, dict)],
+            "rows": safe_rows,
+        }
+
+    def _tool_get_metric_catalog(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        _ = (context, arguments)
+        metrics = self.registry.list_metrics()
+        return {
+            "count": len(metrics),
+            "metrics": metrics,
+        }
+
+    def _tool_run_semantic_query(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._tool_query_metrics(context, arguments)
+
+    def _tool_execute_readonly_sql(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        sql = str(arguments.get("sql", "")).strip()
+        if not sql:
+            raise ToolExecutionError(
+                code="SQL_REQUIRED",
+                message="execute_readonly_sql requires sql",
+                retryable=False,
+            )
+
+        max_rows = int(arguments.get("max_rows", get_settings().agent_max_sql_rows))
+        max_rows = max(1, min(max_rows, get_settings().agent_max_sql_rows))
+        allowed_columns = self._allowed_columns_for_role(context)
+        access_context = AccessContext(
+            user_id=context.user_id,
+            role=context.role,
+            department=context.department,
+            clearance=context.clearance,
+        )
+        guard = SQLReadOnlyValidator(
+            allowed_tables={context.dataset_table},
+            sensitive_tables={"raw_payroll", "security_audit_log"},
+            sensitive_columns=forbidden_sensitive_columns(context.role),
+        )
+        rls_injector = RLSInjector(enforce_viewer_status="status" in allowed_columns)
+
+        try:
+            secure_sql = secure_query_sql(
+                sql,
+                context=access_context,
+                guard=guard,
+                rls_injector=rls_injector,
+            )
+        except QueryAccessError as exc:
+            raise ToolExecutionError(code=exc.code, message=exc.message, retryable=False) from exc
+        except (SQLGuardError, RLSError) as exc:
+            raise ToolExecutionError(code=exc.code, message=exc.message, retryable=False) from exc
+
+        limited_sql = f"SELECT * FROM ({secure_sql}) AS scoped_query LIMIT {max_rows}"
+        try:
+            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+                cursor = conn.execute(limited_sql)
+                columns = [column[0] for column in (cursor.description or [])]
+                rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except duckdb.Error as exc:
+            logger.warning(
+                "readonly_sql_execution_failed user_id=%s project_id=%s dataset_table=%s sql=%s error_type=%s error=%s",
+                context.user_id,
+                context.project_id,
+                context.dataset_table,
+                limited_sql,
+                type(exc).__name__,
+                str(exc),
+            )
+            raise ToolExecutionError(
+                code="QUERY_EXECUTION_FAILED",
+                message="Failed to execute readonly SQL",
+                retryable=True,
+            ) from exc
+
+        safe_rows = redact_rows(rows, role=context.role)
+        return {
+            "sql": secure_sql,
+            "row_count": len(safe_rows),
+            "columns": columns,
+            "rows": safe_rows,
+            "truncated": len(safe_rows) >= max_rows,
+        }
+
+    def _tool_get_distinct_values(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        field_name = str(arguments.get("field", "")).strip()
+        if not field_name:
+            raise ToolExecutionError(
+                code="FIELD_REQUIRED",
+                message="get_distinct_values requires field",
+                retryable=False,
+            )
+
+        safe_field = _safe_identifier(field_name).lower()
+        allowed_columns = self._allowed_columns_for_role(context)
+        if safe_field not in allowed_columns:
+            raise ToolExecutionError(
+                code="COLUMN_NOT_ALLOWED",
+                message="Column is not available for this role",
+                retryable=False,
+            )
+
+        limit = int(arguments.get("limit", 20))
+        limit = max(1, min(limit, 50))
+        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
+        sql = (
+            f'SELECT "{safe_field}" AS value, COUNT(*) AS frequency '
+            f'FROM "{table}" '
+            f'GROUP BY "{safe_field}" '
+            f'ORDER BY 2 DESC, 1 ASC '
+            f'LIMIT {limit}'
+        )
+        result = self._tool_execute_readonly_sql(
+            context,
+            {"sql": sql, "max_rows": limit},
+        )
+        return {
+            "field": safe_field,
+            "values": result["rows"],
+            "row_count": result["row_count"],
+            "sql": result["sql"],
         }
 
     def _tool_save_view(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -463,6 +794,20 @@ class ToolCallingService:
             retryable=False,
         )
 
+    def _allowed_columns_for_role(self, context: ToolContext) -> set[str]:
+        dataset_profile = self._tool_describe_table(
+            context,
+            {"table": context.dataset_table, "sample_limit": 1},
+        )
+        columns = dataset_profile.get("columns", [])
+        if not isinstance(columns, list):
+            return set()
+        return {
+            str(item.get("name", "")).strip().lower()
+            for item in columns
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        }
+
 
 def _parse_filters(raw_filters: Any) -> list[QueryFilter]:
     if raw_filters is None:
@@ -524,6 +869,30 @@ def _safe_identifier(value: str) -> str:
             retryable=False,
         )
     return value
+
+
+def _summarize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    if "metric" in result:
+        summary["metric"] = result.get("metric")
+    if "row_count" in result:
+        summary["row_count"] = result.get("row_count")
+    if "sql" in result:
+        summary["sql"] = result.get("sql")
+    rows = result.get("rows")
+    if isinstance(rows, list):
+        summary["rows_preview_count"] = min(len(rows), 3)
+        summary["rows_preview"] = rows[:3]
+    if "table" in result:
+        summary["table"] = result.get("table")
+    columns = result.get("columns")
+    if isinstance(columns, list):
+        summary["columns"] = columns[:10]
+    if "view_id" in result:
+        summary["view_id"] = result.get("view_id")
+    if "share_path" in result:
+        summary["share_path"] = result.get("share_path")
+    return summary
 
 
 def _utc_now() -> str:

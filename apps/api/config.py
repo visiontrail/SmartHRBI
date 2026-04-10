@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     ai_api_key: str = Field(default="", alias="AI_API_KEY")
     ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
     ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
+    chat_engine: str = Field(default="deterministic", alias="CHAT_ENGINE")
+    chat_engine_users: str = Field(default="", alias="CHAT_ENGINE_USERS")
+    claude_agent_sdk_enabled: bool = Field(default=False, alias="CLAUDE_AGENT_SDK_ENABLED")
+    agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")
+    agent_max_sql_rows: int = Field(default=200, alias="AGENT_MAX_SQL_ROWS")
+    agent_max_sql_scan_rows: int = Field(default=10000, alias="AGENT_MAX_SQL_SCAN_ROWS")
+    agent_timeout_seconds: float = Field(default=25.0, alias="AGENT_TIMEOUT_SECONDS")
     auth_secret: str = Field(alias="AUTH_SECRET")
     log_level: str = Field(alias="LOG_LEVEL")
     upload_dir: Path = Field(alias="UPLOAD_DIR")
@@ -52,9 +59,41 @@ class Settings(BaseSettings):
             raise ValueError("AI_TIMEOUT_SECONDS must be greater than 0")
         return value
 
+    @field_validator("agent_timeout_seconds")
+    @classmethod
+    def validate_agent_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("AGENT_TIMEOUT_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("agent_max_tool_steps", "agent_max_sql_rows", "agent_max_sql_scan_rows")
+    @classmethod
+    def validate_positive_ints(cls, value: int, info) -> int:  # type: ignore[no-untyped-def]
+        if value <= 0:
+            field_name = str(info.field_name).upper()
+            raise ValueError(f"{field_name} must be greater than 0")
+        return value
+
+    @field_validator("chat_engine")
+    @classmethod
+    def validate_chat_engine(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        allowed = {"deterministic", "agent_shadow", "agent_primary"}
+        if normalized not in allowed:
+            raise ValueError("CHAT_ENGINE must be one of: deterministic, agent_shadow, agent_primary")
+        return normalized
+
     @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
+
+    @property
+    def chat_engine_user_allowlist(self) -> set[str]:
+        return {
+            item.strip()
+            for item in self.chat_engine_users.split(",")
+            if item.strip()
+        }
 
 
 @lru_cache(maxsize=1)

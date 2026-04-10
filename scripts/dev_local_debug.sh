@@ -21,4 +21,4 @@ echo "[dev-local] Validating environment variables"
 echo "[dev-local] Starting local debug stack (web + api) without Docker bootstrap"
 echo "[dev-local] API log: $API_LOG_FILE"
 echo "[dev-local] Web log: $WEB_LOG_FILE"
-DISABLE_DOCKER_POSTGRES_BOOTSTRAP=1 bash scripts/dev_all.sh
+SKIP_POSTGRES_BOOTSTRAP=1 DISABLE_DOCKER_POSTGRES_BOOTSTRAP=1 bash scripts/dev_all.sh

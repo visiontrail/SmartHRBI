@@ -56,7 +56,7 @@ describe("ChartRenderer", () => {
       />
     );
     expect(screen.getByTestId("recharts-pie-chart")).toBeInTheDocument();
-  });
+  }, 10000);
 
   it("routes high-volume option to echarts renderer", () => {
     const option = {

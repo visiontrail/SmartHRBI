@@ -20,11 +20,22 @@ describe("Workbench states", () => {
 
   it("shows skeleton during stream and empty state for empty spec", async () => {
     let resolveFetch: ((value: Response) => void) | undefined;
-    fetchMock.mockReturnValue(
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "token-123",
+            token_type: "bearer",
+            expires_at: 4102444800
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockReturnValueOnce(
       new Promise<Response>((resolve) => {
         resolveFetch = resolve;
       })
-    );
+      );
 
     render(<ChatWorkbench apiBaseUrl="http://localhost:8000" />);
     await userEvent.type(screen.getByLabelText("Chat Input"), "query");

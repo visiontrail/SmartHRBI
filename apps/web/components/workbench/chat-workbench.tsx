@@ -28,6 +28,7 @@ type UploadStatus = "idle" | "uploading";
 
 type PersistedWorkbenchState = {
   conversationId: string;
+  agentSessionId: string | null;
   userId: string;
   projectId: string;
   role: string;
@@ -38,6 +39,7 @@ type PersistedWorkbenchState = {
   messages: Message[];
   activeSpec: unknown;
   lastToolEvent: Record<string, unknown> | null;
+  toolTrace: Record<string, unknown>[];
   shareLink: string | null;
 };
 
@@ -51,6 +53,7 @@ const DEFAULT_DATASET = "employees_wide";
 export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [conversationId, setConversationId] = useState<string>(makeRequestId());
+  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [userId, setUserId] = useState(DEFAULT_USER_ID);
   const [projectId, setProjectId] = useState(DEFAULT_PROJECT_ID);
   const [role, setRole] = useState(DEFAULT_ROLE);
@@ -61,6 +64,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeSpec, setActiveSpec] = useState<unknown>(null);
   const [lastToolEvent, setLastToolEvent] = useState<Record<string, unknown> | null>(null);
+  const [toolTrace, setToolTrace] = useState<Record<string, unknown>[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("idle");
   const [streamError, setStreamError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -78,6 +82,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     const persisted = safeLoadFromStorage<PersistedWorkbenchState>(SESSION_STORAGE_KEY);
     if (persisted) {
       setConversationId(persisted.conversationId || makeRequestId());
+      setAgentSessionId(persisted.agentSessionId ?? null);
       setUserId(persisted.userId || DEFAULT_USER_ID);
       setProjectId(persisted.projectId || DEFAULT_PROJECT_ID);
       setRole(persisted.role || DEFAULT_ROLE);
@@ -88,6 +93,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
       setMessages(Array.isArray(persisted.messages) ? persisted.messages : []);
       setActiveSpec(persisted.activeSpec ?? null);
       setLastToolEvent(persisted.lastToolEvent ?? null);
+      setToolTrace(Array.isArray(persisted.toolTrace) ? persisted.toolTrace : []);
       setShareLink(persisted.shareLink ?? null);
     }
     setIsRestored(true);
@@ -99,6 +105,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     }
     safeSaveToStorage<PersistedWorkbenchState>(SESSION_STORAGE_KEY, {
       conversationId,
+      agentSessionId,
       userId,
       projectId,
       role,
@@ -109,10 +116,12 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
       messages,
       activeSpec,
       lastToolEvent,
+      toolTrace,
       shareLink
     });
   }, [
     activeSpec,
+    agentSessionId,
     composer,
     conversationId,
     datasetTable,
@@ -124,6 +133,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     role,
     clearance,
     shareLink,
+    toolTrace,
     userId
   ]);
 
@@ -137,6 +147,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     setStreamError(null);
     setStreamStatus("streaming");
     setComposer("");
+    setToolTrace([]);
     setMessages((previous) => [...previous, { id: makeRequestId(), role: "user", text: message }]);
 
     try {
@@ -172,8 +183,25 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
 
       for await (const streamEvent of parseSSEStream(response.body)) {
         const payload = isRecord(streamEvent.data) ? streamEvent.data : {};
+        syncAgentSessionId(payload);
+        if (streamEvent.event === "planning") {
+          appendAssistantMessage(String(payload.text ?? "Planning the analysis..."));
+          continue;
+        }
         if (streamEvent.event === "reasoning") {
+          if (payload.compatibility_mirror === true) {
+            continue;
+          }
           appendAssistantMessage(String(payload.text ?? "Reasoning in progress..."));
+          continue;
+        }
+        if (streamEvent.event === "tool_use") {
+          appendToolTrace(payload);
+          continue;
+        }
+        if (streamEvent.event === "tool_result") {
+          appendToolTrace(payload);
+          setLastToolEvent(payload);
           continue;
         }
         if (streamEvent.event === "tool") {
@@ -182,6 +210,12 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
         }
         if (streamEvent.event === "spec") {
           setActiveSpec(payload.spec ?? null);
+          continue;
+        }
+        if (streamEvent.event === "error") {
+          const messageText = String(payload.message ?? "请求失败，请稍后重试。");
+          appendAssistantMessage(messageText);
+          setStreamError(messageText);
           continue;
         }
         if (streamEvent.event === "final") {
@@ -238,7 +272,9 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
             dataset_table: datasetTable,
             messages,
             active_spec: activeSpec,
-            last_tool_event: lastToolEvent
+            last_tool_event: lastToolEvent,
+            tool_trace: toolTrace,
+            agent_session_id: agentSessionId
           }
         })
       });
@@ -344,6 +380,17 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
 
   function appendAssistantMessage(text: string) {
     setMessages((previous) => [...previous, { id: makeRequestId(), role: "assistant", text }]);
+  }
+
+  function appendToolTrace(payload: Record<string, unknown>) {
+    setToolTrace((previous) => [...previous, payload]);
+  }
+
+  function syncAgentSessionId(payload: Record<string, unknown>) {
+    const nextAgentSessionId = String(payload.agent_session_id ?? "").trim();
+    if (nextAgentSessionId) {
+      setAgentSessionId(nextAgentSessionId);
+    }
   }
 
   const streamLabel = useMemo(() => {
@@ -523,8 +570,15 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
           </div>
 
           <section className="tool-status" data-testid="tool-status">
-            <h3>Latest Tool Event</h3>
-            {lastToolEvent ? (
+            <h3>Tool Trace</h3>
+            {agentSessionId ? (
+              <p className="muted">
+                Agent Session: <strong>{agentSessionId}</strong>
+              </p>
+            ) : null}
+            {toolTrace.length > 0 ? (
+              <pre>{JSON.stringify(toolTrace, null, 2)}</pre>
+            ) : lastToolEvent ? (
               <pre>{JSON.stringify(lastToolEvent, null, 2)}</pre>
             ) : (
               <p className="muted">暂无工具调用事件。</p>

@@ -10,6 +10,8 @@ from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
+from .agent_guardrails import AgentGuardrailError
+from .agent_runtime import AgentRequest, AgentRuntimeError, get_agent_runtime
 from .chart_strategy import ChartStrategyRouter
 from .config import get_settings
 from .llm_openai import OpenAICompatibleToolSelector, ToolSelectionError
@@ -102,7 +104,9 @@ class ChatSessionStore:
 class ChatStreamService:
     def __init__(self) -> None:
         settings = get_settings()
+        self.settings = settings
         self.tool_service = get_tool_calling_service()
+        self.agent_runtime = get_agent_runtime()
         self.router = ChartStrategyRouter()
         self.sessions = ChatSessionStore()
         self.llm_selector = OpenAICompatibleToolSelector(
@@ -163,8 +167,136 @@ class ChatStreamService:
 
     def clear_runtime_state(self) -> None:
         self.sessions.clear()
+        self.agent_runtime.clear_runtime_state()
 
     def _generate_event_payloads(
+        self,
+        *,
+        request: ChatStreamRequest,
+        conversation_id: str,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        engine = self._resolve_chat_engine(request)
+        if engine == "deterministic":
+            return self._generate_deterministic_event_payloads(request=request, conversation_id=conversation_id)
+
+        if engine == "agent_shadow":
+            deterministic_events = self._generate_deterministic_event_payloads(
+                request=request,
+                conversation_id=conversation_id,
+            )
+            try:
+                shadow_result = self._generate_agent_event_payloads(
+                    request=request,
+                    conversation_id=conversation_id,
+                )
+                self.sessions.update_context(
+                    conversation_id=conversation_id,
+                    updates={"shadow_agent_events": shadow_result},
+                )
+            except Exception:
+                logger.exception(
+                    "agent_shadow_failed conversation_id=%s request_id=%s",
+                    conversation_id,
+                    request.request_id,
+                )
+            return deterministic_events
+
+        try:
+            return self._generate_agent_event_payloads(request=request, conversation_id=conversation_id)
+        except AgentGuardrailError as exc:
+            logger.warning(
+                "agent_guardrail_blocked conversation_id=%s request_id=%s code=%s",
+                conversation_id,
+                request.request_id,
+                exc.code,
+            )
+            return [
+                (
+                    "error",
+                    {
+                        "conversation_id": conversation_id,
+                        "request_id": request.request_id,
+                        "status": "failed",
+                        "code": exc.code,
+                        "message": exc.message,
+                    },
+                ),
+                (
+                    "final",
+                    {
+                        "conversation_id": conversation_id,
+                        "request_id": request.request_id,
+                        "status": "failed",
+                        "text": exc.message,
+                    },
+                ),
+            ]
+        except AgentRuntimeError as exc:
+            logger.warning(
+                "agent_runtime_failed conversation_id=%s request_id=%s code=%s fallback=%s",
+                conversation_id,
+                request.request_id,
+                exc.code,
+                exc.should_fallback,
+            )
+            return [
+                (
+                    "error",
+                    {
+                        "conversation_id": conversation_id,
+                        "request_id": request.request_id,
+                        "status": "failed",
+                        "code": exc.code,
+                        "message": exc.message,
+                    },
+                ),
+                (
+                    "final",
+                    {
+                        "conversation_id": conversation_id,
+                        "request_id": request.request_id,
+                        "status": "failed",
+                        "text": exc.message,
+                    },
+                ),
+            ]
+
+        return self._generate_deterministic_event_payloads(request=request, conversation_id=conversation_id)
+
+    def _generate_agent_event_payloads(
+        self,
+        *,
+        request: ChatStreamRequest,
+        conversation_id: str,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        assert request.message is not None
+        result = self.agent_runtime.run_turn(
+            AgentRequest(
+                conversation_id=conversation_id,
+                request_id=request.request_id,
+                user_id=request.user_id,
+                project_id=request.project_id,
+                dataset_table=request.dataset_table,
+                message=request.message,
+                role=request.role,
+                department=request.department,
+                clearance=request.clearance,
+            )
+        )
+        self.sessions.update_context(
+            conversation_id=conversation_id,
+            updates={
+                "latest_spec": result.spec,
+                "latest_sql": result.ai_state.get("latest_result", {}).get("sql")
+                if isinstance(result.ai_state.get("latest_result"), dict)
+                else None,
+                "agent_session_id": result.agent_session_id,
+                "agent_tool_trace": result.tool_trace,
+            },
+        )
+        return result.events
+
+    def _generate_deterministic_event_payloads(
         self,
         *,
         request: ChatStreamRequest,
@@ -175,6 +307,13 @@ class ChatStreamService:
         selected_tool, tool_args = self._select_tool(
             message=request.message,
             conversation_id=conversation_id,
+        )
+        logger.info(
+            "chat_tool_selected conversation_id=%s request_id=%s tool_name=%s arguments=%s",
+            conversation_id,
+            request.request_id,
+            selected_tool,
+            json.dumps(tool_args, ensure_ascii=False, default=str),
         )
         reasoning_payload = {
             "conversation_id": conversation_id,
@@ -196,6 +335,17 @@ class ChatStreamService:
             tool=ToolCall(name=selected_tool, arguments=tool_args),
         )
         tool_response = self.tool_service.invoke(tool_request)
+        logger.info(
+            "chat_tool_result conversation_id=%s request_id=%s tool_name=%s status=%s attempts=%s from_cache=%s result_summary=%s error=%s",
+            conversation_id,
+            request.request_id,
+            selected_tool,
+            tool_response.status,
+            tool_response.attempts,
+            tool_response.from_cache,
+            json.dumps(_summarize_tool_result(tool_response.result), ensure_ascii=False, default=str),
+            json.dumps(tool_response.error, ensure_ascii=False, default=str),
+        )
 
         tool_payload = {
             "conversation_id": conversation_id,
@@ -221,6 +371,13 @@ class ChatStreamService:
             ("spec", spec_payload),
             ("final", final_payload),
         ]
+
+    def _resolve_chat_engine(self, request: ChatStreamRequest) -> str:
+        engine = self.settings.chat_engine
+        allowlist = self.settings.chat_engine_user_allowlist
+        if allowlist and request.user_id not in allowlist:
+            return "deterministic"
+        return engine
 
     def _select_tool(self, *, message: str, conversation_id: str) -> tuple[str, dict[str, Any]]:
         context = self.sessions.get_context(conversation_id=conversation_id)
@@ -436,6 +593,33 @@ def _format_sse(event: ChatEvent) -> str:
     )
 
 
+def _summarize_tool_result(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+
+    summary: dict[str, Any] = {}
+    if "metric" in result:
+        summary["metric"] = result.get("metric")
+    if "row_count" in result:
+        summary["row_count"] = result.get("row_count")
+    rows = result.get("rows")
+    if isinstance(rows, list):
+        summary["rows_preview_count"] = min(len(rows), 3)
+        summary["rows_preview"] = rows[:3]
+    if "sql" in result:
+        summary["sql"] = result.get("sql")
+    if "table" in result:
+        summary["table"] = result.get("table")
+    columns = result.get("columns")
+    if isinstance(columns, list):
+        summary["columns"] = columns[:10]
+    if "view_id" in result:
+        summary["view_id"] = result.get("view_id")
+    if "share_path" in result:
+        summary["share_path"] = result.get("share_path")
+    return summary
+
+
 @lru_cache(maxsize=2)
 def _cached_chat_stream_service(settings_key: str) -> ChatStreamService:
     _ = settings_key
@@ -450,6 +634,8 @@ def get_chat_stream_service() -> ChatStreamService:
             settings.model_provider_url.strip(),
             settings.ai_model.strip(),
             "enabled" if bool(settings.ai_api_key.strip()) else "disabled",
+            settings.chat_engine,
+            ",".join(sorted(settings.chat_engine_user_allowlist)),
         ]
     )
     return _cached_chat_stream_service(settings_key)
