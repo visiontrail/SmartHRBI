@@ -12,6 +12,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
@@ -102,14 +103,18 @@ export function ChartRenderer({ spec }: ChartRendererProps) {
     return (
       <section className="genui-panel" data-testid="recharts-bar-chart">
         <h3>{spec.title}</h3>
-        <BarChart width={680} height={320} data={spec.data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Bar dataKey={yKey} fill="#155dfc" radius={[6, 6, 0, 0]} />
-        </BarChart>
+        <div className="recharts-wrap">
+          <ResponsiveContainer width="100%" height="100%" minWidth={320} minHeight={320}>
+            <BarChart data={spec.data}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey={xKey} />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey={yKey} fill="#155dfc" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </section>
     );
   }
@@ -118,14 +123,18 @@ export function ChartRenderer({ spec }: ChartRendererProps) {
     return (
       <section className="genui-panel" data-testid="recharts-line-chart">
         <h3>{spec.title}</h3>
-        <LineChart width={680} height={320} data={spec.data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Line type="monotone" dataKey={yKey} stroke="#155dfc" strokeWidth={2} dot={false} />
-        </LineChart>
+        <div className="recharts-wrap">
+          <ResponsiveContainer width="100%" height="100%" minWidth={320} minHeight={320}>
+            <LineChart data={spec.data}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey={xKey} />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey={yKey} stroke="#155dfc" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
       </section>
     );
   }
@@ -134,15 +143,19 @@ export function ChartRenderer({ spec }: ChartRendererProps) {
     return (
       <section className="genui-panel" data-testid="recharts-pie-chart">
         <h3>{spec.title}</h3>
-        <PieChart width={680} height={320}>
-          <Tooltip />
-          <Legend />
-          <Pie data={spec.data} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={112}>
-            {spec.data.map((_, index) => (
-              <Cell key={`slice-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-            ))}
-          </Pie>
-        </PieChart>
+        <div className="recharts-wrap">
+          <ResponsiveContainer width="100%" height="100%" minWidth={320} minHeight={320}>
+            <PieChart>
+              <Tooltip />
+              <Legend />
+              <Pie data={spec.data} dataKey={yKey} nameKey={xKey} cx="50%" cy="50%" outerRadius={112}>
+                {spec.data.map((_, index) => (
+                  <Cell key={`slice-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
       </section>
     );
   }

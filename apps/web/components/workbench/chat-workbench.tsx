@@ -355,8 +355,8 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
         <p>状态: {streamLabel}</p>
       </header>
 
-      <section className="workspace-grid">
-        <section className="workspace-card">
+      <section className="workspace-top-grid">
+        <section className="workspace-card workspace-card--chat">
           <h2>Chat</h2>
           <div className="chat-log" data-testid="chat-log">
             {messages.length === 0 ? <p className="muted">先输入一个问题开始分析。</p> : null}
@@ -383,15 +383,17 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
           </form>
         </section>
 
-        <section className="workspace-card">
+        <section className="workspace-card workspace-card--visualization">
           <h2>Visualization</h2>
-          {streamError ? (
-            <ErrorPanel description={streamError} />
-          ) : !activeSpec && streamStatus === "idle" ? (
-            <EmptyPanel title="Chart not generated yet" />
-          ) : (
-            <GenUIRegistry rawSpec={activeSpec} isStreaming={streamStatus === "streaming"} />
-          )}
+          <div className="visualization-stage">
+            {streamError ? (
+              <ErrorPanel description={streamError} />
+            ) : !activeSpec && streamStatus === "idle" ? (
+              <EmptyPanel title="Chart not generated yet" />
+            ) : (
+              <GenUIRegistry rawSpec={activeSpec} isStreaming={streamStatus === "streaming"} />
+            )}
+          </div>
           <section className="share-actions">
             <button type="button" onClick={handleSaveView} disabled={!activeSpec || saveStatus === "saving"}>
               {saveStatus === "saving" ? "Saving..." : "Save & Share"}
@@ -404,106 +406,116 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
             ) : null}
           </section>
         </section>
+      </section>
 
-        <section className="workspace-card">
-          <h2>Dataset Context</h2>
-          <section className="upload-panel">
-            <div className="upload-panel__copy">
-              <h3>Excel Upload</h3>
-              <p>上传 `.xlsx` 后会自动创建数据表，并回填到当前会话的 `Dataset Table`。</p>
-            </div>
-            <input
-              ref={uploadInputRef}
-              aria-label="Excel Upload"
-              type="file"
-              accept=".xlsx"
-              multiple
-              onChange={handleFileSelection}
-            />
-            <div className="upload-panel__actions">
-              <button type="button" onClick={handleUploadFiles} disabled={!selectedFiles.length || uploadStatus === "uploading"}>
-                {uploadStatus === "uploading" ? "Uploading..." : "Upload Excel"}
-              </button>
-              <p className="muted">{selectedFilesLabel}</p>
-            </div>
-            <p className="upload-panel__hint">限制：单文件 10MB，单次最多 20 个 `.xlsx` 文件。</p>
-            {uploadError ? <p className="upload-error">{uploadError}</p> : null}
-            {uploadBatchId ? (
-              <div className="upload-summary" data-testid="upload-summary">
-                <p>
-                  Batch ID: <strong>{uploadBatchId}</strong>
-                </p>
-                <p>
-                  Dataset Table: <strong>{datasetTable}</strong>
-                </p>
-                {uploadSummary ? (
-                  <p>
-                    Rows {uploadSummary.rowCount}, Columns {uploadSummary.columnCount}, Blocking issues {uploadSummary.issueCount},
-                    Semantic layer {uploadSummary.canPublish ? "ready" : "blocked"}.
-                  </p>
-                ) : null}
+      <section className="workspace-card workspace-card--dataset">
+        <h2>Dataset Context</h2>
+        <div className="dataset-context-grid">
+          <section className="dataset-context-column dataset-context-column--upload">
+            <section className="upload-panel">
+              <div className="upload-panel__copy">
+                <h3>Excel Upload</h3>
+                <p>上传 `.xlsx` 后会自动创建数据表，并回填到当前会话的 `Dataset Table`。</p>
               </div>
-            ) : null}
-          </section>
-          <div className="context-grid">
-            <label>
-              User ID
-              <input value={userId} onChange={(event) => setUserId(event.target.value)} />
-            </label>
-            <label>
-              Project ID
-              <input value={projectId} onChange={(event) => setProjectId(event.target.value)} />
-            </label>
-            <label>
-              Role
-              <select aria-label="Role" value={role} onChange={(event) => setRole(event.target.value)}>
-                <option value="admin">admin</option>
-                <option value="hr">hr</option>
-                <option value="pm">pm</option>
-                <option value="viewer">viewer</option>
-              </select>
-            </label>
-            <label>
-              Department
-              <input value={department} onChange={(event) => setDepartment(event.target.value)} />
-            </label>
-            <label>
-              Clearance
               <input
-                aria-label="Clearance"
-                type="number"
-                min={0}
-                step={1}
-                value={clearance}
-                onChange={(event) => setClearance(Number(event.target.value) || 0)}
+                ref={uploadInputRef}
+                aria-label="Excel Upload"
+                type="file"
+                accept=".xlsx"
+                multiple
+                onChange={handleFileSelection}
               />
-            </label>
-            <label>
-              Dataset Table
-              <input value={datasetTable} onChange={(event) => setDatasetTable(event.target.value)} />
-            </label>
-            <label>
-              Conversation ID
-              <input value={conversationId} onChange={(event) => setConversationId(event.target.value)} />
-            </label>
-          </div>
-
-          <section className="tool-status" data-testid="tool-status">
-            <h3>Tool Trace</h3>
-            {agentSessionId ? (
-              <p className="muted">
-                Agent Session: <strong>{agentSessionId}</strong>
-              </p>
-            ) : null}
-            {toolTrace.length > 0 ? (
-              <pre>{JSON.stringify(toolTrace, null, 2)}</pre>
-            ) : lastToolEvent ? (
-              <pre>{JSON.stringify(lastToolEvent, null, 2)}</pre>
-            ) : (
-              <p className="muted">暂无工具调用事件。</p>
-            )}
+              <div className="upload-panel__actions">
+                <button type="button" onClick={handleUploadFiles} disabled={!selectedFiles.length || uploadStatus === "uploading"}>
+                  {uploadStatus === "uploading" ? "Uploading..." : "Upload Excel"}
+                </button>
+                <p className="muted">{selectedFilesLabel}</p>
+              </div>
+              <p className="upload-panel__hint">限制：单文件 10MB，单次最多 20 个 `.xlsx` 文件。</p>
+              {uploadError ? <p className="upload-error">{uploadError}</p> : null}
+              {uploadBatchId ? (
+                <div className="upload-summary" data-testid="upload-summary">
+                  <p>
+                    Batch ID: <strong>{uploadBatchId}</strong>
+                  </p>
+                  <p>
+                    Dataset Table: <strong>{datasetTable}</strong>
+                  </p>
+                  {uploadSummary ? (
+                    <p>
+                      Rows {uploadSummary.rowCount}, Columns {uploadSummary.columnCount}, Blocking issues {uploadSummary.issueCount},
+                      Semantic layer {uploadSummary.canPublish ? "ready" : "blocked"}.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
           </section>
-        </section>
+
+          <section className="dataset-context-column dataset-context-column--session">
+            <h3>Session Context</h3>
+            <div className="context-grid">
+              <label>
+                User ID
+                <input value={userId} onChange={(event) => setUserId(event.target.value)} />
+              </label>
+              <label>
+                Project ID
+                <input value={projectId} onChange={(event) => setProjectId(event.target.value)} />
+              </label>
+              <label>
+                Role
+                <select aria-label="Role" value={role} onChange={(event) => setRole(event.target.value)}>
+                  <option value="admin">admin</option>
+                  <option value="hr">hr</option>
+                  <option value="pm">pm</option>
+                  <option value="viewer">viewer</option>
+                </select>
+              </label>
+              <label>
+                Department
+                <input value={department} onChange={(event) => setDepartment(event.target.value)} />
+              </label>
+              <label>
+                Clearance
+                <input
+                  aria-label="Clearance"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={clearance}
+                  onChange={(event) => setClearance(Number(event.target.value) || 0)}
+                />
+              </label>
+              <label>
+                Dataset Table
+                <input value={datasetTable} onChange={(event) => setDatasetTable(event.target.value)} />
+              </label>
+              <label>
+                Conversation ID
+                <input value={conversationId} onChange={(event) => setConversationId(event.target.value)} />
+              </label>
+            </div>
+          </section>
+
+          <section className="dataset-context-column dataset-context-column--tools">
+            <section className="tool-status" data-testid="tool-status">
+              <h3>Tool Trace</h3>
+              {agentSessionId ? (
+                <p className="muted">
+                  Agent Session: <strong>{agentSessionId}</strong>
+                </p>
+              ) : null}
+              {toolTrace.length > 0 ? (
+                <pre>{JSON.stringify(toolTrace, null, 2)}</pre>
+              ) : lastToolEvent ? (
+                <pre>{JSON.stringify(lastToolEvent, null, 2)}</pre>
+              ) : (
+                <p className="muted">暂无工具调用事件。</p>
+              )}
+            </section>
+          </section>
+        </div>
       </section>
     </main>
   );
