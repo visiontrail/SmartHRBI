@@ -1,0 +1,129 @@
+"use client";
+
+import { useCallback } from "react";
+import { LayoutDashboard, Copy, RefreshCw, Maximize2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { ChartPreview } from "@/components/charts/chart-preview";
+import { useAssetStore } from "@/stores/asset-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useUIStore } from "@/stores/ui-store";
+import { generateId } from "@/lib/utils";
+import { toast } from "sonner";
+import type { ChartNodeData } from "@/types/workspace";
+
+type ChartMessageCardProps = {
+  assetId: string;
+  title: string;
+  chartType: string;
+};
+
+export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCardProps) {
+  const getAsset = useAssetStore((s) => s.getAsset);
+  const addNode = useWorkspaceStore((s) => s.addNode);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const nodes = useWorkspaceStore((s) => s.nodes);
+  const setActivePanel = useUIStore((s) => s.setActivePanel);
+
+  const asset = getAsset(assetId);
+
+  const handleAddToCanvas = useCallback(() => {
+    if (!asset) {
+      toast.error("Chart asset not found");
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("No workspace selected. Create or select a workspace first.");
+      return;
+    }
+
+    const offsetX = 50 + (nodes.length % 3) * 560;
+    const offsetY = 50 + Math.floor(nodes.length / 3) * 420;
+
+    const nodeData: ChartNodeData = {
+      type: "chart",
+      assetId: asset.id,
+      title: asset.title,
+      chartType: asset.chartType,
+      spec: asset.spec,
+      width: 520,
+      height: 380,
+    };
+
+    addNode({
+      id: `node-${generateId()}`,
+      type: "chartNode",
+      position: { x: offsetX, y: offsetY },
+      data: nodeData,
+    });
+
+    setActivePanel("both");
+    toast.success(`"${asset.title}" added to workspace`);
+  }, [asset, activeWorkspaceId, nodes.length, addNode, setActivePanel]);
+
+  return (
+    <Card className="w-full max-w-lg overflow-hidden animate-fade-in">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-body font-sans font-semibold">{title}</CardTitle>
+          <Badge variant="secondary">{chartType}</Badge>
+        </div>
+      </CardHeader>
+
+      <CardContent className="pb-3">
+        {asset ? (
+          <div className="rounded-comfortable overflow-hidden border border-border-cream bg-parchment">
+            <ChartPreview spec={asset.spec} height={220} />
+          </div>
+        ) : (
+          <div className="h-[220px] rounded-comfortable bg-warm-sand flex items-center justify-center">
+            <p className="text-caption text-stone-gray">Chart preview unavailable</p>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2 mt-3">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="default" size="sm" onClick={handleAddToCanvas}>
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                Add to Canvas
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Insert this chart into your workspace</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm">
+                <Copy className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Duplicate</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm">
+                <RefreshCw className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Regenerate</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm">
+                <Maximize2 className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Full screen</TooltipContent>
+          </Tooltip>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

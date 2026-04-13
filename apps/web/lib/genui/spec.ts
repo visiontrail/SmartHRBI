@@ -1,80 +1,50 @@
-import { z } from "zod";
-
-import { GENUI_CATALOG } from "./catalog";
-
-const routeSchema = z
-  .object({
-    complexity_score: z.number().int().min(0),
-    threshold: z.number().int().min(1),
-    reasons: z.array(z.string()).default([]),
-    selected_engine: z.string().min(1)
-  })
-  .optional();
-
-const rechartsChartTypeSchema = z.enum(GENUI_CATALOG.recharts);
-const echartsChartTypeSchema = z.enum(GENUI_CATALOG.echarts);
-
-const baseSpecSchema = z.object({
-  title: z.string().min(1),
-  data: z.array(z.record(z.string(), z.unknown())).default([]),
-  route: routeSchema
-});
-
-const rechartsSpecSchema = baseSpecSchema.extend({
-  engine: z.literal("recharts"),
-  chart_type: rechartsChartTypeSchema,
-  config: z
-    .object({
-      xKey: z.string().optional(),
-      yKey: z.string().optional(),
-      series: z
-        .array(
-          z.object({
-            name: z.string(),
-            dataKey: z.string()
-          })
-        )
-        .optional(),
-      columns: z.array(z.string()).optional()
-    })
-    .catchall(z.unknown())
-    .default({})
-});
-
-const echartsSpecSchema = baseSpecSchema.extend({
-  engine: z.literal("echarts"),
-  chart_type: echartsChartTypeSchema,
-  config: z.object({
-    option: z.record(z.string(), z.unknown())
-  })
-});
-
-export const genUISpecSchema = z.union([rechartsSpecSchema, echartsSpecSchema]);
-
-export type GenUISpec = z.infer<typeof genUISpecSchema>;
+export type GenUISpec = {
+  engine: string;
+  chart_type: string;
+  title: string;
+  data: Array<Record<string, unknown>>;
+  config: Record<string, unknown>;
+  route?: {
+    complexity_score: number;
+    threshold: number;
+    reasons: string[];
+    selected_engine: string;
+  };
+};
 
 export type ParsedSpec =
-  | {
-      ok: true;
-      spec: GenUISpec;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
+  | { ok: true; spec: GenUISpec }
+  | { ok: false; error: string };
 
 export function parseGenUISpec(input: unknown): ParsedSpec {
-  const parsed = genUISpecSchema.safeParse(input);
-  if (parsed.success) {
-    return {
-      ok: true,
-      spec: parsed.data
-    };
+  if (!input || typeof input !== "object") {
+    return { ok: false, error: "Input must be an object" };
+  }
+
+  const spec = input as Record<string, unknown>;
+
+  if (typeof spec.title !== "string" || !spec.title) {
+    return { ok: false, error: "Missing title" };
+  }
+
+  if (typeof spec.engine !== "string" || !spec.engine) {
+    return { ok: false, error: "Missing engine" };
+  }
+
+  if (typeof spec.chart_type !== "string" || !spec.chart_type) {
+    return { ok: false, error: "Missing chart_type" };
   }
 
   return {
-    ok: false,
-    error: parsed.error.issues.map((issue) => issue.message).join("; ")
+    ok: true,
+    spec: {
+      engine: spec.engine as string,
+      chart_type: spec.chart_type as string,
+      title: spec.title as string,
+      data: Array.isArray(spec.data) ? spec.data : [],
+      config: (typeof spec.config === "object" && spec.config ? spec.config : {}) as Record<string, unknown>,
+      route: spec.route as GenUISpec["route"],
+    },
   };
 }
 

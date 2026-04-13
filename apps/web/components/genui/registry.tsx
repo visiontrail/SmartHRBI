@@ -1,56 +1,45 @@
 "use client";
 
-import type { ComponentType } from "react";
-
-import { GENUI_REGISTRY_KEYS, isKnownRegistryKey, type GenUIRegistryKey } from "../../lib/genui/catalog";
-import { parseGenUISpec } from "../../lib/genui/spec";
 import { ChartRenderer } from "./chart-renderer";
-import { ErrorPanel, SkeletonPanel } from "./state-panels";
 
 type GenUIRegistryProps = {
   rawSpec: unknown;
   isStreaming?: boolean;
 };
 
-const REGISTRY: Record<GenUIRegistryKey, ComponentType<{ rawSpec: unknown }>> = GENUI_REGISTRY_KEYS.reduce(
-  (accumulator, key) => {
-    accumulator[key] = RegistryChart;
-    return accumulator;
-  },
-  {} as Record<GenUIRegistryKey, ComponentType<{ rawSpec: unknown }>>
-);
-
 export function GenUIRegistry({ rawSpec, isStreaming = false }: GenUIRegistryProps) {
   if (!rawSpec && isStreaming) {
-    return <SkeletonPanel />;
+    return (
+      <div className="space-y-3 p-4">
+        <div className="h-4 w-3/4 bg-warm-sand rounded animate-pulse" />
+        <div className="h-4 w-full bg-warm-sand rounded animate-pulse" />
+        <div className="h-4 w-1/2 bg-warm-sand rounded animate-pulse" />
+      </div>
+    );
   }
 
-  const parsed = parseGenUISpec(rawSpec);
-  if (!parsed.ok) {
-    return <ErrorPanel description={`Invalid chart spec: ${parsed.error}`} />;
+  if (!rawSpec || typeof rawSpec !== "object") {
+    return (
+      <div className="p-4 text-center text-stone-gray">
+        <p>Invalid chart specification</p>
+      </div>
+    );
   }
 
-  const key = `${parsed.spec.engine}:${parsed.spec.chart_type}`;
-  if (!isKnownRegistryKey(key)) {
-    return <ErrorPanel description={`Unknown chart registry key: ${key}`} />;
-  }
-
-  const Renderer = REGISTRY[key];
-  if (!Renderer) {
-    return <ErrorPanel description={`Registry component missing for ${key}`} />;
-  }
-
-  return <Renderer rawSpec={parsed.spec} />;
+  const spec = rawSpec as Record<string, unknown>;
+  return (
+    <ChartRenderer
+      spec={{
+        engine: spec.engine as string,
+        chart_type: spec.chart_type as string,
+        title: (spec.title as string) ?? "Chart",
+        data: spec.data as Array<Record<string, unknown>>,
+        config: spec.config as Record<string, unknown>,
+      }}
+    />
+  );
 }
 
-export function hasRegistryEntry(key: string): boolean {
-  return isKnownRegistryKey(key) && Boolean(REGISTRY[key]);
-}
-
-function RegistryChart({ rawSpec }: { rawSpec: unknown }) {
-  const parsed = parseGenUISpec(rawSpec);
-  if (!parsed.ok) {
-    return <ErrorPanel description={`Invalid chart spec: ${parsed.error}`} />;
-  }
-  return <ChartRenderer spec={parsed.spec} />;
+export function hasRegistryEntry(_key: string): boolean {
+  return true;
 }

@@ -1,0 +1,85 @@
+"use client";
+
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useUIStore } from "@/stores/ui-store";
+import * as api from "@/lib/mock/mock-api";
+
+export function useWorkspaceList() {
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+
+  return useQuery({
+    queryKey: ["workspaces"],
+    queryFn: async () => {
+      const workspaces = await api.fetchWorkspaces();
+      setWorkspaces(workspaces);
+      return workspaces;
+    },
+  });
+}
+
+export function useWorkspaceSnapshot(workspaceId: string | null) {
+  const loadSnapshot = useWorkspaceStore((s) => s.loadSnapshot);
+
+  return useQuery({
+    queryKey: ["workspace-snapshot", workspaceId],
+    queryFn: async () => {
+      if (!workspaceId) return null;
+      const snapshot = await api.fetchWorkspaceSnapshot(workspaceId);
+      if (snapshot) loadSnapshot(snapshot);
+      return snapshot;
+    },
+    enabled: !!workspaceId,
+  });
+}
+
+export function useCreateWorkspace() {
+  const queryClient = useQueryClient();
+  const addWorkspace = useWorkspaceStore((s) => s.addWorkspace);
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
+
+  return useMutation({
+    mutationFn: ({ title, description }: { title?: string; description?: string }) =>
+      api.createWorkspace(title, description),
+    onSuccess: (workspace) => {
+      addWorkspace(workspace);
+      setActiveWorkspace(workspace.id);
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+  });
+}
+
+export function useDeleteWorkspace() {
+  const queryClient = useQueryClient();
+  const removeWorkspace = useWorkspaceStore((s) => s.removeWorkspace);
+
+  return useMutation({
+    mutationFn: (workspaceId: string) => api.deleteWorkspace(workspaceId),
+    onSuccess: (_, workspaceId) => {
+      removeWorkspace(workspaceId);
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+  });
+}
+
+export function useSaveWorkspace() {
+  const queryClient = useQueryClient();
+  const setIsSaving = useUIStore((s) => s.setIsSaving);
+  const setHasUnsavedChanges = useWorkspaceStore((s) => s.setHasUnsavedChanges);
+
+  return useMutation({
+    mutationFn: async () => {
+      const snapshot = useWorkspaceStore.getState().getSnapshot();
+      if (!snapshot) throw new Error("No active workspace to save");
+      setIsSaving(true);
+      return api.saveWorkspaceSnapshot(snapshot);
+    },
+    onSuccess: () => {
+      setHasUnsavedChanges(false);
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onSettled: () => {
+      setIsSaving(false);
+    },
+  });
+}

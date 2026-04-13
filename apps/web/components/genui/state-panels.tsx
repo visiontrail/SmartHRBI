@@ -9,9 +9,12 @@ type PanelProps = {
 
 function BasePanel({ title, description, children, testId }: PanelProps) {
   return (
-    <section className="genui-panel genui-panel--state" data-testid={testId}>
-      <h3>{title}</h3>
-      <p>{description}</p>
+    <section
+      className="rounded-comfortable border border-border-cream bg-ivory p-4"
+      data-testid={testId}
+    >
+      <h3 className="text-body font-medium text-near-black mb-1">{title}</h3>
+      <p className="text-caption text-olive-gray">{description}</p>
       {children}
     </section>
   );
@@ -19,10 +22,13 @@ function BasePanel({ title, description, children, testId }: PanelProps) {
 
 export function SkeletonPanel() {
   return (
-    <section className="genui-panel genui-panel--skeleton" data-testid="stream-skeleton">
-      <div className="skeleton-line" />
-      <div className="skeleton-line" />
-      <div className="skeleton-line skeleton-line--short" />
+    <section
+      className="rounded-comfortable border border-border-cream bg-ivory p-4 space-y-3"
+      data-testid="stream-skeleton"
+    >
+      <div className="h-4 w-3/4 bg-warm-sand rounded animate-pulse" />
+      <div className="h-4 w-full bg-warm-sand rounded animate-pulse" />
+      <div className="h-4 w-1/2 bg-warm-sand rounded animate-pulse" />
     </section>
   );
 }
@@ -31,7 +37,7 @@ export function EmptyPanel({ title = "No Data" }: { title?: string }) {
   return (
     <BasePanel
       title={title}
-      description="当前查询暂无可视化数据，请调整筛选条件或重新提问。"
+      description="No visualization data available for this query. Try adjusting your question."
       testId="chart-empty"
     />
   );
@@ -39,7 +45,7 @@ export function EmptyPanel({ title = "No Data" }: { title?: string }) {
 
 export function ErrorPanel({
   title = "Render Failed",
-  description = "组件规范不合法或渲染过程失败。"
+  description = "The chart specification is invalid or rendering failed.",
 }: {
   title?: string;
   description?: string;
