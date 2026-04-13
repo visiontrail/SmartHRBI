@@ -1,6 +1,39 @@
 export const GENUI_CATALOG = {
-  recharts: ["bar", "line", "pie", "table", "single_value", "note", "empty"],
-  echarts: ["bar", "line", "pie"]
+  recharts: [
+    "bar",
+    "line",
+    "pie",
+    "area",
+    "scatter",
+    "radar",
+    "treemap",
+    "funnel",
+    "radialBar",
+    "composed",
+    "table",
+    "single_value",
+    "note",
+    "empty"
+  ],
+  echarts: [
+    "bar",
+    "line",
+    "pie",
+    "scatter",
+    "treemap",
+    "heatmap",
+    "radar",
+    "funnel",
+    "gauge",
+    "sankey",
+    "sunburst",
+    "boxplot",
+    "candlestick",
+    "graph",
+    "map",
+    "parallel",
+    "wordCloud"
+  ]
 } as const;
 
 export type GenUIEngine = keyof typeof GENUI_CATALOG;

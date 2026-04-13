@@ -189,19 +189,54 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "submit_answer",
             "description": (
                 "Submit the final structured answer when you have gathered enough data. "
-                "This produces the chart or table that the user will see."
+                "This produces the chart or table that the user will see.\n\n"
+                "## Chart type guide\n"
+                "- bar: compare categories side-by-side.\n"
+                "- line: show trends over time.\n"
+                "- pie: show proportion / share of a whole.\n"
+                "- area: like line but filled, good for volume over time.\n"
+                "- scatter: show correlation between two numeric variables.\n"
+                "- radar: compare multiple dimensions for a few items.\n"
+                "- treemap: show hierarchical part-of-whole; each rectangle = one item, "
+                "grouped by a category dimension. Set x_key to the grouping dimension "
+                "(e.g. department), name_key to the label shown inside each box "
+                "(e.g. employee name), and y_key to the size metric (or omit for equal sizing).\n"
+                "- funnel: show conversion / pipeline stages.\n"
+                "- radialBar: circular bar chart for ranking/comparison.\n"
+                "- composed: overlay bar + line + area on the same axes.\n"
+                "- heatmap: 2D grid coloured by intensity (uses ECharts).\n"
+                "- gauge: single KPI dial (uses ECharts).\n"
+                "- sankey: flow diagram between stages (uses ECharts).\n"
+                "- sunburst: nested ring hierarchy (uses ECharts).\n"
+                "- boxplot: statistical distribution (uses ECharts).\n"
+                "- graph: network / relationship diagram (uses ECharts).\n"
+                "- table: structured row/column table.\n"
+                "- single_value: display one big number.\n"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chart_type": {
                         "type": "string",
-                        "enum": ["bar", "line", "pie", "table", "single_value"],
+                        "enum": [
+                            "bar", "line", "pie", "area", "scatter", "radar",
+                            "treemap", "funnel", "radialBar", "composed",
+                            "heatmap", "gauge", "sankey", "sunburst",
+                            "boxplot", "graph",
+                            "table", "single_value",
+                        ],
                         "description": "Chart type for visualization",
                     },
                     "title": {"type": "string", "description": "Human-readable title"},
-                    "x_key": {"type": "string", "description": "Dimension column name"},
-                    "y_key": {"type": "string", "description": "Metric column name"},
+                    "x_key": {"type": "string", "description": "Dimension / grouping column name"},
+                    "y_key": {"type": "string", "description": "Metric / size column name"},
+                    "name_key": {
+                        "type": "string",
+                        "description": (
+                            "Label column name shown inside each element "
+                            "(e.g. employee name in treemap boxes). Only used for treemap/graph."
+                        ),
+                    },
                     "series_key": {
                         "type": "string",
                         "description": "Series column name for multi-series charts, or null",
@@ -936,6 +971,22 @@ class AgentRuntime:
 
         return result_data or {}
 
+    # Chart types that Recharts can render natively
+    RECHARTS_TYPES = frozenset({
+        "bar", "line", "pie", "area", "scatter", "radar",
+        "treemap", "funnel", "radialBar", "composed",
+        "table", "single_value", "note", "empty",
+    })
+
+    # Chart types that must be routed to ECharts (need config.option)
+    ECHARTS_ONLY_TYPES = frozenset({
+        "heatmap", "gauge", "sankey", "sunburst",
+        "boxplot", "candlestick", "graph", "map", "parallel", "wordCloud",
+    })
+
+    # All valid chart types (union of both)
+    ALL_CHART_TYPES = RECHARTS_TYPES | ECHARTS_ONLY_TYPES
+
     def _spec_from_final_answer(
         self,
         answer: dict[str, Any],
@@ -944,28 +995,58 @@ class AgentRuntime:
     ) -> dict[str, Any]:
         rows = list(answer.get("rows") or [])
         chart_type = str(answer.get("chart_type") or "bar")
-        if chart_type not in {"bar", "line", "pie", "table", "single_value"}:
+        if chart_type not in self.ALL_CHART_TYPES:
             chart_type = "bar"
         if not rows:
             chart_type = "empty"
 
         x_key = str(answer.get("x_key") or _guess_dimension_key(rows, fallback="dimension"))
         y_key = str(answer.get("y_key") or _guess_metric_key(rows, fallback="metric_value"))
+        name_key = answer.get("name_key") or None
         series_key = answer.get("series_key") or None
         metric_name = str(answer.get("metric_name") or "metric")
         title = str(answer.get("title") or request.message[:60])
 
-        engine = "recharts"
-        if chart_type == "line" and series_key:
+        # Decide engine: ECharts-only types always use echarts; multi-series line also
+        if chart_type in self.ECHARTS_ONLY_TYPES:
             engine = "echarts"
+        elif chart_type == "line" and series_key:
+            engine = "echarts"
+        else:
+            engine = "recharts"
 
-        config: dict[str, Any] = {"xKey": x_key, "yKey": y_key, "metricName": metric_name}
-        if series_key:
-            config["seriesKey"] = series_key
+        if engine == "echarts":
+            option = _build_echarts_option(
+                chart_type=chart_type,
+                rows=rows,
+                x_key=x_key,
+                y_key=y_key,
+                name_key=str(name_key) if name_key else None,
+                series_key=str(series_key) if series_key else None,
+                title=title,
+                metric_name=metric_name,
+            )
+            # Normalise echarts chart_type to a valid catalog value
+            echarts_catalog = {
+                "bar", "line", "pie", "scatter", "treemap", "heatmap",
+                "radar", "funnel", "gauge", "sankey", "sunburst",
+                "boxplot", "candlestick", "graph", "map", "parallel", "wordCloud",
+            }
+            echarts_ct = chart_type if chart_type in echarts_catalog else "bar"
+            config: dict[str, Any] = {"option": option}
+        else:
+            echarts_ct = chart_type  # unused, but keeps typing simple
+            config = {"xKey": x_key, "yKey": y_key, "metricName": metric_name}
+            if name_key:
+                config["nameKey"] = name_key
+            if series_key:
+                config["seriesKey"] = series_key
+
+        final_chart_type = echarts_ct if engine == "echarts" else chart_type
 
         return {
             "engine": engine,
-            "chart_type": chart_type,
+            "chart_type": final_chart_type,
             "title": title,
             "data": rows,
             "config": config,
@@ -1372,6 +1453,327 @@ def _compose_final_text(answer: dict[str, Any]) -> str:
     if anomalies:
         parts.append(f"异常说明: {anomalies}")
     return " ".join(parts)
+
+
+def _build_echarts_option(
+    *,
+    chart_type: str,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    name_key: str | None,
+    series_key: str | None,
+    title: str,
+    metric_name: str,
+) -> dict[str, Any]:
+    """Build a complete ECharts option dict from flat rows."""
+
+    if chart_type == "treemap":
+        return _echarts_treemap_option(rows=rows, x_key=x_key, y_key=y_key, name_key=name_key, title=title)
+    if chart_type == "heatmap":
+        return _echarts_heatmap_option(rows=rows, x_key=x_key, y_key=y_key, series_key=series_key)
+    if chart_type == "radar":
+        return _echarts_radar_option(rows=rows, x_key=x_key, y_key=y_key, metric_name=metric_name)
+    if chart_type == "funnel":
+        return _echarts_funnel_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "gauge":
+        return _echarts_gauge_option(rows=rows, y_key=y_key, title=title)
+    if chart_type == "sankey":
+        return _echarts_sankey_option(rows=rows)
+    if chart_type == "sunburst":
+        return _echarts_sunburst_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "boxplot":
+        return _echarts_boxplot_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "graph":
+        return _echarts_graph_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "pie":
+        return _echarts_pie_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "scatter":
+        return _echarts_scatter_option(rows=rows, x_key=x_key, y_key=y_key)
+
+    # Default: category axis bar/line
+    return _echarts_cartesian_option(
+        rows=rows, x_key=x_key, y_key=y_key,
+        series_key=series_key, series_type=chart_type if chart_type in {"line", "bar"} else "bar",
+        metric_name=metric_name,
+    )
+
+
+def _echarts_cartesian_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    series_key: str | None,
+    series_type: str,
+    metric_name: str,
+) -> dict[str, Any]:
+    if series_key:
+        series_groups: dict[str, list] = {}
+        categories_set: list[str] = []
+        for row in rows:
+            cat = str(row.get(x_key, ""))
+            if cat not in categories_set:
+                categories_set.append(cat)
+            sg = str(row.get(series_key, ""))
+            series_groups.setdefault(sg, {})[cat] = row.get(y_key, 0)
+
+        series_list = []
+        for sg_name, cat_map in series_groups.items():
+            series_list.append({
+                "name": sg_name,
+                "type": series_type,
+                "smooth": True,
+                "data": [cat_map.get(c, 0) for c in categories_set],
+            })
+        return {
+            "tooltip": {"trigger": "axis"},
+            "legend": {},
+            "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+            "xAxis": {"type": "category", "data": categories_set},
+            "yAxis": {"type": "value"},
+            "series": series_list,
+        }
+
+    categories = [str(r.get(x_key, f"item-{i+1}")) for i, r in enumerate(rows)]
+    values = [r.get(y_key, 0) for r in rows]
+    return {
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+        "xAxis": {"type": "category", "data": categories},
+        "yAxis": {"type": "value"},
+        "series": [{"name": metric_name, "type": series_type, "smooth": True, "data": values}],
+    }
+
+
+def _echarts_treemap_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    name_key: str | None,
+    title: str,
+) -> dict[str, Any]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        group = str(row.get(x_key, "other"))
+        label = str(row.get(name_key, "")) if name_key else group
+        size = row.get(y_key, 1)
+        size = size if isinstance(size, (int, float)) else 1
+        groups.setdefault(group, []).append({"name": label, "value": size})
+
+    tree_data: list[dict[str, Any]]
+    if len(groups) <= 1 and not name_key:
+        tree_data = [{"name": str(r.get(x_key, f"item-{i+1}")), "value": r.get(y_key, 1)} for i, r in enumerate(rows)]
+    else:
+        tree_data = [{"name": g, "children": children} for g, children in groups.items()]
+
+    return {
+        "tooltip": {"trigger": "item"},
+        "series": [{
+            "type": "treemap",
+            "data": tree_data,
+            "label": {"show": True, "formatter": "{b}"},
+            "upperLabel": {"show": True, "height": 30},
+            "breadcrumb": {"show": True},
+            "levels": [
+                {"itemStyle": {"borderColor": "#555", "borderWidth": 4, "gapWidth": 4}},
+                {"colorSaturation": [0.3, 0.6], "itemStyle": {"borderColorSaturation": 0.7, "gapWidth": 2, "borderWidth": 2}},
+            ],
+        }],
+    }
+
+
+def _echarts_heatmap_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    series_key: str | None,
+) -> dict[str, Any]:
+    value_key = series_key or "value"
+    x_cats = sorted(set(str(r.get(x_key, "")) for r in rows))
+    y_cats = sorted(set(str(r.get(y_key, "")) for r in rows))
+    x_map = {v: i for i, v in enumerate(x_cats)}
+    y_map = {v: i for i, v in enumerate(y_cats)}
+    data = []
+    for r in rows:
+        xi = x_map.get(str(r.get(x_key, "")), 0)
+        yi = y_map.get(str(r.get(y_key, "")), 0)
+        val = r.get(value_key, 0)
+        data.append([xi, yi, val])
+    return {
+        "tooltip": {"position": "top"},
+        "grid": {"left": "3%", "right": "4%", "bottom": "8%", "containLabel": True},
+        "xAxis": {"type": "category", "data": x_cats},
+        "yAxis": {"type": "category", "data": y_cats},
+        "visualMap": {"min": 0, "max": max((d[2] for d in data), default=1), "calculable": True, "orient": "horizontal", "left": "center", "bottom": "0%"},
+        "series": [{"type": "heatmap", "data": data, "label": {"show": True}}],
+    }
+
+
+def _echarts_radar_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    metric_name: str,
+) -> dict[str, Any]:
+    indicators = [{"name": str(r.get(x_key, f"dim-{i+1}")), "max": 100} for i, r in enumerate(rows)]
+    values = [r.get(y_key, 0) for r in rows]
+    max_val = max(values, default=100) if values else 100
+    for ind in indicators:
+        ind["max"] = max_val * 1.2 if max_val > 0 else 100
+    return {
+        "tooltip": {},
+        "radar": {"indicator": indicators},
+        "series": [{"type": "radar", "data": [{"name": metric_name, "value": values}]}],
+    }
+
+
+def _echarts_funnel_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    data = [{"name": str(r.get(x_key, f"stage-{i+1}")), "value": r.get(y_key, 0)} for i, r in enumerate(rows)]
+    return {
+        "tooltip": {"trigger": "item"},
+        "legend": {},
+        "series": [{"type": "funnel", "left": "10%", "width": "80%", "data": data, "label": {"show": True, "position": "inside"}}],
+    }
+
+
+def _echarts_gauge_option(
+    *,
+    rows: list[dict[str, Any]],
+    y_key: str,
+    title: str,
+) -> dict[str, Any]:
+    value = rows[0].get(y_key, 0) if rows else 0
+    return {
+        "tooltip": {},
+        "series": [{"type": "gauge", "data": [{"value": value, "name": title}], "detail": {"formatter": "{value}"}}],
+    }
+
+
+def _echarts_sankey_option(*, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    nodes_set: set[str] = set()
+    links: list[dict[str, Any]] = []
+    for r in rows:
+        src = str(r.get("source", ""))
+        tgt = str(r.get("target", ""))
+        val = r.get("value", 1)
+        if src and tgt:
+            nodes_set.add(src)
+            nodes_set.add(tgt)
+            links.append({"source": src, "target": tgt, "value": val})
+    return {
+        "tooltip": {"trigger": "item"},
+        "series": [{"type": "sankey", "data": [{"name": n} for n in sorted(nodes_set)], "links": links, "emphasis": {"focus": "adjacency"}}],
+    }
+
+
+def _echarts_sunburst_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    if rows and "children" in rows[0]:
+        data = rows
+    else:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            g = str(r.get(x_key, "other"))
+            groups.setdefault(g, []).append({"name": str(r.get("name", g)), "value": r.get(y_key, 1)})
+        data = [{"name": g, "children": c} for g, c in groups.items()]
+    return {
+        "tooltip": {},
+        "series": [{"type": "sunburst", "data": data, "radius": ["15%", "90%"], "label": {"rotate": "radial"}}],
+    }
+
+
+def _echarts_boxplot_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    categories = [str(r.get(x_key, f"cat-{i+1}")) for i, r in enumerate(rows)]
+    data = []
+    for r in rows:
+        val = r.get(y_key)
+        if isinstance(val, list):
+            data.append(val)
+        else:
+            v = val if isinstance(val, (int, float)) else 0
+            data.append([v, v, v, v, v])
+    return {
+        "tooltip": {"trigger": "item"},
+        "xAxis": {"type": "category", "data": categories},
+        "yAxis": {"type": "value"},
+        "series": [{"type": "boxplot", "data": data}],
+    }
+
+
+def _echarts_graph_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    nodes_set: set[str] = set()
+    links: list[dict[str, Any]] = []
+    for r in rows:
+        src = str(r.get("source", r.get(x_key, "")))
+        tgt = str(r.get("target", r.get(y_key, "")))
+        if src and tgt:
+            nodes_set.add(src)
+            nodes_set.add(tgt)
+            links.append({"source": src, "target": tgt})
+    return {
+        "tooltip": {},
+        "series": [{
+            "type": "graph",
+            "layout": "force",
+            "data": [{"name": n, "symbolSize": 30} for n in sorted(nodes_set)],
+            "links": links,
+            "roam": True,
+            "label": {"show": True},
+            "force": {"repulsion": 200},
+        }],
+    }
+
+
+def _echarts_pie_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    data = [{"name": str(r.get(x_key, f"item-{i+1}")), "value": r.get(y_key, 0)} for i, r in enumerate(rows)]
+    return {
+        "tooltip": {"trigger": "item"},
+        "legend": {"orient": "vertical", "left": "left"},
+        "series": [{"type": "pie", "radius": "60%", "data": data, "emphasis": {"itemStyle": {"shadowBlur": 10}}}],
+    }
+
+
+def _echarts_scatter_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    data = [[r.get(x_key, 0), r.get(y_key, 0)] for r in rows]
+    return {
+        "tooltip": {"trigger": "item"},
+        "xAxis": {"type": "value", "name": x_key},
+        "yAxis": {"type": "value", "name": y_key},
+        "series": [{"type": "scatter", "data": data, "symbolSize": 10}],
+    }
 
 
 def _guess_dimension_key(rows: list[dict[str, Any]], *, fallback: str) -> str:
