@@ -18,13 +18,19 @@ from .agent_prompting import build_agent_system_prompt
 from .audit import get_audit_logger
 from .chart_strategy import ChartStrategyRouter
 from .config import get_settings
-from .llm_openai import AgentLLMError, AgentLLMResponse, AgentLLMToolCall, OpenAIAgentLoopClient
+from .llm_anthropic import (
+    AnthropicAgentClient,
+    AnthropicLLMError,
+    AnthropicLLMResponse,
+    AnthropicToolCall,
+    build_anthropic_content_blocks,
+)
 from .tool_calling import ToolCall, ToolCallRequest, ToolCallResponse, get_tool_calling_service
 
 logger = logging.getLogger("smarthrbi.agent")
 
 # ---------------------------------------------------------------------------
-# OpenAI function-calling definitions for every tool the agent may use
+# Tool definitions (converted to Anthropic format by the LLM client)
 # ---------------------------------------------------------------------------
 
 AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -177,6 +183,46 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_answer",
+            "description": (
+                "Submit the final structured answer when you have gathered enough data. "
+                "This produces the chart or table that the user will see."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["bar", "line", "pie", "table", "single_value"],
+                        "description": "Chart type for visualization",
+                    },
+                    "title": {"type": "string", "description": "Human-readable title"},
+                    "x_key": {"type": "string", "description": "Dimension column name"},
+                    "y_key": {"type": "string", "description": "Metric column name"},
+                    "series_key": {
+                        "type": "string",
+                        "description": "Series column name for multi-series charts, or null",
+                    },
+                    "metric_name": {"type": "string", "description": "Short internal metric name"},
+                    "rows": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Array of data objects for the chart",
+                    },
+                    "conclusion": {"type": "string", "description": "1-2 sentence insight from the data"},
+                    "scope": {"type": "string", "description": "What the query covers, filters applied"},
+                    "anomalies": {
+                        "type": "string",
+                        "description": "Empty result reason, access restriction, or 'none'",
+                    },
+                },
+                "required": ["chart_type", "title", "rows", "conclusion"],
+            },
+        },
+    },
 ]
 
 GROUNDING_TOOL_NAMES = frozenset(
@@ -193,37 +239,7 @@ GROUNDING_TOOL_NAMES = frozenset(
     }
 )
 
-REVISUALIZATION_VERBS = (
-    "改成",
-    "改为",
-    "换成",
-    "换为",
-    "切换成",
-    "切换为",
-    "改一下",
-    "换一下",
-    "再改成",
-    "再换成",
-)
-
-REVISUALIZATION_CHART_TOKENS = (
-    "柱状图",
-    "折线图",
-    "饼图",
-    "表格",
-    "单值",
-    "line",
-    "bar",
-    "pie",
-    "table",
-    "single_value",
-)
-
-UNGROUNDED_ANSWER_RETRY_MESSAGE = (
-    "Your previous response was ungrounded because you had not observed any BI tool result in this turn. "
-    "Do not answer from prior knowledge. Your next response MUST issue at least one BI tool call and MUST "
-    "NOT emit a final JSON answer until after tool observations are available."
-)
+SUBMIT_ANSWER_TOOL_NAME = "submit_answer"
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +286,7 @@ class AgentSessionState:
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
     turn_count: int = 0
-    runtime_backend: str = "llm-react-loop"
+    runtime_backend: str = "anthropic-agent-loop"
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -298,7 +314,7 @@ class AgentSessionState:
             created_at=str(record.get("created_at") or _utc_now()),
             updated_at=str(record.get("updated_at") or _utc_now()),
             turn_count=int(record.get("turn_count") or 0),
-            runtime_backend=str(record.get("runtime_backend") or "llm-react-loop"),
+            runtime_backend=str(record.get("runtime_backend") or "anthropic-agent-loop"),
         )
 
 
@@ -394,7 +410,7 @@ class AgentSessionStore:
 
 
 # ---------------------------------------------------------------------------
-# Agent runtime — ReAct loop
+# Agent runtime — Anthropic SDK agent loop
 # ---------------------------------------------------------------------------
 
 
@@ -411,7 +427,7 @@ class AgentRuntime:
         )
         self._hot_sessions: dict[str, AgentSessionState] = {}
         self._lock = Lock()
-        self._llm = OpenAIAgentLoopClient(
+        self._llm = AnthropicAgentClient(
             base_url=settings.model_provider_url,
             api_key=settings.ai_api_key,
             model=settings.ai_model,
@@ -436,11 +452,9 @@ class AgentRuntime:
         tool_trace: list[dict[str, Any]] = []
         events: list[tuple[str, dict[str, Any]]] = []
 
-        # Emit planning event
-        events.extend(self._planning_events(request=request, session=session))
-
-        # Build the initial message list for the LLM
+        system_text = self._build_system_text(request=request, session=session)
         messages = self._build_initial_messages(request=request, session=session)
+
         logger.info(
             "agent_turn_start_debug conversation_id=%s request_id=%s agent_session_id=%s\n%s",
             request.conversation_id,
@@ -455,41 +469,48 @@ class AgentRuntime:
                     "message": request.message,
                     "messages": messages,
                 },
-                thinking="Starting ReAct reasoning loop.",
             ),
         )
 
-        # ---------- ReAct loop ----------
+        # ---------- Anthropic agent loop ----------
         max_steps = self.settings.agent_max_tool_steps
         final_answer: dict[str, Any] | None = None
 
         for step in range(1, max_steps + 1):
             logger.info(
-                "agent_react_step conversation_id=%s request_id=%s step=%s/%s",
+                "agent_loop_step conversation_id=%s request_id=%s step=%s/%s",
                 request.conversation_id,
                 request.request_id,
                 step,
                 max_steps,
             )
 
-            # Call LLM
             try:
                 llm_response = self._llm.chat(
+                    system=system_text,
                     messages=messages,
                     conversation_id=request.conversation_id,
                     step=step,
                 )
-            except AgentLLMError as exc:
+            except AnthropicLLMError as exc:
                 raise AgentRuntimeError(
                     code="AGENT_LLM_FAILED",
                     message=f"LLM call failed at step {step}: {exc.message}",
                     should_fallback=False,
                 ) from exc
 
-            # Build assistant message for debug logging and (when applicable) model context
-            assistant_msg = _build_assistant_message(llm_response)
+            # Use model's own thinking/reasoning for planning events
+            if step == 1:
+                events.extend(
+                    self._extract_planning_events(
+                        llm_response=llm_response,
+                        request=request,
+                        session=session,
+                    )
+                )
+
             logger.info(
-                "agent_react_step_debug conversation_id=%s request_id=%s step=%s\n%s",
+                "agent_loop_step_debug conversation_id=%s request_id=%s step=%s\n%s",
                 request.conversation_id,
                 request.request_id,
                 step,
@@ -498,47 +519,39 @@ class AgentRuntime:
                         "conversation_id": request.conversation_id,
                         "request_id": request.request_id,
                         "step": step,
-                        "assistant_message": assistant_msg,
-                        "finish_reason": llm_response.finish_reason,
+                        "stop_reason": llm_response.stop_reason,
                     },
-                    thinking=llm_response.content,
+                    thinking=llm_response.thinking or llm_response.content,
                 ),
             )
 
-            # If the LLM returned no tool calls → it's done (or gave up)
+            # No tool calls → model produced a text-only final response
             if not llm_response.tool_calls:
-                # Try to parse a structured final answer from the content
                 candidate_answer = _parse_final_answer(llm_response.content)
-                has_grounding = _has_grounding_tool_observation(tool_trace)
-                can_reuse_prior = _can_reuse_prior_result_without_tools(request=request, session=session)
-
-                if candidate_answer is not None and (has_grounding or can_reuse_prior):
+                if candidate_answer is not None:
                     final_answer = candidate_answer
-                    logger.info(
-                        "agent_react_final_answer conversation_id=%s request_id=%s step=%s",
-                        request.conversation_id,
-                        request.request_id,
-                        step,
-                    )
-                else:
-                    logger.warning(
-                        "agent_react_no_tool_no_answer conversation_id=%s request_id=%s step=%s content=%r grounded=%s can_reuse_prior=%s",
-                        request.conversation_id,
-                        request.request_id,
-                        step,
-                        llm_response.content[:200],
-                        has_grounding,
-                        can_reuse_prior,
-                    )
-                    if step < max_steps:
-                        messages.append({"role": "system", "content": UNGROUNDED_ANSWER_RETRY_MESSAGE})
-                        continue
                 break
 
-            # Execute all tool calls the LLM requested
+            # Check if the model submitted a structured answer via submit_answer
+            submit_call = next(
+                (tc for tc in llm_response.tool_calls if tc.tool_name == SUBMIT_ANSWER_TOOL_NAME),
+                None,
+            )
+
+            # Build assistant message (OpenAI format) and add to history
+            assistant_msg = build_anthropic_content_blocks(llm_response)
             messages.append(assistant_msg)
-            tool_results_msgs: list[dict[str, Any]] = []
+
+            # Execute tool calls (submit_answer is acknowledged, not executed)
             for tc in llm_response.tool_calls:
+                if tc.tool_name == SUBMIT_ANSWER_TOOL_NAME:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.call_id,
+                        "content": '{"status": "accepted"}',
+                    })
+                    continue
+
                 tool_result = self._execute_tool_call(
                     tool_call=tc,
                     request=request,
@@ -547,17 +560,15 @@ class AgentRuntime:
                     events=events,
                     step=step,
                 )
-                # Build the tool result message for the next LLM turn
-                tool_results_msgs.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.call_id,
-                        "content": json.dumps(tool_result, ensure_ascii=False, default=str),
-                    }
-                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.call_id,
+                    "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                })
 
-            # Append all tool results before the next LLM call
-            messages.extend(tool_results_msgs)
+            if submit_call:
+                final_answer = submit_call.arguments
+                break
 
         # ------ Build chart spec from final answer ------
         if final_answer is not None:
@@ -565,7 +576,6 @@ class AgentRuntime:
             final_text = _compose_final_text(final_answer)
             result_payload = final_answer
         else:
-            # LLM didn't return a grounded structured answer — produce an empty spec
             spec = self._empty_spec(request=request)
             has_grounding = _has_grounding_tool_observation(tool_trace)
             if has_grounding:
@@ -614,30 +624,27 @@ class AgentRuntime:
         session = AgentSessionState(
             conversation_id=conversation_id,
             agent_session_id=uuid.uuid4().hex,
-            runtime_backend="llm-react-loop",
+            runtime_backend="anthropic-agent-loop",
         )
         with self._lock:
             self._hot_sessions[conversation_id] = session
         self._store.save(session)
         return session
 
-    def _build_initial_messages(
+    def _build_system_text(
         self,
         *,
         request: AgentRequest,
         session: AgentSessionState,
-    ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt},
-        ]
-        # Include recent conversation history for multi-turn context
-        for item in session.history[-10:]:
-            role = str(item.get("role") or "")
-            content = item.get("content") or ""
-            if role in {"user", "assistant"} and content:
-                messages.append({"role": role, "content": str(content)})
+    ) -> str:
+        """Compose the system prompt with per-request context.
 
-        # Context hint about active dataset and all available tables
+        The Anthropic Messages API takes system as a separate parameter,
+        so context that varies per request is appended here rather than
+        injected as extra messages.
+        """
+        parts = [self.system_prompt]
+
         try:
             all_tables = self.tool_service.dataset_service.list_tables(
                 user_id=request.user_id, project_id=request.project_id
@@ -650,43 +657,69 @@ class AgentRuntime:
             tables_hint = (
                 f"Active dataset table: `{request.dataset_table}`. "
                 f"Other tables in this session: {', '.join(f'`{t}`' for t in other_tables)}. "
-                "You may JOIN across these tables in execute_readonly_sql when answering cross-table questions. "
-                "Always call describe_table on each table you plan to JOIN before writing SQL. "
+                "You may JOIN across these tables in execute_readonly_sql when answering cross-table questions."
             )
         else:
-            tables_hint = f"Active dataset table: `{request.dataset_table}`. "
+            tables_hint = f"Active dataset table: `{request.dataset_table}`."
 
         context_hint = (
             tables_hint
-            + f"User role: {request.role}. "
-            + "Row-level security is enforced automatically on all queries."
+            + f" User role: {request.role}."
+            + " Row-level security is enforced automatically on all queries."
         )
-        messages.append({"role": "system", "content": context_hint})
-        messages.append({"role": "user", "content": request.message})
-        return messages
+        parts.append(context_hint)
 
-    def _planning_events(
+        if session.last_result and isinstance(session.last_result, dict):
+            prior_summary = json.dumps(session.last_result, ensure_ascii=False, default=str)
+            if len(prior_summary) > 2000:
+                prior_summary = prior_summary[:2000] + "..."
+            parts.append(
+                f"Previous turn result is available for context: {prior_summary}"
+            )
+
+        return "\n\n".join(parts)
+
+    def _build_initial_messages(
         self,
         *,
         request: AgentRequest,
         session: AgentSessionState,
+    ) -> list[dict[str, Any]]:
+        """Build the Anthropic-format message list (user/assistant only; no system role)."""
+        messages: list[dict[str, Any]] = []
+
+        for item in session.history[-10:]:
+            role = str(item.get("role") or "")
+            content = item.get("content") or ""
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": str(content)})
+
+        messages.append({"role": "user", "content": request.message})
+        return messages
+
+    def _extract_planning_events(
+        self,
+        *,
+        llm_response: AnthropicLLMResponse,
+        request: AgentRequest,
+        session: AgentSessionState,
     ) -> list[tuple[str, dict[str, Any]]]:
-        text = (
-            "Starting ReAct reasoning loop. Will inspect schema, understand data, "
-            "then iteratively call tools until a complete answer can be formed."
-        )
+        """Build planning events from the model's own thinking/reasoning."""
+        planning_text = llm_response.thinking or llm_response.content or ""
+        if not planning_text.strip():
+            planning_text = f"Analyzing request for dataset `{request.dataset_table}`."
+
         payload = {
             "conversation_id": request.conversation_id,
             "request_id": request.request_id,
             "agent_session_id": session.agent_session_id,
-            "text": text,
-            "system_prompt": self.system_prompt,
+            "text": planning_text,
         }
         compatibility = {
             "conversation_id": request.conversation_id,
             "request_id": request.request_id,
             "agent_session_id": session.agent_session_id,
-            "text": text,
+            "text": planning_text,
             "compatibility_mirror": True,
         }
         return [("planning", payload), ("reasoning", compatibility)]
@@ -694,7 +727,7 @@ class AgentRuntime:
     def _execute_tool_call(
         self,
         *,
-        tool_call: AgentLLMToolCall,
+        tool_call: AnthropicToolCall,
         request: AgentRequest,
         session: AgentSessionState,
         tool_trace: list[dict[str, Any]],
@@ -881,7 +914,7 @@ class AgentRuntime:
                 "reasons": ["llm_react_loop"],
                 "selected_engine": engine,
             },
-            "meta": {"intent": request.message, "generated_by": "agent_runtime_react"},
+            "meta": {"intent": request.message, "generated_by": "anthropic_agent_loop"},
         }
 
     def _empty_spec(self, *, request: AgentRequest) -> dict[str, Any]:
@@ -897,7 +930,7 @@ class AgentRuntime:
                 "reasons": ["agent_no_answer"],
                 "selected_engine": "recharts",
             },
-            "meta": {"intent": request.message, "generated_by": "agent_runtime_react"},
+            "meta": {"intent": request.message, "generated_by": "anthropic_agent_loop"},
         }
 
     def _finalize_turn(
@@ -1024,24 +1057,6 @@ def clear_agent_runtime_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_assistant_message(llm_response: AgentLLMResponse) -> dict[str, Any]:
-    msg: dict[str, Any] = {"role": "assistant"}
-    if llm_response.content:
-        msg["content"] = llm_response.content
-    if llm_response.tool_calls:
-        msg["tool_calls"] = [
-            {
-                "id": tc.call_id,
-                "type": "function",
-                "function": {
-                    "name": tc.tool_name,
-                    "arguments": json.dumps(tc.arguments, ensure_ascii=False),
-                },
-            }
-            for tc in llm_response.tool_calls
-        ]
-    return msg
-
 
 def _parse_final_answer(content: str) -> dict[str, Any] | None:
     """Try to extract a structured JSON final answer from LLM content."""
@@ -1082,17 +1097,6 @@ def _has_grounding_tool_observation(tool_trace: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _can_reuse_prior_result_without_tools(*, request: AgentRequest, session: AgentSessionState) -> bool:
-    if not session.last_result or not session.last_spec:
-        return False
-
-    text = request.message.strip().lower().replace(" ", "")
-    if not text:
-        return False
-
-    return any(verb in text for verb in REVISUALIZATION_VERBS) and any(
-        token in text for token in REVISUALIZATION_CHART_TOKENS
-    )
 
 
 # ---------------------------------------------------------------------------

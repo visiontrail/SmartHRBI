@@ -8,8 +8,8 @@
   - Environments: .env
 
  ✓ Starting...
- ✓ Ready in 1928ms
- ○ Compiling / ...
- ✓ Compiled / in 1785ms (2769 modules)
- GET / 200 in 2142ms
- GET / 200 in 55ms
+ ✓ Ready in 2.7s
+ ○ Compiling /_not-found ...
+ ✓ Compiled / in 12.6s (2772 modules)
+ GET /_next/static/css/app/layout.css?v=1776063073837 404 in 12929ms
+ GET / 200 in 7902ms
