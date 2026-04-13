@@ -34,6 +34,7 @@ import {
 } from "recharts";
 
 import type { GenUISpec } from "../../lib/genui/spec";
+import { ensureChinaMap, normaliseProvinceName } from "../../lib/genui/geo-loader";
 import { EmptyPanel, ErrorPanel } from "./state-panels";
 
 const PIE_COLORS = ["#155dfc", "#00a63e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
@@ -343,12 +344,28 @@ export function ChartRenderer({ spec }: ChartRendererProps) {
 function EChartsRenderer({ spec }: { spec: Extract<GenUISpec, { engine: "echarts" }> }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
-  const option = useMemo(() => spec.config.option, [spec.config.option]);
+  const [geoReady, setGeoReady] = useState(spec.chart_type !== "map");
+  const option = useMemo(() => {
+    if (spec.chart_type !== "map") return spec.config.option;
+    return normaliseMapOption(spec.config.option);
+  }, [spec.config.option, spec.chart_type]);
 
   useEffect(() => {
-    if (!chartRef.current) {
-      return;
-    }
+    if (spec.chart_type !== "map") return;
+    let cancelled = false;
+    ensureChinaMap().then((ok) => {
+      if (cancelled) return;
+      if (!ok) {
+        setRenderError("无法加载中国地图 GeoJSON 数据，请检查网络连接。");
+        return;
+      }
+      setGeoReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [spec.chart_type]);
+
+  useEffect(() => {
+    if (!geoReady || !chartRef.current) return;
 
     let instance: ReturnType<typeof echarts.init> | undefined;
     try {
@@ -365,10 +382,21 @@ function EChartsRenderer({ spec }: { spec: Extract<GenUISpec, { engine: "echarts
       instance?.dispose();
       return;
     }
-  }, [option]);
+  }, [option, geoReady]);
 
   if (renderError) {
     return <ErrorPanel description={`ECharts render failed: ${renderError}`} />;
+  }
+
+  if (!geoReady) {
+    return (
+      <section className="genui-panel" data-testid="echarts-chart">
+        <h3>{spec.title}</h3>
+        <div className="echarts-canvas" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span>地图数据加载中…</span>
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -377,6 +405,25 @@ function EChartsRenderer({ spec }: { spec: Extract<GenUISpec, { engine: "echarts
       <div ref={chartRef} className="echarts-canvas" />
     </section>
   );
+}
+
+function normaliseMapOption(option: Record<string, unknown>): Record<string, unknown> {
+  const series = option.series;
+  if (!Array.isArray(series)) return option;
+
+  const normalised = series.map((s: Record<string, unknown>) => {
+    const data = s.data;
+    if (!Array.isArray(data)) return s;
+    return {
+      ...s,
+      data: data.map((item: Record<string, unknown>) => ({
+        ...item,
+        name: typeof item.name === "string" ? normaliseProvinceName(item.name) : item.name,
+      })),
+    };
+  });
+
+  return { ...option, series: normalised };
 }
 
 // ---------------------------------------------------------------------------

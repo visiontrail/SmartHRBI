@@ -210,6 +210,10 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "- sunburst: nested ring hierarchy (uses ECharts).\n"
                 "- boxplot: statistical distribution (uses ECharts).\n"
                 "- graph: network / relationship diagram (uses ECharts).\n"
+                "- map: geographic choropleth map (uses ECharts). Best for showing province- or "
+                "city-level metrics on a China map. x_key = region/province name column, "
+                "y_key = numeric metric column. Province names can be short form like '北京' or "
+                "full form like '北京市'.\n"
                 "- table: structured row/column table.\n"
                 "- single_value: display one big number.\n"
             ),
@@ -222,7 +226,7 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                             "bar", "line", "pie", "area", "scatter", "radar",
                             "treemap", "funnel", "radialBar", "composed",
                             "heatmap", "gauge", "sankey", "sunburst",
-                            "boxplot", "graph",
+                            "boxplot", "graph", "map",
                             "table", "single_value",
                         ],
                         "description": "Chart type for visualization",
@@ -1468,6 +1472,8 @@ def _build_echarts_option(
 ) -> dict[str, Any]:
     """Build a complete ECharts option dict from flat rows."""
 
+    if chart_type == "map":
+        return _echarts_map_option(rows=rows, x_key=x_key, y_key=y_key, title=title, metric_name=metric_name)
     if chart_type == "treemap":
         return _echarts_treemap_option(rows=rows, x_key=x_key, y_key=y_key, name_key=name_key, title=title)
     if chart_type == "heatmap":
@@ -1773,6 +1779,55 @@ def _echarts_scatter_option(
         "xAxis": {"type": "value", "name": x_key},
         "yAxis": {"type": "value", "name": y_key},
         "series": [{"type": "scatter", "data": data, "symbolSize": 10}],
+    }
+
+
+def _echarts_map_option(
+    *,
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+    title: str,
+    metric_name: str,
+) -> dict[str, Any]:
+    """Build an ECharts map option for China province-level choropleth."""
+    data = [
+        {"name": str(r.get(x_key, "")), "value": r.get(y_key, 0)}
+        for r in rows
+    ]
+    values = [r.get(y_key, 0) for r in rows]
+    numeric_values = [v for v in values if isinstance(v, (int, float))]
+    min_val = min(numeric_values) if numeric_values else 0
+    max_val = max(numeric_values) if numeric_values else 100
+
+    return {
+        "tooltip": {
+            "trigger": "item",
+            "formatter": "{b}<br/>" + metric_name + ": {c}",
+        },
+        "visualMap": {
+            "min": min_val,
+            "max": max_val,
+            "left": "left",
+            "top": "bottom",
+            "text": ["高", "低"],
+            "calculable": True,
+            "inRange": {"color": ["#e0f3db", "#a8ddb5", "#43a2ca", "#0868ac"]},
+        },
+        "series": [
+            {
+                "name": title,
+                "type": "map",
+                "map": "china",
+                "roam": True,
+                "label": {"show": True, "fontSize": 10},
+                "emphasis": {
+                    "label": {"show": True, "fontSize": 14, "fontWeight": "bold"},
+                    "itemStyle": {"areaColor": "#fdd49e"},
+                },
+                "data": data,
+            }
+        ],
     }
 
 
