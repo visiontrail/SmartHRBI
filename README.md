@@ -183,7 +183,7 @@ Set these in `apps/api/.env` to control rollout:
 
 - `CHAT_ENGINE`: `deterministic`, `agent_shadow`, or `agent_primary`
 - `CHAT_ENGINE_USERS`: optional comma-separated allowlist; non-listed users fall back to `deterministic`
-- `CLAUDE_AGENT_SDK_ENABLED`: enables the Claude Agent SDK adapter path when the SDK is installed
+- `CLAUDE_AGENT_SDK_ENABLED`: must be `true` for `agent_primary`/`agent_shadow`; startup rejects agent mode otherwise
 - `AGENT_MAX_TOOL_STEPS`: maximum tool steps per query
 - `AGENT_MAX_SQL_ROWS`: maximum rows returned by `execute_readonly_sql`
 - `AGENT_MAX_SQL_SCAN_ROWS`: hard cap for SQL scan-oriented limits

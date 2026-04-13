@@ -13,6 +13,7 @@ from threading import Lock
 from typing import Any
 
 from .agent_guardrails import AgentGuardrailContext, AgentGuardrailError, AgentGuardrails
+from .agent_logging import format_agent_debug_blocks
 from .agent_prompting import build_agent_system_prompt
 from .audit import get_audit_logger
 from .chart_strategy import ChartStrategyRouter
@@ -177,6 +178,52 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
 ]
+
+GROUNDING_TOOL_NAMES = frozenset(
+    {
+        "list_tables",
+        "describe_table",
+        "sample_rows",
+        "get_metric_catalog",
+        "run_semantic_query",
+        "execute_readonly_sql",
+        "get_distinct_values",
+        "query_metrics",
+        "describe_dataset",
+    }
+)
+
+REVISUALIZATION_VERBS = (
+    "改成",
+    "改为",
+    "换成",
+    "换为",
+    "切换成",
+    "切换为",
+    "改一下",
+    "换一下",
+    "再改成",
+    "再换成",
+)
+
+REVISUALIZATION_CHART_TOKENS = (
+    "柱状图",
+    "折线图",
+    "饼图",
+    "表格",
+    "单值",
+    "line",
+    "bar",
+    "pie",
+    "table",
+    "single_value",
+)
+
+UNGROUNDED_ANSWER_RETRY_MESSAGE = (
+    "Your previous response was ungrounded because you had not observed any BI tool result in this turn. "
+    "Do not answer from prior knowledge. Your next response MUST issue at least one BI tool call and MUST "
+    "NOT emit a final JSON answer until after tool observations are available."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -394,11 +441,27 @@ class AgentRuntime:
 
         # Build the initial message list for the LLM
         messages = self._build_initial_messages(request=request, session=session)
+        logger.info(
+            "agent_turn_start_debug conversation_id=%s request_id=%s agent_session_id=%s\n%s",
+            request.conversation_id,
+            request.request_id,
+            session.agent_session_id,
+            format_agent_debug_blocks(
+                ai_input={
+                    "conversation_id": request.conversation_id,
+                    "request_id": request.request_id,
+                    "agent_session_id": session.agent_session_id,
+                    "dataset_table": request.dataset_table,
+                    "message": request.message,
+                    "messages": messages,
+                },
+                thinking="Starting ReAct reasoning loop.",
+            ),
+        )
 
         # ---------- ReAct loop ----------
         max_steps = self.settings.agent_max_tool_steps
         final_answer: dict[str, Any] | None = None
-        last_llm_text = ""
 
         for step in range(1, max_steps + 1):
             logger.info(
@@ -423,17 +486,34 @@ class AgentRuntime:
                     should_fallback=False,
                 ) from exc
 
-            last_llm_text = llm_response.content
-
-            # Append assistant message (content + tool_calls) to history
+            # Build assistant message for debug logging and (when applicable) model context
             assistant_msg = _build_assistant_message(llm_response)
-            messages.append(assistant_msg)
+            logger.info(
+                "agent_react_step_debug conversation_id=%s request_id=%s step=%s\n%s",
+                request.conversation_id,
+                request.request_id,
+                step,
+                format_agent_debug_blocks(
+                    ai_output={
+                        "conversation_id": request.conversation_id,
+                        "request_id": request.request_id,
+                        "step": step,
+                        "assistant_message": assistant_msg,
+                        "finish_reason": llm_response.finish_reason,
+                    },
+                    thinking=llm_response.content,
+                ),
+            )
 
             # If the LLM returned no tool calls → it's done (or gave up)
             if not llm_response.tool_calls:
                 # Try to parse a structured final answer from the content
-                final_answer = _parse_final_answer(llm_response.content)
-                if final_answer is not None:
+                candidate_answer = _parse_final_answer(llm_response.content)
+                has_grounding = _has_grounding_tool_observation(tool_trace)
+                can_reuse_prior = _can_reuse_prior_result_without_tools(request=request, session=session)
+
+                if candidate_answer is not None and (has_grounding or can_reuse_prior):
+                    final_answer = candidate_answer
                     logger.info(
                         "agent_react_final_answer conversation_id=%s request_id=%s step=%s",
                         request.conversation_id,
@@ -442,15 +522,21 @@ class AgentRuntime:
                     )
                 else:
                     logger.warning(
-                        "agent_react_no_tool_no_answer conversation_id=%s request_id=%s step=%s content=%r",
+                        "agent_react_no_tool_no_answer conversation_id=%s request_id=%s step=%s content=%r grounded=%s can_reuse_prior=%s",
                         request.conversation_id,
                         request.request_id,
                         step,
                         llm_response.content[:200],
+                        has_grounding,
+                        can_reuse_prior,
                     )
+                    if step < max_steps:
+                        messages.append({"role": "system", "content": UNGROUNDED_ANSWER_RETRY_MESSAGE})
+                        continue
                 break
 
             # Execute all tool calls the LLM requested
+            messages.append(assistant_msg)
             tool_results_msgs: list[dict[str, Any]] = []
             for tc in llm_response.tool_calls:
                 tool_result = self._execute_tool_call(
@@ -479,10 +565,15 @@ class AgentRuntime:
             final_text = _compose_final_text(final_answer)
             result_payload = final_answer
         else:
-            # LLM didn't return a structured answer — produce an empty spec
+            # LLM didn't return a grounded structured answer — produce an empty spec
             spec = self._empty_spec(request=request)
-            final_text = last_llm_text or "Agent did not return a usable answer."
-            result_payload = {"rows": [], "conclusion": final_text}
+            has_grounding = _has_grounding_tool_observation(tool_trace)
+            if has_grounding:
+                final_text = "Agent collected tool observations but did not return a usable structured answer."
+                result_payload = {"rows": [], "conclusion": "", "anomalies": "final_answer_parse_failed"}
+            else:
+                final_text = "Agent stopped to avoid ungrounded output because no successful BI tool observation was produced."
+                result_payload = {"rows": [], "conclusion": "", "anomalies": "no_grounded_tool_observation"}
 
         return self._finalize_turn(
             request=request,
@@ -633,6 +724,23 @@ class AgentRuntime:
                 tool_name,
                 exc.code,
             )
+            logger.warning(
+                "agent_tool_blocked_debug conversation_id=%s request_id=%s step=%s tool=%s\n%s",
+                request.conversation_id,
+                request.request_id,
+                step,
+                tool_name,
+                format_agent_debug_blocks(
+                    tool_trace={
+                        "conversation_id": request.conversation_id,
+                        "request_id": request.request_id,
+                        "step": step,
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                        "error": {"code": exc.code, "message": exc.message},
+                    }
+                ),
+            )
             # Return the error as a tool result so the LLM can reason about it
             return {"error": exc.code, "message": exc.message}
 
@@ -667,6 +775,7 @@ class AgentRuntime:
                 role=request.role,
                 department=request.department,
                 clearance=request.clearance,
+                emit_debug_blocks=False,
                 tool=ToolCall(name=tool_name, arguments=arguments),
             )
         )
@@ -700,6 +809,27 @@ class AgentRuntime:
             )
         )
         tool_trace.append({"event": "tool_result", **tool_result_payload})
+        logger.info(
+            "agent_tool_trace_debug conversation_id=%s request_id=%s step=%s tool_name=%s\n%s",
+            request.conversation_id,
+            request.request_id,
+            tool_step,
+            tool_name,
+            format_agent_debug_blocks(
+                tool_result={
+                    "conversation_id": request.conversation_id,
+                    "request_id": request.request_id,
+                    "agent_session_id": session.agent_session_id,
+                    "step": tool_step,
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "status": response.status,
+                    "result": result_data,
+                    "error": response.error,
+                    "from_cache": response.from_cache,
+                }
+            ),
+        )
         get_audit_logger().log(
             event_type="agent",
             action="agent_post_tool_use",
@@ -825,6 +955,28 @@ class AgentRuntime:
             "turn_count": session.turn_count,
             "runtime_backend": session.runtime_backend,
         }
+        tool_use_trace = [item for item in tool_trace if item.get("event") == "tool_use"]
+        tool_result_trace = [item for item in tool_trace if item.get("event") == "tool_result"]
+        logger.info(
+            "agent_turn_final_debug conversation_id=%s request_id=%s agent_session_id=%s\n%s",
+            request.conversation_id,
+            request.request_id,
+            session.agent_session_id,
+            format_agent_debug_blocks(
+                ai_output={
+                    "conversation_id": request.conversation_id,
+                    "request_id": request.request_id,
+                    "agent_session_id": session.agent_session_id,
+                    "status": "completed",
+                    "final_text": final_text,
+                    "result_payload": result_payload,
+                    "spec": spec,
+                },
+                tool_trace=tool_use_trace,
+                tool_result=tool_result_trace,
+                thinking=final_text,
+            ),
+        )
         return AgentTurnResult(
             conversation_id=request.conversation_id,
             request_id=request.request_id,
@@ -917,6 +1069,30 @@ def _parse_final_answer(content: str) -> dict[str, Any] | None:
             pass
 
     return None
+
+
+def _has_grounding_tool_observation(tool_trace: list[dict[str, Any]]) -> bool:
+    for item in tool_trace:
+        if item.get("event") != "tool_result":
+            continue
+        if item.get("status") != "success":
+            continue
+        if str(item.get("tool_name") or "") in GROUNDING_TOOL_NAMES:
+            return True
+    return False
+
+
+def _can_reuse_prior_result_without_tools(*, request: AgentRequest, session: AgentSessionState) -> bool:
+    if not session.last_result or not session.last_spec:
+        return False
+
+    text = request.message.strip().lower().replace(" ", "")
+    if not text:
+        return False
+
+    return any(verb in text for verb in REVISUALIZATION_VERBS) and any(
+        token in text for token in REVISUALIZATION_CHART_TOKENS
+    )
 
 
 # ---------------------------------------------------------------------------

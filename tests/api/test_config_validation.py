@@ -76,3 +76,37 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
     assert settings.ai_api_key == "test-api-key"
     assert settings.ai_model == "qwen-plus"
     assert settings.ai_timeout_seconds == 12
+
+
+def test_agent_engine_requires_claude_agent_sdk_toggle(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / "api.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql://user:pass@localhost:5432/db",
+                "MODEL_PROVIDER_URL=https://api.openai.com",
+                "CHAT_ENGINE=agent_primary",
+                "CLAUDE_AGENT_SDK_ENABLED=false",
+                "AUTH_SECRET=secret",
+                "LOG_LEVEL=INFO",
+                "UPLOAD_DIR=./uploads",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("API_ENV_FILE", str(env_file))
+    for key in [
+        "DATABASE_URL",
+        "MODEL_PROVIDER_URL",
+        "CHAT_ENGINE",
+        "CLAUDE_AGENT_SDK_ENABLED",
+        "AUTH_SECRET",
+        "LOG_LEVEL",
+        "UPLOAD_DIR",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError):
+        get_settings()

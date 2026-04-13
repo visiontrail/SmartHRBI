@@ -4,7 +4,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_ENV_FILE_PATH = Path(__file__).resolve().parent / ".env"
@@ -82,6 +82,14 @@ class Settings(BaseSettings):
         if normalized not in allowed:
             raise ValueError("CHAT_ENGINE must be one of: deterministic, agent_shadow, agent_primary")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_agent_engine_sdk_toggle(self) -> "Settings":
+        if self.chat_engine in {"agent_primary", "agent_shadow"} and not self.claude_agent_sdk_enabled:
+            raise ValueError(
+                "CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow"
+            )
+        return self
 
     @property
     def cors_origins(self) -> list[str]:

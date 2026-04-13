@@ -1,16 +1,11 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
 
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel } from "../genui/state-panels";
 import { getAuthorizationHeader } from "../../lib/auth/session";
 import { parseSSEStream } from "../../lib/chat/sse";
-import {
-  SESSION_STORAGE_KEY,
-  safeLoadFromStorage,
-  safeSaveToStorage
-} from "../../lib/chat/session-storage";
 
 type ChatWorkbenchProps = {
   apiBaseUrl: string;
@@ -26,22 +21,6 @@ type StreamStatus = "idle" | "streaming";
 type SaveStatus = "idle" | "saving";
 type UploadStatus = "idle" | "uploading";
 
-type PersistedWorkbenchState = {
-  conversationId: string;
-  agentSessionId: string | null;
-  userId: string;
-  projectId: string;
-  role: string;
-  department: string;
-  clearance: number;
-  datasetTable: string;
-  composer: string;
-  messages: Message[];
-  activeSpec: unknown;
-  lastToolEvent: Record<string, unknown> | null;
-  toolTrace: Record<string, unknown>[];
-  shareLink: string | null;
-};
 
 const DEFAULT_USER_ID = "demo-user";
 const DEFAULT_PROJECT_ID = "demo-project";
@@ -76,66 +55,6 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const [uploadBatchId, setUploadBatchId] = useState<string | null>(null);
   const [uploadDiagnostics, setUploadDiagnostics] = useState<Record<string, unknown> | null>(null);
   const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
-  const [isRestored, setIsRestored] = useState(false);
-
-  useEffect(() => {
-    const persisted = safeLoadFromStorage<PersistedWorkbenchState>(SESSION_STORAGE_KEY);
-    if (persisted) {
-      setConversationId(persisted.conversationId || makeRequestId());
-      setAgentSessionId(persisted.agentSessionId ?? null);
-      setUserId(persisted.userId || DEFAULT_USER_ID);
-      setProjectId(persisted.projectId || DEFAULT_PROJECT_ID);
-      setRole(persisted.role || DEFAULT_ROLE);
-      setDepartment(persisted.department || DEFAULT_DEPARTMENT);
-      setClearance(Number.isFinite(persisted.clearance) ? persisted.clearance : DEFAULT_CLEARANCE);
-      setDatasetTable(persisted.datasetTable || DEFAULT_DATASET);
-      setComposer(persisted.composer || "");
-      setMessages(Array.isArray(persisted.messages) ? persisted.messages : []);
-      setActiveSpec(persisted.activeSpec ?? null);
-      setLastToolEvent(persisted.lastToolEvent ?? null);
-      setToolTrace(Array.isArray(persisted.toolTrace) ? persisted.toolTrace : []);
-      setShareLink(persisted.shareLink ?? null);
-    }
-    setIsRestored(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isRestored) {
-      return;
-    }
-    safeSaveToStorage<PersistedWorkbenchState>(SESSION_STORAGE_KEY, {
-      conversationId,
-      agentSessionId,
-      userId,
-      projectId,
-      role,
-      department,
-      clearance,
-      datasetTable,
-      composer,
-      messages,
-      activeSpec,
-      lastToolEvent,
-      toolTrace,
-      shareLink
-    });
-  }, [
-    activeSpec,
-    agentSessionId,
-    composer,
-    conversationId,
-    datasetTable,
-    department,
-    isRestored,
-    lastToolEvent,
-    messages,
-    projectId,
-    role,
-    clearance,
-    shareLink,
-    toolTrace,
-    userId
-  ]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

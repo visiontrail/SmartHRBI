@@ -9,6 +9,8 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from .agent_logging import format_agent_debug_blocks
+
 logger = logging.getLogger("smarthrbi.llm")
 
 
@@ -103,6 +105,21 @@ class OpenAIAgentLoopClient:
             self.model,
             len(messages),
         )
+        logger.info(
+            "agent_llm_request_debug conversation_id=%s step=%s\n%s",
+            conversation_id,
+            step,
+            format_agent_debug_blocks(
+                ai_input={
+                    "conversation_id": conversation_id,
+                    "step": step,
+                    "endpoint": endpoint,
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": self.tool_definitions,
+                },
+            ),
+        )
 
         try:
             with urllib_request.urlopen(req, timeout=self.timeout_seconds) as resp:
@@ -134,9 +151,50 @@ class OpenAIAgentLoopClient:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
+            logger.warning(
+                "agent_llm_response_debug conversation_id=%s step=%s\n%s",
+                conversation_id,
+                step,
+                format_agent_debug_blocks(
+                    ai_output={
+                        "conversation_id": conversation_id,
+                        "step": step,
+                        "elapsed_ms": elapsed_ms,
+                        "raw_response": raw,
+                    },
+                    thinking=raw,
+                ),
+            )
             raise AgentLLMError(message="LLM returned non-JSON response") from exc
 
-        return self._parse_response(data)
+        parsed = self._parse_response(data)
+        logger.info(
+            "agent_llm_response_debug conversation_id=%s step=%s\n%s",
+            conversation_id,
+            step,
+            format_agent_debug_blocks(
+                ai_output={
+                    "conversation_id": conversation_id,
+                    "step": step,
+                    "elapsed_ms": elapsed_ms,
+                    "raw_response": data,
+                    "parsed_response": {
+                        "finish_reason": parsed.finish_reason,
+                        "content": parsed.content,
+                        "tool_calls": [
+                            {
+                                "call_id": item.call_id,
+                                "tool_name": item.tool_name,
+                                "arguments": item.arguments,
+                            }
+                            for item in parsed.tool_calls
+                        ],
+                    },
+                },
+                thinking=parsed.content,
+            ),
+        )
+        return parsed
 
     def _parse_response(self, data: dict[str, Any]) -> AgentLLMResponse:
         choices = data.get("choices")
@@ -189,6 +247,21 @@ class OpenAIAgentLoopClient:
             type(error).__name__,
             str(error),
             details or "",
+        )
+        logger.warning(
+            "agent_llm_error_debug step=%s\n%s",
+            step,
+            format_agent_debug_blocks(
+                ai_output={
+                    "endpoint": endpoint,
+                    "step": step,
+                    "elapsed_ms": elapsed_ms,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "details": details or "",
+                },
+                thinking=str(error),
+            ),
         )
 
 
@@ -394,6 +467,17 @@ class OpenAICompatibleToolSelector:
             self.timeout_seconds,
             _compact_json(payload),
         )
+        logger.info(
+            "llm_tool_selector_request_debug\n%s",
+            format_agent_debug_blocks(
+                ai_input={
+                    "endpoint": endpoint,
+                    "model": self.model,
+                    "timeout_seconds": self.timeout_seconds,
+                    "payload": payload,
+                },
+            ),
+        )
 
         try:
             with urllib_request.urlopen(req, timeout=self.timeout_seconds) as response:
@@ -405,6 +489,18 @@ class OpenAICompatibleToolSelector:
                 self.model,
                 elapsed_ms,
                 raw,
+            )
+            logger.info(
+                "llm_tool_selector_response_debug\n%s",
+                format_agent_debug_blocks(
+                    ai_output={
+                        "endpoint": endpoint,
+                        "model": self.model,
+                        "elapsed_ms": elapsed_ms,
+                        "body": raw,
+                    },
+                    thinking=raw,
+                ),
             )
         except TimeoutError as exc:
             self._log_request_failure(
@@ -468,6 +564,24 @@ class OpenAICompatibleToolSelector:
             str(error),
             details or "",
             _compact_json(payload),
+        )
+        logger.warning(
+            "llm_tool_selector_error_debug\n%s",
+            format_agent_debug_blocks(
+                ai_input={
+                    "endpoint": endpoint,
+                    "model": self.model,
+                    "timeout_seconds": self.timeout_seconds,
+                    "payload": payload,
+                },
+                ai_output={
+                    "elapsed_ms": elapsed_ms,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "details": details or "",
+                },
+                thinking=str(error),
+            ),
         )
 
     def _extract_tool_payload(self, response: dict[str, Any]) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from typing import Any, Callable, Literal
 import duckdb
 from pydantic import BaseModel, Field
 
+from .agent_logging import format_agent_debug_blocks
 from .config import get_settings
 from .data_policy import (
     filter_schema_columns,
@@ -76,6 +77,7 @@ class ToolCallRequest(BaseModel):
     department: str | None = None
     clearance: int = 0
     retry_limit: int = Field(default=2, ge=0, le=2)
+    emit_debug_blocks: bool = True
     tool: ToolCall
 
 
@@ -171,6 +173,25 @@ class ToolCallingService:
                 request.tool.name,
                 request.idempotency_key,
             )
+            if request.emit_debug_blocks:
+                logger.info(
+                    "tool_call_cache_hit_debug conversation_id=%s request_id=%s tool_name=%s\n%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    format_agent_debug_blocks(
+                        tool_result={
+                            "conversation_id": request.conversation_id,
+                            "request_id": request.request_id,
+                            "tool_name": request.tool.name,
+                            "idempotency_key": request.idempotency_key,
+                            "status": "cache_hit",
+                            "arguments": request.tool.arguments,
+                            "cached_result": cached.result,
+                            "cached_error": cached.error,
+                        }
+                    ),
+                )
             return cached.model_copy(update={"from_cache": True})
 
         tool = self._tools.get(request.tool.name)
@@ -213,6 +234,23 @@ class ToolCallingService:
                 attempt,
                 json.dumps(request.tool.arguments, ensure_ascii=False, default=str),
             )
+            if request.emit_debug_blocks:
+                logger.info(
+                    "tool_call_attempt_debug conversation_id=%s request_id=%s tool_name=%s attempt=%s\n%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    attempt,
+                    format_agent_debug_blocks(
+                        tool_trace={
+                            "conversation_id": request.conversation_id,
+                            "request_id": request.request_id,
+                            "tool_name": request.tool.name,
+                            "attempt": attempt,
+                            "arguments": request.tool.arguments,
+                        }
+                    ),
+                )
             try:
                 result = tool(context, request.tool.arguments)
                 logger.info(
@@ -223,6 +261,25 @@ class ToolCallingService:
                     attempt,
                     json.dumps(_summarize_tool_result(result), ensure_ascii=False, default=str),
                 )
+                if request.emit_debug_blocks:
+                    logger.info(
+                        "tool_call_success_debug conversation_id=%s request_id=%s tool_name=%s attempt=%s\n%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        format_agent_debug_blocks(
+                            tool_result={
+                                "conversation_id": request.conversation_id,
+                                "request_id": request.request_id,
+                                "tool_name": request.tool.name,
+                                "attempt": attempt,
+                                "status": "success",
+                                "arguments": request.tool.arguments,
+                                "result": result,
+                            }
+                        ),
+                    )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,
@@ -266,6 +323,25 @@ class ToolCallingService:
                     attempt,
                     json.dumps(detail, ensure_ascii=False, default=str),
                 )
+                if request.emit_debug_blocks:
+                    logger.warning(
+                        "tool_call_error_debug conversation_id=%s request_id=%s tool_name=%s attempt=%s\n%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        format_agent_debug_blocks(
+                            tool_result={
+                                "conversation_id": request.conversation_id,
+                                "request_id": request.request_id,
+                                "tool_name": request.tool.name,
+                                "attempt": attempt,
+                                "status": "error",
+                                "arguments": request.tool.arguments,
+                                "error": detail,
+                            }
+                        ),
+                    )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,
@@ -286,6 +362,24 @@ class ToolCallingService:
                     request.tool.name,
                     attempt,
                 )
+                if request.emit_debug_blocks:
+                    logger.error(
+                        "tool_call_unexpected_error_debug conversation_id=%s request_id=%s tool_name=%s attempt=%s\n%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        format_agent_debug_blocks(
+                            tool_result={
+                                "conversation_id": request.conversation_id,
+                                "request_id": request.request_id,
+                                "tool_name": request.tool.name,
+                                "attempt": attempt,
+                                "status": "unexpected_error",
+                                "arguments": request.tool.arguments,
+                            }
+                        ),
+                    )
                 response = ToolCallResponse(
                     conversation_id=request.conversation_id,
                     request_id=request.request_id,

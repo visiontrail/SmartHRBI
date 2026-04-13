@@ -35,7 +35,7 @@ def set_agent_env(
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("CHAT_ENGINE", chat_engine)
     monkeypatch.setenv("CHAT_ENGINE_USERS", chat_engine_users)
-    monkeypatch.setenv("CLAUDE_AGENT_SDK_ENABLED", "false")
+    monkeypatch.setenv("CLAUDE_AGENT_SDK_ENABLED", "true")
     monkeypatch.setenv("AGENT_MAX_TOOL_STEPS", "6")
     monkeypatch.setenv("AGENT_MAX_SQL_ROWS", "200")
     monkeypatch.setenv("AGENT_MAX_SQL_SCAN_ROWS", "10000")

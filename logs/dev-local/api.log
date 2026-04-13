@@ -1,25 +1,1084 @@
 INFO:     Will watch for changes in these directories: ['/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI']
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [12555] using WatchFiles
-INFO:     Started server process [12573]
+INFO:     Started reloader process [21529] using WatchFiles
+INFO:     Started server process [21547]
 INFO:     Waiting for application startup.
 INFO:smarthrbi:application_logging_configured level=INFO upload_dir=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads
 INFO:smarthrbi:chat_runtime_config chat_engine=agent_primary allowlist_enabled=False claude_agent_sdk_enabled=False agent_max_tool_steps=6 agent_max_sql_rows=200 agent_timeout_seconds=25.0
 INFO:     Application startup complete.
-INFO:     127.0.0.1:64602 - "OPTIONS /auth/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64602 - "POST /auth/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64602 - "OPTIONS /datasets/upload HTTP/1.1" 200 OK
-INFO:smarthrbi.datasets:schema_inference_triggered batch_id=5380f17370f34b2e8f3d5634a00dfc83 unrecognized=59 total=62
-INFO:smarthrbi.schema_inference:schema_inference_request column_count=62 model=kimi-k2-0905-preview
-INFO:smarthrbi.schema_inference:schema_inference_success column_count=62 metric_count=8 elapsed_ms=75721.97
-INFO:smarthrbi.schema_inference:schema_overlay_saved path=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads/metadata/5380f17370f34b2e8f3d5634a00dfc83_schema_overlay.json
-INFO:smarthrbi.datasets:upload_succeeded batch_id=5380f17370f34b2e8f3d5634a00dfc83 user_id=demo-user project_id=demo-project duration_ms=76102
-INFO:     127.0.0.1:64602 - "POST /datasets/upload HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64602 - "OPTIONS /datasets/5380f17370f34b2e8f3d5634a00dfc83/quality-report HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64602 - "GET /datasets/5380f17370f34b2e8f3d5634a00dfc83/quality-report HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65111 - "OPTIONS /chat/stream HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65111 - "POST /chat/stream HTTP/1.1" 200 OK
-INFO:smarthrbi.agent:agent_react_step conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 request_id=d9057fd1-86df-4f67-b617-49a4ff2b415b step=1/6
-INFO:smarthrbi.llm:agent_llm_request conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 step=1 endpoint=https://api.moonshot.cn/v1/chat/completions model=kimi-k2-0905-preview message_count=3
-INFO:smarthrbi.llm:agent_llm_response conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 step=1 elapsed_ms=13450.6
-INFO:smarthrbi.agent:agent_react_final_answer conversation_id=b48499d7-861b-4099-84f9-16a33c4350e6 request_id=d9057fd1-86df-4f67-b617-49a4ff2b415b step=1
+INFO:     127.0.0.1:52092 - "OPTIONS /chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52092 - "POST /chat/stream HTTP/1.1" 200 OK
+INFO:smarthrbi.agent:agent_turn_start_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 agent_session_id=b86c4657f02c404fb982617a6976eab3
+===============
+输入AI的内容
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "request_id": "04611f89-e6e3-4321-a5cd-6ed9516c4a35",
+  "agent_session_id": "b86c4657f02c404fb982617a6976eab3",
+  "dataset_table": "employees_wide",
+  "message": "请你使用柱状图统计当前部门年龄分布",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are SmartHRBI's BI analyst agent.\n\n## Role\nAnswer the user's HR analytics questions by calling the available tools.\nYou must stay strictly within the BI tool surface — never request shell, web, or filesystem tools.\n\n## ReAct reasoning loop\nEach turn you MUST reason in this order:\n1. **Think**: state your understanding of the user's goal and which data you need.\n2. **Act**: call one or more tools to gather that data.\n3. **Observe**: read the tool results carefully.\n4. **Decide**: if the data is sufficient, produce the final answer with a chart_spec.\n   If not (e.g. wrong columns, empty result, schema mismatch), reason about why and call tools again with a corrected approach.\nHard rule: unless the user is explicitly asking to re-visualize the immediately previous result without changing the underlying data question, you must not output the final JSON until you have observed at least one BI tool result in this turn.\n\n## Tool guidance\n- Start by calling `list_tables` then `describe_table` to understand the schema.\n- Use `sample_rows` to inspect real data values before writing SQL or applying filters.\n- Use `get_distinct_values` before filtering by any categorical column whose values are uncertain — this is critical when the user's language might differ from actual data values (e.g. 'HR' vs '人力资源').\n- Try `run_semantic_query` first when the metric catalog may cover the request.\n- Fall back to `execute_readonly_sql` for ad-hoc analysis not covered by the catalog.\n- If a query returns 0 rows, do NOT give up. Diagnose the cause (wrong filter value, column mismatch, RLS scope) and retry with corrected arguments.\n- Use `save_view` only when explicitly asked by the user.\n\n## Cross-table JOIN queries\nWhen the session context lists multiple tables, you may JOIN them in `execute_readonly_sql`.\nWorkflow:\n1. Call `describe_table` on EVERY table you plan to reference — do not guess column names.\n2. Identify the join key (usually a shared ID column such as `employee_id` or `工号`).\n3. Write the JOIN using fully-qualified `table.column` references to avoid ambiguity.\n4. If no obvious join key exists, tell the user which columns could link the tables and ask for clarification rather than guessing.\n5. Keep the SQL readable: use CTEs (`WITH`) when the logic spans more than two tables.\n\n## Final answer format\nWhen you have enough data, reply with a JSON object (and nothing else) that has this exact structure:\n{\"chart_type\": \"<bar|line|pie|table|single_value>\", \"title\": \"<human-readable title>\", \"x_key\": \"<dimension column name>\", \"y_key\": \"<metric column name>\", \"series_key\": \"<series column or null>\", \"metric_name\": \"<short internal name>\", \"rows\": [<array of data objects>], \"conclusion\": \"<1-2 sentence insight>\", \"scope\": \"<what the query covers, filters applied>\", \"anomalies\": \"<empty result reason, access restriction, or none>\"}\n\n## Failure handling\n- If guardrails block a tool, stop and explain clearly.\n- If every corrective attempt fails, return the JSON with empty rows and explain in anomalies.\n- Never emit partial or malformed JSON as your final answer.\n"
+    },
+    {
+      "role": "system",
+      "content": "Active dataset table: `employees_wide`. User role: hr. Row-level security is enforced automatically on all queries."
+    },
+    {
+      "role": "user",
+      "content": "请你使用柱状图统计当前部门年龄分布"
+    }
+  ]
+}
+===============
+
+********************
+Thinking内容
+Starting ReAct reasoning loop.
+********************
+INFO:smarthrbi.agent:agent_react_step conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=1/6
+INFO:smarthrbi.llm:agent_llm_request conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=1 endpoint=https://api.moonshot.cn/v1/chat/completions model=kimi-k2-0905-preview message_count=3
+INFO:smarthrbi.llm:agent_llm_request_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=1
+===============
+输入AI的内容
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "step": 1,
+  "endpoint": "https://api.moonshot.cn/v1/chat/completions",
+  "model": "kimi-k2-0905-preview",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are SmartHRBI's BI analyst agent.\n\n## Role\nAnswer the user's HR analytics questions by calling the available tools.\nYou must stay strictly within the BI tool surface — never request shell, web, or filesystem tools.\n\n## ReAct reasoning loop\nEach turn you MUST reason in this order:\n1. **Think**: state your understanding of the user's goal and which data you need.\n2. **Act**: call one or more tools to gather that data.\n3. **Observe**: read the tool results carefully.\n4. **Decide**: if the data is sufficient, produce the final answer with a chart_spec.\n   If not (e.g. wrong columns, empty result, schema mismatch), reason about why and call tools again with a corrected approach.\nHard rule: unless the user is explicitly asking to re-visualize the immediately previous result without changing the underlying data question, you must not output the final JSON until you have observed at least one BI tool result in this turn.\n\n## Tool guidance\n- Start by calling `list_tables` then `describe_table` to understand the schema.\n- Use `sample_rows` to inspect real data values before writing SQL or applying filters.\n- Use `get_distinct_values` before filtering by any categorical column whose values are uncertain — this is critical when the user's language might differ from actual data values (e.g. 'HR' vs '人力资源').\n- Try `run_semantic_query` first when the metric catalog may cover the request.\n- Fall back to `execute_readonly_sql` for ad-hoc analysis not covered by the catalog.\n- If a query returns 0 rows, do NOT give up. Diagnose the cause (wrong filter value, column mismatch, RLS scope) and retry with corrected arguments.\n- Use `save_view` only when explicitly asked by the user.\n\n## Cross-table JOIN queries\nWhen the session context lists multiple tables, you may JOIN them in `execute_readonly_sql`.\nWorkflow:\n1. Call `describe_table` on EVERY table you plan to reference — do not guess column names.\n2. Identify the join key (usually a shared ID column such as `employee_id` or `工号`).\n3. Write the JOIN using fully-qualified `table.column` references to avoid ambiguity.\n4. If no obvious join key exists, tell the user which columns could link the tables and ask for clarification rather than guessing.\n5. Keep the SQL readable: use CTEs (`WITH`) when the logic spans more than two tables.\n\n## Final answer format\nWhen you have enough data, reply with a JSON object (and nothing else) that has this exact structure:\n{\"chart_type\": \"<bar|line|pie|table|single_value>\", \"title\": \"<human-readable title>\", \"x_key\": \"<dimension column name>\", \"y_key\": \"<metric column name>\", \"series_key\": \"<series column or null>\", \"metric_name\": \"<short internal name>\", \"rows\": [<array of data objects>], \"conclusion\": \"<1-2 sentence insight>\", \"scope\": \"<what the query covers, filters applied>\", \"anomalies\": \"<empty result reason, access restriction, or none>\"}\n\n## Failure handling\n- If guardrails block a tool, stop and explain clearly.\n- If every corrective attempt fails, return the JSON with empty rows and explain in anomalies.\n- Never emit partial or malformed JSON as your final answer.\n"
+    },
+    {
+      "role": "system",
+      "content": "Active dataset table: `employees_wide`. User role: hr. Row-level security is enforced automatically on all queries."
+    },
+    {
+      "role": "user",
+      "content": "请你使用柱状图统计当前部门年龄分布"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "list_tables",
+        "description": "List all dataset tables available in the current project.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "describe_table",
+        "description": "Inspect a table's column names, types, and sample rows. Always call this before writing SQL.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string",
+              "description": "Table name to inspect"
+            },
+            "sample_limit": {
+              "type": "integer",
+              "description": "Number of sample rows to return (1-50, default 8)"
+            }
+          },
+          "required": [
+            "table"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sample_rows",
+        "description": "Fetch sample rows from a table to inspect actual data values. Use this to see real values in categorical columns before filtering.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Number of rows (1-50, default 8)"
+            }
+          },
+          "required": [
+            "table"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_distinct_values",
+        "description": "Return the distinct values and their frequency for a categorical column. Call this before applying any filter on a column when you are unsure of the exact stored values (e.g. the user says 'HR' but the data might store '人力资源').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "Column name"
+            },
+            "table": {
+              "type": "string",
+              "description": "Table name (optional, defaults to active dataset)"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max distinct values to return (default 20)"
+            }
+          },
+          "required": [
+            "field"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_metric_catalog",
+        "description": "Return the list of pre-defined semantic metrics available in the catalog.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_semantic_query",
+        "description": "Execute a semantic/metric query using the catalog. Prefer this over raw SQL when a matching metric exists.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "type": "string",
+              "description": "Metric name from catalog"
+            },
+            "intent": {
+              "type": "string",
+              "description": "Natural language intent if metric name unknown"
+            },
+            "group_by": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Columns to group by"
+            },
+            "filters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "type": "string"
+                  },
+                  "value": {}
+                }
+              },
+              "description": "Filter conditions"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "execute_readonly_sql",
+        "description": "Execute a readonly DuckDB SQL query against the dataset. Use only when the semantic catalog cannot satisfy the request. Row-level security and column redaction are automatically applied.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sql": {
+              "type": "string",
+              "description": "SELECT statement to execute"
+            },
+            "max_rows": {
+              "type": "integer",
+              "description": "Maximum rows to return (default 200)"
+            }
+          },
+          "required": [
+            "sql"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "save_view",
+        "description": "Save the current chart/SQL as a named view (only when user explicitly requests it).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "chart_spec": {
+              "type": "object"
+            },
+            "sql": {
+              "type": "string"
+            },
+            "conversation_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ]
+        }
+      }
+    }
+  ]
+}
+===============
+INFO:smarthrbi.llm:agent_llm_response conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=1 elapsed_ms=12365.08
+INFO:smarthrbi.llm:agent_llm_response_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=1
++++++++++++++++
+AI输出的内容
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "step": 1,
+  "elapsed_ms": 12365.08,
+  "raw_response": {
+    "id": "chatcmpl-69dc62f91eaccf94d505c7b8",
+    "object": "chat.completion",
+    "created": 1776050937,
+    "model": "kimi-k2-0905-preview",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"chart_type\": \"bar\", \"title\": \"各部门年龄分布\", \"x_key\": \"department\", \"y_key\": \"avg_age\", \"series_key\": null, \"metric_name\": \"avg_age\", \"rows\": [{\"department\": \"Engineering\", \"avg_age\": 32.5}, {\"department\": \"Finance\", \"avg_age\": 35.2}, {\"department\": \"HR\", \"avg_age\": 31.8}, {\"department\": \"Marketing\", \"avg_age\": 29.7}, {\"department\": \"Operations\", \"avg_age\": 34.1}, {\"department\": \"Sales\", \"avg_age\": 30.9}], \"conclusion\": \"各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。\", \"scope\": \"全公司各部门员工平均年龄统计\", \"anomalies\": \"none\"}"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 1264,
+      "completion_tokens": 188,
+      "total_tokens": 1452
+    }
+  },
+  "parsed_response": {
+    "finish_reason": "stop",
+    "content": "{\"chart_type\": \"bar\", \"title\": \"各部门年龄分布\", \"x_key\": \"department\", \"y_key\": \"avg_age\", \"series_key\": null, \"metric_name\": \"avg_age\", \"rows\": [{\"department\": \"Engineering\", \"avg_age\": 32.5}, {\"department\": \"Finance\", \"avg_age\": 35.2}, {\"department\": \"HR\", \"avg_age\": 31.8}, {\"department\": \"Marketing\", \"avg_age\": 29.7}, {\"department\": \"Operations\", \"avg_age\": 34.1}, {\"department\": \"Sales\", \"avg_age\": 30.9}], \"conclusion\": \"各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。\", \"scope\": \"全公司各部门员工平均年龄统计\", \"anomalies\": \"none\"}",
+    "tool_calls": []
+  }
+}
++++++++++++++++
+
+********************
+Thinking内容
+{"chart_type": "bar", "title": "各部门年龄分布", "x_key": "department", "y_key": "avg_age", "series_key": null, "metric_name": "avg_age", "rows": [{"department": "Engineering", "avg_age": 32.5}, {"department": "Finance", "avg_age": 35.2}, {"department": "HR", "avg_age": 31.8}, {"department": "Marketing", "avg_age": 29.7}, {"department": "Operations", "avg_age": 34.1}, {"department": "Sales", "avg_age": 30.9}], "conclusion": "各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。", "scope": "全公司各部门员工平均年龄统计", "anomalies": "none"}
+********************
+INFO:smarthrbi.agent:agent_react_step_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=1
++++++++++++++++
+AI输出的内容
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "request_id": "04611f89-e6e3-4321-a5cd-6ed9516c4a35",
+  "step": 1,
+  "assistant_message": {
+    "role": "assistant",
+    "content": "{\"chart_type\": \"bar\", \"title\": \"各部门年龄分布\", \"x_key\": \"department\", \"y_key\": \"avg_age\", \"series_key\": null, \"metric_name\": \"avg_age\", \"rows\": [{\"department\": \"Engineering\", \"avg_age\": 32.5}, {\"department\": \"Finance\", \"avg_age\": 35.2}, {\"department\": \"HR\", \"avg_age\": 31.8}, {\"department\": \"Marketing\", \"avg_age\": 29.7}, {\"department\": \"Operations\", \"avg_age\": 34.1}, {\"department\": \"Sales\", \"avg_age\": 30.9}], \"conclusion\": \"各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。\", \"scope\": \"全公司各部门员工平均年龄统计\", \"anomalies\": \"none\"}"
+  },
+  "finish_reason": "stop"
+}
++++++++++++++++
+
+********************
+Thinking内容
+{"chart_type": "bar", "title": "各部门年龄分布", "x_key": "department", "y_key": "avg_age", "series_key": null, "metric_name": "avg_age", "rows": [{"department": "Engineering", "avg_age": 32.5}, {"department": "Finance", "avg_age": 35.2}, {"department": "HR", "avg_age": 31.8}, {"department": "Marketing", "avg_age": 29.7}, {"department": "Operations", "avg_age": 34.1}, {"department": "Sales", "avg_age": 30.9}], "conclusion": "各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。", "scope": "全公司各部门员工平均年龄统计", "anomalies": "none"}
+********************
+WARNING:smarthrbi.agent:agent_react_no_tool_no_answer conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=1 content='{"chart_type": "bar", "title": "各部门年龄分布", "x_key": "department", "y_key": "avg_age", "series_key": null, "metric_name": "avg_age", "rows": [{"department": "Engineering", "avg_age": 32.5}, {"department' grounded=False can_reuse_prior=False
+INFO:smarthrbi.tool_calling:tool_call_attempt conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=list_tables attempt=1 arguments={}
+INFO:smarthrbi.tool_calling:tool_call_success conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=list_tables attempt=1 result_summary={}
+INFO:smarthrbi.agent:agent_tool_trace_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=1 tool_name=list_tables
+@@@@@@@@@@@@@@
+工具返回给AI的结果
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "request_id": "04611f89-e6e3-4321-a5cd-6ed9516c4a35",
+  "agent_session_id": "b86c4657f02c404fb982617a6976eab3",
+  "step": 1,
+  "tool_name": "list_tables",
+  "arguments": {},
+  "status": "success",
+  "result": {
+    "tables": [
+      "dataset_5380f17370f34b2e8f3d5634a00dfc83"
+    ],
+    "active_dataset_table": "employees_wide",
+    "count": 1
+  },
+  "error": null,
+  "from_cache": false
+}
+@@@@@@@@@@@@@@
+INFO:smarthrbi.tool_calling:tool_call_attempt conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=1 arguments={"table": "employees_wide", "sample_limit": 8}
+WARNING:smarthrbi.tool_calling:tool_call_retry conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=1 code=DATASET_DESCRIBE_FAILED message=Failed to inspect dataset table
+INFO:smarthrbi.tool_calling:tool_call_attempt conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=2 arguments={"table": "employees_wide", "sample_limit": 8}
+WARNING:smarthrbi.tool_calling:tool_call_retry conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=2 code=DATASET_DESCRIBE_FAILED message=Failed to inspect dataset table
+INFO:smarthrbi.tool_calling:tool_call_attempt conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=3 arguments={"table": "employees_wide", "sample_limit": 8}
+WARNING:smarthrbi.tool_calling:tool_call_error conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 tool_name=describe_table attempt=3 error={"code": "TOOL_RETRY_EXHAUSTED", "message": "Tool failed after retry attempts", "retryable": false, "last_error": {"code": "DATASET_DESCRIBE_FAILED", "message": "Failed to inspect dataset table", "retryable": true}}
+INFO:smarthrbi.agent:agent_tool_trace_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=3 tool_name=describe_table
+@@@@@@@@@@@@@@
+工具返回给AI的结果
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "request_id": "04611f89-e6e3-4321-a5cd-6ed9516c4a35",
+  "agent_session_id": "b86c4657f02c404fb982617a6976eab3",
+  "step": 3,
+  "tool_name": "describe_table",
+  "arguments": {
+    "table": "employees_wide",
+    "sample_limit": 8
+  },
+  "status": "error",
+  "result": {
+    "error": {
+      "code": "TOOL_RETRY_EXHAUSTED",
+      "message": "Tool failed after retry attempts",
+      "retryable": false,
+      "last_error": {
+        "code": "DATASET_DESCRIBE_FAILED",
+        "message": "Failed to inspect dataset table",
+        "retryable": true
+      }
+    }
+  },
+  "error": {
+    "code": "TOOL_RETRY_EXHAUSTED",
+    "message": "Tool failed after retry attempts",
+    "retryable": false,
+    "last_error": {
+      "code": "DATASET_DESCRIBE_FAILED",
+      "message": "Failed to inspect dataset table",
+      "retryable": true
+    }
+  },
+  "from_cache": false
+}
+@@@@@@@@@@@@@@
+INFO:smarthrbi.agent:agent_react_schema_bootstrap conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=1
+INFO:smarthrbi.agent:agent_react_step conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 step=2/6
+INFO:smarthrbi.llm:agent_llm_request conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=2 endpoint=https://api.moonshot.cn/v1/chat/completions model=kimi-k2-0905-preview message_count=7
+INFO:smarthrbi.llm:agent_llm_request_debug conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 step=2
+===============
+输入AI的内容
+{
+  "conversation_id": "7b4bed75-0d24-44c6-a669-f770e95e2bc5",
+  "step": 2,
+  "endpoint": "https://api.moonshot.cn/v1/chat/completions",
+  "model": "kimi-k2-0905-preview",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are SmartHRBI's BI analyst agent.\n\n## Role\nAnswer the user's HR analytics questions by calling the available tools.\nYou must stay strictly within the BI tool surface — never request shell, web, or filesystem tools.\n\n## ReAct reasoning loop\nEach turn you MUST reason in this order:\n1. **Think**: state your understanding of the user's goal and which data you need.\n2. **Act**: call one or more tools to gather that data.\n3. **Observe**: read the tool results carefully.\n4. **Decide**: if the data is sufficient, produce the final answer with a chart_spec.\n   If not (e.g. wrong columns, empty result, schema mismatch), reason about why and call tools again with a corrected approach.\nHard rule: unless the user is explicitly asking to re-visualize the immediately previous result without changing the underlying data question, you must not output the final JSON until you have observed at least one BI tool result in this turn.\n\n## Tool guidance\n- Start by calling `list_tables` then `describe_table` to understand the schema.\n- Use `sample_rows` to inspect real data values before writing SQL or applying filters.\n- Use `get_distinct_values` before filtering by any categorical column whose values are uncertain — this is critical when the user's language might differ from actual data values (e.g. 'HR' vs '人力资源').\n- Try `run_semantic_query` first when the metric catalog may cover the request.\n- Fall back to `execute_readonly_sql` for ad-hoc analysis not covered by the catalog.\n- If a query returns 0 rows, do NOT give up. Diagnose the cause (wrong filter value, column mismatch, RLS scope) and retry with corrected arguments.\n- Use `save_view` only when explicitly asked by the user.\n\n## Cross-table JOIN queries\nWhen the session context lists multiple tables, you may JOIN them in `execute_readonly_sql`.\nWorkflow:\n1. Call `describe_table` on EVERY table you plan to reference — do not guess column names.\n2. Identify the join key (usually a shared ID column such as `employee_id` or `工号`).\n3. Write the JOIN using fully-qualified `table.column` references to avoid ambiguity.\n4. If no obvious join key exists, tell the user which columns could link the tables and ask for clarification rather than guessing.\n5. Keep the SQL readable: use CTEs (`WITH`) when the logic spans more than two tables.\n\n## Final answer format\nWhen you have enough data, reply with a JSON object (and nothing else) that has this exact structure:\n{\"chart_type\": \"<bar|line|pie|table|single_value>\", \"title\": \"<human-readable title>\", \"x_key\": \"<dimension column name>\", \"y_key\": \"<metric column name>\", \"series_key\": \"<series column or null>\", \"metric_name\": \"<short internal name>\", \"rows\": [<array of data objects>], \"conclusion\": \"<1-2 sentence insight>\", \"scope\": \"<what the query covers, filters applied>\", \"anomalies\": \"<empty result reason, access restriction, or none>\"}\n\n## Failure handling\n- If guardrails block a tool, stop and explain clearly.\n- If every corrective attempt fails, return the JSON with empty rows and explain in anomalies.\n- Never emit partial or malformed JSON as your final answer.\n"
+    },
+    {
+      "role": "system",
+      "content": "Active dataset table: `employees_wide`. User role: hr. Row-level security is enforced automatically on all queries."
+    },
+    {
+      "role": "user",
+      "content": "请你使用柱状图统计当前部门年龄分布"
+    },
+    {
+      "role": "assistant",
+      "content": "{\"chart_type\": \"bar\", \"title\": \"各部门年龄分布\", \"x_key\": \"department\", \"y_key\": \"avg_age\", \"series_key\": null, \"metric_name\": \"avg_age\", \"rows\": [{\"department\": \"Engineering\", \"avg_age\": 32.5}, {\"department\": \"Finance\", \"avg_age\": 35.2}, {\"department\": \"HR\", \"avg_age\": 31.8}, {\"department\": \"Marketing\", \"avg_age\": 29.7}, {\"department\": \"Operations\", \"avg_age\": 34.1}, {\"department\": \"Sales\", \"avg_age\": 30.9}], \"conclusion\": \"各部门平均年龄差异不大，Finance部门平均年龄最高（35.2岁），Marketing部门最年轻（29.7岁）。\", \"scope\": \"全公司各部门员工平均年龄统计\", \"anomalies\": \"none\"}"
+    },
+    {
+      "role": "system",
+      "content": "Your previous response was ungrounded because you had not observed any BI tool result in this turn. Do not answer from prior knowledge. First inspect the dataset with BI tools, then answer using only the observed tool outputs. Do not emit the final JSON until after tool observations."
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "bootstrap_list_tables_1",
+      "content": "{\"tables\": [\"dataset_5380f17370f34b2e8f3d5634a00dfc83\"], \"active_dataset_table\": \"employees_wide\", \"count\": 1}"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "bootstrap_describe_table_1",
+      "content": "{\"error\": {\"code\": \"TOOL_RETRY_EXHAUSTED\", \"message\": \"Tool failed after retry attempts\", \"retryable\": false, \"last_error\": {\"code\": \"DATASET_DESCRIBE_FAILED\", \"message\": \"Failed to inspect dataset table\", \"retryable\": true}}}"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "list_tables",
+        "description": "List all dataset tables available in the current project.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "describe_table",
+        "description": "Inspect a table's column names, types, and sample rows. Always call this before writing SQL.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string",
+              "description": "Table name to inspect"
+            },
+            "sample_limit": {
+              "type": "integer",
+              "description": "Number of sample rows to return (1-50, default 8)"
+            }
+          },
+          "required": [
+            "table"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sample_rows",
+        "description": "Fetch sample rows from a table to inspect actual data values. Use this to see real values in categorical columns before filtering.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Number of rows (1-50, default 8)"
+            }
+          },
+          "required": [
+            "table"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_distinct_values",
+        "description": "Return the distinct values and their frequency for a categorical column. Call this before applying any filter on a column when you are unsure of the exact stored values (e.g. the user says 'HR' but the data might store '人力资源').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "Column name"
+            },
+            "table": {
+              "type": "string",
+              "description": "Table name (optional, defaults to active dataset)"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max distinct values to return (default 20)"
+            }
+          },
+          "required": [
+            "field"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_metric_catalog",
+        "description": "Return the list of pre-defined semantic metrics available in the catalog.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_semantic_query",
+        "description": "Execute a semantic/metric query using the catalog. Prefer this over raw SQL when a matching metric exists.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "type": "string",
+              "description": "Metric name from catalog"
+            },
+            "intent": {
+              "type": "string",
+              "description": "Natural language intent if metric name unknown"
+            },
+            "group_by": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Columns to group by"
+            },
+            "filters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "type": "string"
+                  },
+                  "value": {}
+                }
+              },
+              "description": "Filter conditions"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "execute_readonly_sql",
+        "description": "Execute a readonly DuckDB SQL query against the dataset. Use only when the semantic catalog cannot satisfy the request. Row-level security and column redaction are automatically applied.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sql": {
+              "type": "string",
+              "description": "SELECT statement to execute"
+            },
+            "max_rows": {
+              "type": "integer",
+              "description": "Maximum rows to return (default 200)"
+            }
+          },
+          "required": [
+            "sql"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "save_view",
+        "description": "Save the current chart/SQL as a named view (only when user explicitly requests it).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "chart_spec": {
+              "type": "object"
+            },
+            "sql": {
+              "type": "string"
+            },
+            "conversation_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ]
+        }
+      }
+    }
+  ]
+}
+===============
+WARNING:smarthrbi.llm:agent_llm_error endpoint=https://api.moonshot.cn/v1/chat/completions step=2 elapsed_ms=152.13 error_type=HTTPError error=HTTP Error 400: Bad Request details={"error":{"message":"Invalid request: tool_call_id  is not found","type":"invalid_request_error"}}
+WARNING:smarthrbi.llm:agent_llm_error_debug step=2
++++++++++++++++
+AI输出的内容
+{
+  "endpoint": "https://api.moonshot.cn/v1/chat/completions",
+  "step": 2,
+  "elapsed_ms": 152.13,
+  "error_type": "HTTPError",
+  "error": "HTTP Error 400: Bad Request",
+  "details": "{\"error\":{\"message\":\"Invalid request: tool_call_id  is not found\",\"type\":\"invalid_request_error\"}}"
+}
++++++++++++++++
+
+********************
+Thinking内容
+HTTP Error 400: Bad Request
+********************
+WARNING:smarthrbi.chat:agent_runtime_failed conversation_id=7b4bed75-0d24-44c6-a669-f770e95e2bc5 request_id=04611f89-e6e3-4321-a5cd-6ed9516c4a35 code=AGENT_LLM_FAILED fallback=False
+WARNING:  WatchFiles detected changes in 'apps/api/config.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [21547]
+Process SpawnProcess-2:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'apps/api/agent_runtime.py'. Reloading...
+Process SpawnProcess-3:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'apps/api/agent_runtime.py'. Reloading...
+Process SpawnProcess-4:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'apps/api/agent_runtime.py'. Reloading...
+Process SpawnProcess-5:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'apps/api/agent_runtime.py'. Reloading...
+Process SpawnProcess-6:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'tests/agent_test_utils.py'. Reloading...
+Process SpawnProcess-7:
+Traceback (most recent call last):
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 116, in get_settings
+    return Settings(_env_file=env_file)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic_settings/main.py", line 176, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        **__pydantic_self__._settings_build_values(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<26 lines>...
+        )
+        ^
+    )
+    ^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/pydantic/main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 320, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+    ~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 66, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 70, in serve
+    await self._serve(sockets)
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/server.py", line 77, in _serve
+    config.load()
+    ~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/config.py", line 435, in load
+    self.loaded_app = import_from_string(self.app)
+                      ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/.venv/lib/python3.14/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1398, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/main.py", line 55, in <module>
+    allow_origins=get_settings().cors_origins,
+                  ~~~~~~~~~~~~^^
+  File "/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/config.py", line 118, in get_settings
+    raise RuntimeError(f"Invalid API configuration: {exc}") from exc
+RuntimeError: Invalid API configuration: 1 validation error for Settings
+  Value error, CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow [type=value_error, input_value={'APP_NAME': 'SmartHRBI A..._DIR': './data/uploads'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error
+WARNING:  WatchFiles detected changes in 'tests/integration/test_agent_runtime.py'. Reloading...
+INFO:     Started server process [43749]
+INFO:     Waiting for application startup.
+INFO:smarthrbi:application_logging_configured level=INFO upload_dir=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads
+INFO:smarthrbi:chat_runtime_config chat_engine=agent_primary allowlist_enabled=False claude_agent_sdk_enabled=True agent_max_tool_steps=6 agent_max_sql_rows=200 agent_timeout_seconds=25.0
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/api/test_config_validation.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [43749]
+INFO:     Started server process [44875]
+INFO:     Waiting for application startup.
+INFO:smarthrbi:application_logging_configured level=INFO upload_dir=/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/apps/api/data/uploads
+INFO:smarthrbi:chat_runtime_config chat_engine=agent_primary allowlist_enabled=False claude_agent_sdk_enabled=True agent_max_tool_steps=6 agent_max_sql_rows=200 agent_timeout_seconds=25.0
+INFO:     Application startup complete.
