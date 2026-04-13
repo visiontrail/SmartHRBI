@@ -67,6 +67,35 @@ def _upload_dataset(client: TestClient) -> str:
     return response.json()["dataset_table"]
 
 
+def _upload_non_hr_dataset(client: TestClient) -> str:
+    upload_file = _excel_bytes(
+        [
+            {"employee id": "E-101", "department": "NTN中心", "status": "active", "salary": 1000},
+            {"employee id": "E-102", "department": "NTN中心", "status": "inactive", "salary": 1200},
+            {"employee id": "E-103", "department": "平台研发", "status": "active", "salary": 900},
+        ]
+    )
+
+    headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+    response = client.post(
+        "/datasets/upload",
+        data={"user_id": "alice", "project_id": "north"},
+        headers=headers,
+        files=[
+            (
+                "files",
+                (
+                    "employees-no-hr.xlsx",
+                    upload_file,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ),
+            )
+        ],
+    )
+    assert response.status_code == 200
+    return response.json()["dataset_table"]
+
+
 def test_tool_calling_query_metrics_returns_structured_result(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
@@ -110,6 +139,51 @@ def test_tool_calling_query_metrics_returns_structured_result(monkeypatch, tmp_p
     assert payload["attempts"] == 1
     assert payload["result"]["metric"] == "active_employee_count"
     assert payload["result"]["rows"] == [{"department": "HR", "metric_value": 1}]
+
+
+def test_tool_calling_hr_role_is_not_forced_into_department_scope(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        dataset_table = _upload_non_hr_dataset(client)
+        headers = auth_headers(
+            client,
+            user_id="alice",
+            project_id="north",
+            role="hr",
+            department="HR",
+            clearance=1,
+        )
+        response = client.post(
+            "/chat/tool-call",
+            json={
+                "conversation_id": "conv-hr-unscoped",
+                "request_id": "req-hr-unscoped",
+                "idempotency_key": "idem-hr-unscoped",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": dataset_table,
+                "role": "hr",
+                "department": "HR",
+                "clearance": 1,
+                "tool": {
+                    "name": "execute_readonly_sql",
+                    "arguments": {
+                        "sql": f'SELECT "department", COUNT(*) AS metric_value FROM "{dataset_table}" GROUP BY 1 ORDER BY 1',
+                    },
+                },
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["result"]["row_count"] == 2
+    assert payload["result"]["rows"] == [
+        {"department": "NTN中心", "metric_value": 2},
+        {"department": "平台研发", "metric_value": 1},
+    ]
 
 
 def test_tool_calling_retries_and_uses_idempotency_cache(monkeypatch, tmp_path: Path) -> None:

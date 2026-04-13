@@ -589,7 +589,7 @@ def _format_sse(event: ChatEvent) -> str:
     return (
         f"id: {event.id}\n"
         f"event: {event.type}\n"
-        f"data: {json.dumps(event.payload, ensure_ascii=False)}\n\n"
+        f"data: {json.dumps(event.payload, ensure_ascii=False, default=str)}\n\n"
     )
 
 

@@ -49,6 +49,23 @@ from .views import SaveViewInput, ViewStorageError, get_view_storage_service
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 logger = logging.getLogger("smarthrbi.tool_calling")
 
+TOOLS_REQUIRE_ACTIVE_DATASET = frozenset(
+    {
+        "query_metrics",
+        "describe_dataset",
+        "run_semantic_query",
+        "execute_readonly_sql",
+        "get_distinct_values",
+    }
+)
+TOOLS_WITH_OPTIONAL_TABLE_ARGUMENT = frozenset(
+    {
+        "describe_table",
+        "sample_rows",
+        "get_distinct_values",
+    }
+)
+
 
 class ToolCall(BaseModel):
     name: Literal[
@@ -226,13 +243,104 @@ class ToolCallingService:
         attempts = 0
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
+            resolved_context = context
+            resolved_arguments = dict(request.tool.arguments)
+            try:
+                resolved_context, resolved_arguments = self._prepare_tool_scope(
+                    context=context,
+                    tool_name=request.tool.name,
+                    arguments=request.tool.arguments,
+                )
+            except ToolExecutionError as exc:
+                if exc.retryable and attempt < max_attempts:
+                    logger.warning(
+                        "tool_call_retry conversation_id=%s request_id=%s tool_name=%s attempt=%s code=%s message=%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        exc.code,
+                        exc.message,
+                    )
+                    continue
+
+                detail = (
+                    {
+                        "code": "TOOL_RETRY_EXHAUSTED",
+                        "message": "Tool failed after retry attempts",
+                        "retryable": False,
+                        "last_error": exc.to_detail(),
+                    }
+                    if exc.retryable
+                    else exc.to_detail()
+                )
+
+                logger.warning(
+                    "tool_call_error conversation_id=%s request_id=%s tool_name=%s attempt=%s error=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    attempt,
+                    json.dumps(detail, ensure_ascii=False, default=str),
+                )
+                if request.emit_debug_blocks:
+                    logger.warning(
+                        "tool_call_error_debug conversation_id=%s request_id=%s tool_name=%s attempt=%s\n%s",
+                        request.conversation_id,
+                        request.request_id,
+                        request.tool.name,
+                        attempt,
+                        format_agent_debug_blocks(
+                            tool_result={
+                                "conversation_id": request.conversation_id,
+                                "request_id": request.request_id,
+                                "tool_name": request.tool.name,
+                                "attempt": attempt,
+                                "status": "error",
+                                "arguments": request.tool.arguments,
+                                "error": detail,
+                            }
+                        ),
+                    )
+
+                response = ToolCallResponse(
+                    conversation_id=request.conversation_id,
+                    request_id=request.request_id,
+                    idempotency_key=request.idempotency_key,
+                    tool_name=request.tool.name,
+                    status="error",
+                    attempts=attempt,
+                    error=detail,
+                )
+                with self._lock:
+                    self._idempotency_cache[request.idempotency_key] = response
+                return response
+
+            if resolved_context.dataset_table != context.dataset_table:
+                logger.warning(
+                    "tool_context_dataset_table_fallback conversation_id=%s request_id=%s tool_name=%s requested=%s resolved=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    context.dataset_table,
+                    resolved_context.dataset_table,
+                )
+            if resolved_arguments != request.tool.arguments:
+                logger.info(
+                    "tool_arguments_normalized conversation_id=%s request_id=%s tool_name=%s normalized_arguments=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    request.tool.name,
+                    json.dumps(resolved_arguments, ensure_ascii=False, default=str),
+                )
+
             logger.info(
                 "tool_call_attempt conversation_id=%s request_id=%s tool_name=%s attempt=%s arguments=%s",
                 request.conversation_id,
                 request.request_id,
                 request.tool.name,
                 attempt,
-                json.dumps(request.tool.arguments, ensure_ascii=False, default=str),
+                json.dumps(resolved_arguments, ensure_ascii=False, default=str),
             )
             if request.emit_debug_blocks:
                 logger.info(
@@ -247,12 +355,12 @@ class ToolCallingService:
                             "request_id": request.request_id,
                             "tool_name": request.tool.name,
                             "attempt": attempt,
-                            "arguments": request.tool.arguments,
+                            "arguments": resolved_arguments,
                         }
                     ),
                 )
             try:
-                result = tool(context, request.tool.arguments)
+                result = tool(resolved_context, resolved_arguments)
                 logger.info(
                     "tool_call_success conversation_id=%s request_id=%s tool_name=%s attempt=%s result_summary=%s",
                     request.conversation_id,
@@ -275,7 +383,7 @@ class ToolCallingService:
                                 "tool_name": request.tool.name,
                                 "attempt": attempt,
                                 "status": "success",
-                                "arguments": request.tool.arguments,
+                                "arguments": resolved_arguments,
                                 "result": result,
                             }
                         ),
@@ -337,7 +445,7 @@ class ToolCallingService:
                                 "tool_name": request.tool.name,
                                 "attempt": attempt,
                                 "status": "error",
-                                "arguments": request.tool.arguments,
+                                "arguments": resolved_arguments,
                                 "error": detail,
                             }
                         ),
@@ -376,7 +484,7 @@ class ToolCallingService:
                                 "tool_name": request.tool.name,
                                 "attempt": attempt,
                                 "status": "unexpected_error",
-                                "arguments": request.tool.arguments,
+                                "arguments": resolved_arguments,
                             }
                         ),
                     )
@@ -582,27 +690,28 @@ class ToolCallingService:
 
     def _tool_list_tables(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         _ = arguments
-        try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
-                tables = [str(item[0]) for item in conn.execute("SHOW TABLES").fetchall()]
-        except duckdb.Error as exc:
-            raise ToolExecutionError(
-                code="LIST_TABLES_FAILED",
-                message="Failed to list dataset tables",
-                retryable=True,
-            ) from exc
-
-        ordered_tables = sorted(tables, key=lambda item: (item != context.dataset_table, item))
+        tables = self._fetch_session_tables(context)
+        active_table = self._resolve_table_reference(
+            context=context,
+            requested_table=context.dataset_table,
+            available_tables=tables,
+            strict=False,
+        )
+        ordered_tables = sorted(tables, key=lambda item: (item != active_table, item))
         return {
             "tables": ordered_tables,
-            "active_dataset_table": context.dataset_table,
+            "active_dataset_table": active_table,
             "count": len(ordered_tables),
         }
 
     def _tool_describe_table(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         sample_limit = int(arguments.get("sample_limit", 5))
         sample_limit = max(1, min(sample_limit, 50))
-        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
+        table = self._resolve_table_reference(
+            context=context,
+            requested_table=arguments.get("table") or context.dataset_table,
+            strict=True,
+        )
 
         try:
             with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
@@ -641,7 +750,11 @@ class ToolCallingService:
     def _tool_sample_rows(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         limit = int(arguments.get("limit", 5))
         limit = max(1, min(limit, 50))
-        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
+        table = self._resolve_table_reference(
+            context=context,
+            requested_table=arguments.get("table") or context.dataset_table,
+            strict=True,
+        )
 
         try:
             with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
@@ -767,7 +880,11 @@ class ToolCallingService:
 
         limit = int(arguments.get("limit", 20))
         limit = max(1, min(limit, 50))
-        table = _safe_identifier(str(arguments.get("table") or context.dataset_table)).lower()
+        table = self._resolve_table_reference(
+            context=context,
+            requested_table=arguments.get("table") or context.dataset_table,
+            strict=True,
+        )
         sql = (
             f'SELECT "{safe_field}" AS value, COUNT(*) AS frequency '
             f'FROM "{table}" '
@@ -856,6 +973,134 @@ class ToolCallingService:
             "saved_at": result["saved_at"],
         }
 
+    def _prepare_tool_scope(
+        self,
+        *,
+        context: ToolContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[ToolContext, dict[str, Any]]:
+        resolved_arguments = dict(arguments)
+        needs_table_resolution = (
+            tool_name in TOOLS_REQUIRE_ACTIVE_DATASET
+            or tool_name in TOOLS_WITH_OPTIONAL_TABLE_ARGUMENT
+            or tool_name in {"list_tables", "save_view"}
+        )
+        if not needs_table_resolution:
+            return context, resolved_arguments
+
+        available_tables = self._fetch_session_tables(context)
+        resolved_dataset_table = self._resolve_table_reference(
+            context=context,
+            requested_table=context.dataset_table,
+            available_tables=available_tables,
+            strict=tool_name in TOOLS_REQUIRE_ACTIVE_DATASET,
+        )
+
+        if tool_name in TOOLS_WITH_OPTIONAL_TABLE_ARGUMENT:
+            requested_table = resolved_arguments.get("table")
+            if requested_table is None or not str(requested_table).strip():
+                if resolved_dataset_table:
+                    resolved_arguments["table"] = resolved_dataset_table
+            else:
+                resolved_table = self._resolve_table_reference(
+                    context=context,
+                    requested_table=requested_table,
+                    available_tables=available_tables,
+                    strict=True,
+                    fallback_table=resolved_dataset_table,
+                )
+                resolved_arguments["table"] = resolved_table
+                if tool_name == "get_distinct_values":
+                    resolved_dataset_table = resolved_table
+
+        resolved_context = ToolContext(
+            user_id=context.user_id,
+            project_id=context.project_id,
+            dataset_table=resolved_dataset_table or context.dataset_table,
+            role=context.role,
+            department=context.department,
+            clearance=context.clearance,
+        )
+        return resolved_context, resolved_arguments
+
+    def _fetch_session_tables(self, context: ToolContext) -> list[str]:
+        try:
+            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+                rows = conn.execute("SHOW TABLES").fetchall()
+        except duckdb.Error as exc:
+            raise ToolExecutionError(
+                code="LIST_TABLES_FAILED",
+                message="Failed to list dataset tables",
+                retryable=True,
+            ) from exc
+        return sorted(str(item[0]) for item in rows)
+
+    def _resolve_table_reference(
+        self,
+        *,
+        context: ToolContext,
+        requested_table: Any,
+        strict: bool,
+        available_tables: list[str] | None = None,
+        fallback_table: str | None = None,
+    ) -> str:
+        tables = available_tables if available_tables is not None else self._fetch_session_tables(context)
+        candidate = str(requested_table or "").strip()
+        if candidate.startswith('"') and candidate.endswith('"') and len(candidate) >= 2:
+            candidate = candidate[1:-1].strip()
+
+        normalized_candidate = ""
+        if candidate:
+            try:
+                normalized_candidate = _safe_identifier(candidate)
+            except ToolExecutionError:
+                if len(tables) == 1:
+                    return tables[0]
+                if not strict:
+                    return ""
+                raise
+
+        canonical = self._match_table_name(normalized_candidate, tables)
+        if canonical is not None:
+            return canonical
+
+        canonical_fallback = self._match_table_name(fallback_table or "", tables)
+        if canonical_fallback is not None:
+            return canonical_fallback
+
+        if len(tables) == 1:
+            return tables[0]
+
+        if not tables:
+            if strict:
+                raise ToolExecutionError(
+                    code="NO_DATASET_TABLES",
+                    message="No dataset tables are available. Upload a dataset first.",
+                    retryable=False,
+                )
+            return normalized_candidate
+
+        if strict:
+            target_table = normalized_candidate or context.dataset_table
+            preview = ", ".join(f'"{item}"' for item in tables[:5])
+            if len(tables) > 5:
+                preview = f"{preview}, ..."
+            raise ToolExecutionError(
+                code="DATASET_TABLE_NOT_FOUND",
+                message=f'Dataset table "{target_table}" not found in current session. Available tables: {preview}',
+                retryable=False,
+            )
+
+        return normalized_candidate
+
+    def _match_table_name(self, table_name: str, candidates: list[str]) -> str | None:
+        target = table_name.strip()
+        if not target:
+            return None
+        candidate_map = {item.lower(): item for item in candidates}
+        return candidate_map.get(target.lower())
+
     def _build_query_ast(self, arguments: dict[str, Any], registry: SemanticRegistry | None = None) -> SemanticQueryAST:
         explicit_filters = _parse_filters(arguments.get("filters", []))
         raw_group_by = arguments.get("group_by", [])
@@ -905,11 +1150,16 @@ class ToolCallingService:
     def _all_session_tables(self, context: ToolContext) -> set[str]:
         """Return every table present in the user/project DuckDB session."""
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
-                rows = conn.execute("SHOW TABLES").fetchall()
-            return {str(row[0]) for row in rows}
+            rows = self._fetch_session_tables(context)
+            if rows:
+                return set(rows)
+        except ToolExecutionError:
+            pass
         except Exception:
+            pass
+        if context.dataset_table:
             return {context.dataset_table}
+        return set()
 
     def _effective_compiler(self, context: ToolContext) -> MetricCompiler:
         """Return a MetricCompiler augmented with any LLM-inferred overlay for this dataset."""

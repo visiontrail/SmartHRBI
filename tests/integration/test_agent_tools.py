@@ -138,3 +138,104 @@ def test_agent_tools_expose_schema_sample_semantic_and_readonly_sql(monkeypatch,
     assert distinct.status_code == 200
     distinct_values = distinct.json()["result"]["values"]
     assert distinct_values[0]["value"] == "HR"
+
+
+def test_agent_tools_fallback_to_existing_table_when_request_dataset_table_mismatches(
+    monkeypatch, tmp_path: Path
+) -> None:
+    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+
+    with TestClient(app) as client:
+        uploaded_table = upload_dataset(
+            client,
+            rows=[
+                {"employee_id": "E-101", "department": "HR", "status": "active"},
+                {"employee_id": "E-102", "department": "PM", "status": "active"},
+            ],
+        )
+        headers = auth_headers(
+            client,
+            user_id="alice",
+            project_id="north",
+            role="admin",
+            department="HR",
+            clearance=9,
+        )
+        stale_dataset_table = "employees_wide"
+
+        list_tables = client.post(
+            "/chat/tool-call",
+            json={
+                "conversation_id": "agent-tools-fallback-conv",
+                "request_id": "agent-tools-fallback-list",
+                "idempotency_key": "agent-tools-fallback-list",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": stale_dataset_table,
+                "tool": {"name": "list_tables", "arguments": {}},
+            },
+            headers=headers,
+        )
+        describe = client.post(
+            "/chat/tool-call",
+            json={
+                "conversation_id": "agent-tools-fallback-conv",
+                "request_id": "agent-tools-fallback-describe",
+                "idempotency_key": "agent-tools-fallback-describe",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": stale_dataset_table,
+                "tool": {"name": "describe_table", "arguments": {"table": stale_dataset_table}},
+            },
+            headers=headers,
+        )
+        semantic = client.post(
+            "/chat/tool-call",
+            json={
+                "conversation_id": "agent-tools-fallback-conv",
+                "request_id": "agent-tools-fallback-semantic",
+                "idempotency_key": "agent-tools-fallback-semantic",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": stale_dataset_table,
+                "tool": {"name": "run_semantic_query", "arguments": {"metric": "active_employee_count", "group_by": ["department"]}},
+            },
+            headers=headers,
+        )
+        readonly_sql = client.post(
+            "/chat/tool-call",
+            json={
+                "conversation_id": "agent-tools-fallback-conv",
+                "request_id": "agent-tools-fallback-sql",
+                "idempotency_key": "agent-tools-fallback-sql",
+                "user_id": "alice",
+                "project_id": "north",
+                "dataset_table": stale_dataset_table,
+                "tool": {
+                    "name": "execute_readonly_sql",
+                    "arguments": {
+                        "sql": f'SELECT "department", COUNT(*) AS metric_value FROM "{uploaded_table}" GROUP BY 1 ORDER BY 1',
+                    },
+                },
+            },
+            headers=headers,
+        )
+
+    assert list_tables.status_code == 200
+    assert list_tables.json()["status"] == "success"
+    assert list_tables.json()["result"]["active_dataset_table"] == uploaded_table
+
+    assert describe.status_code == 200
+    describe_payload = describe.json()
+    assert describe_payload["status"] == "success"
+    assert describe_payload["result"]["table"] == uploaded_table
+
+    assert semantic.status_code == 200
+    semantic_payload = semantic.json()
+    assert semantic_payload["status"] == "success"
+    assert semantic_payload["result"]["rows"] == [{"department": "HR", "metric_value": 1}, {"department": "PM", "metric_value": 1}]
+
+    assert readonly_sql.status_code == 200
+    sql_payload = readonly_sql.json()
+    assert sql_payload["status"] == "success"
+    assert sql_payload["result"]["rows"] == [{"department": "HR", "metric_value": 1}, {"department": "PM", "metric_value": 1}]

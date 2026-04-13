@@ -193,10 +193,12 @@ class RLSInjector:
         department_column: str = "department",
         status_column: str = "status",
         enforce_viewer_status: bool = True,
+        scoped_roles: set[str] | None = None,
     ) -> None:
         self.department_column = department_column
         self.status_column = status_column
         self.enforce_viewer_status = enforce_viewer_status
+        self.scoped_roles = {item.strip().lower() for item in (scoped_roles or {"viewer"}) if item.strip()}
 
     def inject(self, sql: str, *, context: AccessContext) -> str:
         condition = self._build_condition(context)
@@ -227,6 +229,8 @@ class RLSInjector:
     def _build_condition(self, context: AccessContext) -> exp.Expression | None:
         role = context.role.strip().lower()
         if role == "admin" or context.clearance >= 9:
+            return None
+        if role not in self.scoped_roles:
             return None
 
         if not context.department:

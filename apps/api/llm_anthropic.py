@@ -284,7 +284,6 @@ class AnthropicAgentClient:
                     "error": str(error),
                     "details": details or "",
                 },
-                thinking=str(error),
             ),
         )
 

@@ -239,6 +239,15 @@ GROUNDING_TOOL_NAMES = frozenset(
     }
 )
 
+TOOL_RESULT_RECOVERY_PRIORITY = (
+    "execute_readonly_sql",
+    "run_semantic_query",
+    "get_distinct_values",
+    "sample_rows",
+    "describe_table",
+    "list_tables",
+)
+
 SUBMIT_ANSWER_TOOL_NAME = "submit_answer"
 
 
@@ -376,7 +385,12 @@ class AgentSessionStore:
                 (
                     state.conversation_id,
                     state.agent_session_id,
-                    json.dumps(state.to_record(), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(
+                        state.to_record(),
+                        ensure_ascii=False,
+                        default=str,
+                        separators=(",", ":"),
+                    ),
                     state.created_at,
                     state.updated_at,
                 ),
@@ -448,6 +462,16 @@ class AgentRuntime:
             project_id=request.project_id,
         )
         self.guardrails.validate_user_message(message=request.message, context=guard_context)
+        resolved_dataset_table = self._resolve_request_dataset_table(request=request)
+        if resolved_dataset_table and resolved_dataset_table != request.dataset_table:
+            logger.warning(
+                "agent_dataset_table_fallback conversation_id=%s request_id=%s requested=%s resolved=%s",
+                request.conversation_id,
+                request.request_id,
+                request.dataset_table,
+                resolved_dataset_table,
+            )
+            request.dataset_table = resolved_dataset_table
 
         tool_trace: list[dict[str, Any]] = []
         events: list[tuple[str, dict[str, Any]]] = []
@@ -579,8 +603,17 @@ class AgentRuntime:
             spec = self._empty_spec(request=request)
             has_grounding = _has_grounding_tool_observation(tool_trace)
             if has_grounding:
-                final_text = "Agent collected tool observations but did not return a usable structured answer."
-                result_payload = {"rows": [], "conclusion": "", "anomalies": "final_answer_parse_failed"}
+                recovered_answer = _recover_final_answer_from_tool_trace(
+                    tool_trace=tool_trace,
+                    request_message=request.message,
+                )
+                if recovered_answer is not None:
+                    spec = self._spec_from_final_answer(recovered_answer, request=request)
+                    final_text = _compose_final_text(recovered_answer)
+                    result_payload = recovered_answer
+                else:
+                    final_text = "Agent collected tool observations but did not return a usable structured answer."
+                    result_payload = {"rows": [], "conclusion": "", "anomalies": "final_answer_parse_failed"}
             else:
                 final_text = "Agent stopped to avoid ungrounded output because no successful BI tool observation was produced."
                 result_payload = {"rows": [], "conclusion": "", "anomalies": "no_grounded_tool_observation"}
@@ -630,6 +663,34 @@ class AgentRuntime:
             self._hot_sessions[conversation_id] = session
         self._store.save(session)
         return session
+
+    def _resolve_request_dataset_table(self, *, request: AgentRequest) -> str:
+        try:
+            all_tables = self.tool_service.dataset_service.list_tables(
+                user_id=request.user_id,
+                project_id=request.project_id,
+            )
+        except Exception:
+            return request.dataset_table
+
+        if not all_tables:
+            return request.dataset_table
+
+        canonical = self._match_table_name(request.dataset_table, all_tables)
+        if canonical is not None:
+            return canonical
+
+        if len(all_tables) == 1:
+            return all_tables[0]
+        return request.dataset_table
+
+    @staticmethod
+    def _match_table_name(table_name: str, candidates: list[str]) -> str | None:
+        target = table_name.strip().lower()
+        if not target:
+            return None
+        candidate_map = {item.lower(): item for item in candidates}
+        return candidate_map.get(target)
 
     def _build_system_text(
         self,
@@ -1007,7 +1068,6 @@ class AgentRuntime:
                 },
                 tool_trace=tool_use_trace,
                 tool_result=tool_result_trace,
-                thinking=final_text,
             ),
         )
         return AgentTurnResult(
@@ -1095,6 +1155,192 @@ def _has_grounding_tool_observation(tool_trace: list[dict[str, Any]]) -> bool:
         if str(item.get("tool_name") or "") in GROUNDING_TOOL_NAMES:
             return True
     return False
+
+
+def _recover_final_answer_from_tool_trace(
+    *,
+    tool_trace: list[dict[str, Any]],
+    request_message: str,
+) -> dict[str, Any] | None:
+    successful_results = [
+        item
+        for item in tool_trace
+        if item.get("event") == "tool_result"
+        and item.get("status") == "success"
+        and str(item.get("tool_name") or "") in GROUNDING_TOOL_NAMES
+    ]
+    if not successful_results:
+        return None
+
+    non_empty = _recover_final_answer_from_results(
+        successful_results=successful_results,
+        request_message=request_message,
+        require_non_empty_rows=True,
+    )
+    if non_empty is not None:
+        return non_empty
+
+    return _recover_final_answer_from_results(
+        successful_results=successful_results,
+        request_message=request_message,
+        require_non_empty_rows=False,
+    )
+
+
+def _recover_final_answer_from_results(
+    *,
+    successful_results: list[dict[str, Any]],
+    request_message: str,
+    require_non_empty_rows: bool,
+) -> dict[str, Any] | None:
+    for tool_name in TOOL_RESULT_RECOVERY_PRIORITY:
+        for item in reversed(successful_results):
+            current_tool = str(item.get("tool_name") or "")
+            if current_tool != tool_name:
+                continue
+            result = item.get("result")
+            if not isinstance(result, dict):
+                continue
+            rows = _extract_rows_from_tool_result(tool_name=current_tool, result=result)
+            if rows is None:
+                continue
+            if require_non_empty_rows and not rows:
+                continue
+
+            dimension_key, metric_key = _guess_dimension_and_metric_keys(rows)
+            chart_type = "table"
+            if rows and dimension_key and metric_key:
+                chart_type = "bar"
+            elif len(rows) == 1 and metric_key and not dimension_key:
+                chart_type = "single_value"
+
+            metric_name = str(result.get("metric") or metric_key or current_tool or "metric")
+            return {
+                "chart_type": chart_type,
+                "title": _title_from_tool_result(
+                    tool_name=current_tool,
+                    result=result,
+                    request_message=request_message,
+                ),
+                "x_key": dimension_key or "dimension",
+                "y_key": metric_key or "metric_value",
+                "series_key": None,
+                "metric_name": metric_name,
+                "rows": rows,
+                "conclusion": _conclusion_from_tool_rows(
+                    rows=rows,
+                    dimension_key=dimension_key,
+                    metric_key=metric_key,
+                ),
+                "scope": _scope_from_tool_result(tool_name=current_tool, result=result),
+                "anomalies": "agent_auto_composed_from_tool_result",
+            }
+    return None
+
+
+def _extract_rows_from_tool_result(*, tool_name: str, result: dict[str, Any]) -> list[dict[str, Any]] | None:
+    if tool_name in {"execute_readonly_sql", "run_semantic_query", "sample_rows"}:
+        return _coerce_rows(result.get("rows"))
+    if tool_name == "get_distinct_values":
+        return _coerce_rows(result.get("values"))
+    if tool_name == "describe_table":
+        return _coerce_rows(result.get("sample_rows"))
+    if tool_name == "list_tables":
+        tables = result.get("tables")
+        if isinstance(tables, list):
+            return [{"table": str(item)} for item in tables]
+        return []
+    return None
+
+
+def _coerce_rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            rows.append(dict(item))
+    return rows
+
+
+def _guess_dimension_and_metric_keys(rows: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    if not rows:
+        return None, None
+
+    first_row = rows[0]
+    if not isinstance(first_row, dict) or not first_row:
+        return None, None
+
+    keys = [str(key) for key in first_row.keys()]
+    metric_candidates = ("metric_value", "frequency", "count", "employee_count")
+    metric_key = next((key for key in metric_candidates if key in first_row and _is_number(first_row.get(key))), None)
+    if metric_key is None:
+        metric_key = next((key for key in keys if _is_number(first_row.get(key))), None)
+
+    dimension_key = next((key for key in keys if key != metric_key and not _is_number(first_row.get(key))), None)
+    return dimension_key, metric_key
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _title_from_tool_result(*, tool_name: str, result: dict[str, Any], request_message: str) -> str:
+    if tool_name == "execute_readonly_sql":
+        return "SQL 查询结果"
+    if tool_name == "run_semantic_query":
+        metric = str(result.get("metric") or "").strip()
+        return f"{metric} 查询结果" if metric else "语义查询结果"
+    if tool_name == "get_distinct_values":
+        field = str(result.get("field") or "字段").strip() or "字段"
+        return f"{field} 值分布"
+    if tool_name == "sample_rows":
+        table = str(result.get("table") or "").strip()
+        return f"{table} 样本记录" if table else "样本记录"
+    if tool_name == "describe_table":
+        table = str(result.get("table") or "").strip()
+        return f"{table} 表结构与样本" if table else "表结构与样本"
+    if tool_name == "list_tables":
+        return "可用数据表"
+    trimmed = request_message.strip()
+    return trimmed[:60] if trimmed else "查询结果"
+
+
+def _scope_from_tool_result(*, tool_name: str, result: dict[str, Any]) -> str:
+    row_count = result.get("row_count")
+    if isinstance(row_count, int):
+        return f"来源工具: {tool_name}，返回 {row_count} 行。"
+    return f"来源工具: {tool_name}。"
+
+
+def _conclusion_from_tool_rows(
+    *,
+    rows: list[dict[str, Any]],
+    dimension_key: str | None,
+    metric_key: str | None,
+) -> str:
+    if not rows:
+        return "已基于成功工具结果自动生成答案，但当前结果为空。"
+
+    if dimension_key and metric_key:
+        ranked = [row for row in rows if _is_number(row.get(metric_key))]
+        if ranked:
+            top_row = max(ranked, key=lambda row: float(row.get(metric_key) or 0))
+            return (
+                "已基于成功工具结果自动生成答案。"
+                f" {dimension_key}={top_row.get(dimension_key)} 的 {metric_key} 最高，为 {top_row.get(metric_key)}。"
+            )
+        return f"已基于成功工具结果自动生成答案，共返回 {len(rows)} 行。"
+
+    if metric_key:
+        numeric_values = [float(row.get(metric_key) or 0) for row in rows if _is_number(row.get(metric_key))]
+        if numeric_values:
+            return (
+                "已基于成功工具结果自动生成答案。"
+                f" 共返回 {len(rows)} 行，{metric_key} 合计 {round(sum(numeric_values), 2)}。"
+            )
+
+    return f"已基于成功工具结果自动生成答案，共返回 {len(rows)} 行。"
 
 
 

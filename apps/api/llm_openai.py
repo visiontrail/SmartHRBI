@@ -260,7 +260,6 @@ class OpenAIAgentLoopClient:
                     "error": str(error),
                     "details": details or "",
                 },
-                thinking=str(error),
             ),
         )
 
@@ -580,7 +579,6 @@ class OpenAICompatibleToolSelector:
                     "error": str(error),
                     "details": details or "",
                 },
-                thinking=str(error),
             ),
         )
 

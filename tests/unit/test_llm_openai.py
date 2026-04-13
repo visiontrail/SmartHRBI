@@ -199,7 +199,7 @@ def test_openai_selector_wraps_timeout_as_tool_selection_error(monkeypatch, capl
     assert '\\"message\\": \\"Hi\\"' in caplog.text
     assert "输入AI的内容" in caplog.text
     assert "AI输出的内容" in caplog.text
-    assert "Thinking内容" in caplog.text
+    assert "Thinking内容" not in caplog.text
 
 
 def test_agent_loop_client_logs_request_response_and_thinking(monkeypatch, caplog) -> None:

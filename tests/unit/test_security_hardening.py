@@ -97,6 +97,25 @@ def test_rls_injector_handles_parse_context_and_where_merging() -> None:
     )
 
 
+def test_rls_injector_skips_department_scoping_for_hr_role() -> None:
+    injector = RLSInjector()
+    original_sql = "SELECT * FROM dataset_scope"
+    assert (
+        injector.inject(
+            original_sql,
+            context=AccessContext(user_id="u-hr", role="hr", department="HR", clearance=1),
+        )
+        == original_sql
+    )
+    assert (
+        injector.inject(
+            original_sql,
+            context=AccessContext(user_id="u-hr", role="hr", department=None, clearance=1),
+        )
+        == original_sql
+    )
+
+
 def test_secure_query_sql_maps_access_denied_and_preserves_guard_errors() -> None:
     guard = SQLReadOnlyValidator(
         allowed_tables={"dataset_scope"},
