@@ -14,6 +14,10 @@ type ChatState = {
   setActiveSession: (sessionId: string | null) => void;
   setMessages: (sessionId: string, messages: ChatMessage[]) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
+  touchSession: (
+    sessionId: string,
+    updates: { lastMessage?: string; messageDelta?: number; title?: string }
+  ) => void;
   setComposerText: (text: string) => void;
   setIsComposing: (value: boolean) => void;
 
@@ -58,6 +62,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.messagesBySession,
         [sessionId]: [...(state.messagesBySession[sessionId] ?? []), message],
       },
+    })),
+
+  touchSession: (sessionId, updates) =>
+    set((state) => ({
+      sessions: state.sessions.map((session) => {
+        if (session.id !== sessionId) {
+          return session;
+        }
+
+        const nextMessageCount = Math.max(
+          0,
+          session.messageCount + Math.max(0, Math.trunc(updates.messageDelta ?? 0))
+        );
+        return {
+          ...session,
+          ...(updates.title ? { title: updates.title } : {}),
+          ...(updates.lastMessage ? { lastMessage: updates.lastMessage } : {}),
+          messageCount: nextMessageCount,
+          updatedAt: new Date().toISOString(),
+        };
+      }),
     })),
 
   setComposerText: (text) => set({ composerText: text }),

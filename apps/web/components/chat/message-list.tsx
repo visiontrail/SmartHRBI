@@ -7,8 +7,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUIStore } from "@/stores/ui-store";
 import { Loader2 } from "lucide-react";
 
+const EMPTY_MESSAGES: ReturnType<typeof useChatStore.getState>["messagesBySession"][string] = [];
+
 export function MessageList({ sessionId }: { sessionId: string }) {
-  const messages = useChatStore((s) => s.messagesBySession[sessionId] ?? []);
+  const messages = useChatStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
   const isSending = useUIStore((s) => s.isSending);
   const bottomRef = useRef<HTMLDivElement>(null);
 

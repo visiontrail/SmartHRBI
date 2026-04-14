@@ -1,4 +1,4 @@
-export type ChartType =
+export type KnownChartType =
   | "bar"
   | "line"
   | "pie"
@@ -7,9 +7,26 @@ export type ChartType =
   | "scatter"
   | "radar"
   | "funnel"
+  | "radialBar"
+  | "composed"
   | "gauge"
   | "heatmap"
-  | "treemap";
+  | "treemap"
+  | "sankey"
+  | "sunburst"
+  | "boxplot"
+  | "candlestick"
+  | "graph"
+  | "map"
+  | "parallel"
+  | "wordCloud"
+  | "table"
+  | "single_value"
+  | "note"
+  | "empty";
+
+// Preserve backend-provided chart types verbatim so the frontend never silently downgrades them.
+export type ChartType = KnownChartType | (string & {});
 
 export type ChartSpec = {
   chartType: ChartType;
