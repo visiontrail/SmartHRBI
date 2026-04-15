@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from apps.api.agent_runtime import _recover_final_answer_from_tool_trace
+from apps.api.agent_runtime import (
+    AgentRequest,
+    AgentSessionState,
+    SDKRunContext,
+    _recover_final_answer_from_tool_trace,
+    clear_agent_runtime_cache,
+    get_agent_runtime,
+)
+from apps.api.config import get_settings
 
 
 def test_recover_final_answer_prefers_sql_result_over_later_distinct_values() -> None:
@@ -45,6 +53,60 @@ def test_recover_final_answer_prefers_sql_result_over_later_distinct_values() ->
     assert answer["y_key"] == "employee_count"
     assert answer["rows"] == tool_trace[0]["result"]["rows"]
     assert answer["anomalies"] == "agent_auto_composed_from_tool_result"
+
+
+def test_sdk_options_target_deepseek_anthropic_gateway(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'views.db'}")
+    monkeypatch.setenv("MODEL_PROVIDER_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("AI_API_KEY", "deepseek-test-key")
+    monkeypatch.setenv("AI_MODEL", "deepseek-chat")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    monkeypatch.setenv("AUTH_SECRET", "secret")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    get_settings.cache_clear()
+    clear_agent_runtime_cache()
+
+    runtime = get_agent_runtime()
+    request = AgentRequest(
+        conversation_id="conv-deepseek",
+        request_id="req-deepseek",
+        user_id="alice",
+        project_id="north",
+        dataset_table="employees",
+        message="按部门统计人数",
+        role="viewer",
+        department="HR",
+        clearance=1,
+    )
+    session = AgentSessionState(
+        conversation_id="conv-deepseek",
+        agent_session_id="session-deepseek",
+    )
+    run_context = SDKRunContext(
+        request=request,
+        session=session,
+        events=[],
+        tool_trace=[],
+    )
+
+    options = runtime._build_sdk_options(
+        request=request,
+        session=session,
+        system_text="system",
+        run_context=run_context,
+    )
+
+    assert options.model == "deepseek-chat"
+    assert options.env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic"
+    assert options.env["ANTHROPIC_API_KEY"] == "deepseek-test-key"
+    assert options.env["ANTHROPIC_AUTH_TOKEN"] == "deepseek-test-key"
+    assert options.env["ANTHROPIC_MODEL"] == "deepseek-chat"
+    assert options.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek-chat"
+    assert options.env["API_TIMEOUT_MS"] == "600000"
+    assert options.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    clear_agent_runtime_cache()
+    get_settings.cache_clear()
 
 
 def test_recover_final_answer_returns_none_without_successful_grounding() -> None:

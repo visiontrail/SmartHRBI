@@ -135,9 +135,13 @@ make docker-down       # 停止 Docker Compose
 
 ```env
 DATABASE_URL=sqlite:///./data/uploads/state/ai_views.sqlite3
-MODEL_PROVIDER_URL=http://localhost:11434
+MODEL_PROVIDER_URL=https://api.deepseek.com
 AI_API_KEY=
-AI_MODEL=claude-sonnet-4-5
+AI_MODEL=deepseek-chat
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-chat
+API_TIMEOUT_MS=600000
 CLAUDE_AGENT_SDK_ENABLED=true
 AUTH_SECRET=replace-with-a-strong-secret
 UPLOAD_DIR=./data/uploads
@@ -163,7 +167,7 @@ NEXT_PUBLIC_DEFAULT_CLEARANCE=1
 NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide
 ```
 
-Agentic Query 通过 Claude Agent SDK 运行；`AI_API_KEY` 会传给 SDK CLI 作为 `ANTHROPIC_API_KEY`，`AI_MODEL` 建议使用 Claude 模型名。`MODEL_PROVIDER_URL` 仍保留给非 Agent 的 schema inference 等兼容路径。
+Agentic Query 通过 Claude Agent SDK 运行，但默认接入 DeepSeek 的 Anthropic 兼容接口；`AI_API_KEY` 会传给 SDK CLI 作为 `ANTHROPIC_API_KEY` 与 `ANTHROPIC_AUTH_TOKEN`，`ANTHROPIC_BASE_URL` 默认指向 `https://api.deepseek.com/anthropic`，`AI_MODEL` 默认使用 `deepseek-chat`。如果需要单独覆盖 Claude Code CLI 的 token，可填写 `ANTHROPIC_AUTH_TOKEN`。`MODEL_PROVIDER_URL` 仍保留给非 Agent 的 schema inference 等 OpenAI-compatible 兼容路径。
 
 ## Agentic Query
 
@@ -173,10 +177,10 @@ Agent 相关配置：
 
 ```env
 CLAUDE_AGENT_SDK_ENABLED=true
-AGENT_MAX_TOOL_STEPS=6
-AGENT_MAX_SQL_ROWS=200
+AGENT_MAX_TOOL_STEPS=20
+AGENT_MAX_SQL_ROWS=2000
 AGENT_MAX_SQL_SCAN_ROWS=10000
-AGENT_TIMEOUT_SECONDS=25
+AGENT_TIMEOUT_SECONDS=120
 ```
 
 Agent 工具面限制在 BI 相关操作：

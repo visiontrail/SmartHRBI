@@ -17,8 +17,18 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     model_provider_url: str = Field(alias="MODEL_PROVIDER_URL")
     ai_api_key: str = Field(default="", alias="AI_API_KEY")
-    ai_model: str = Field(default="claude-sonnet-4-5", alias="AI_MODEL")
+    ai_model: str = Field(default="deepseek-chat", alias="AI_MODEL")
     ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
+    anthropic_base_url: str = Field(
+        default="https://api.deepseek.com/anthropic",
+        alias="ANTHROPIC_BASE_URL",
+    )
+    anthropic_auth_token: str = Field(default="", alias="ANTHROPIC_AUTH_TOKEN")
+    anthropic_default_haiku_model: str = Field(
+        default="",
+        alias="ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    )
+    api_timeout_ms: int = Field(default=600000, alias="API_TIMEOUT_MS")
     claude_agent_sdk_enabled: bool = Field(default=True, alias="CLAUDE_AGENT_SDK_ENABLED")
     agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")
     agent_max_sql_rows: int = Field(default=200, alias="AGENT_MAX_SQL_ROWS")
@@ -55,6 +65,13 @@ class Settings(BaseSettings):
     def validate_ai_timeout_seconds(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("AI_TIMEOUT_SECONDS must be greater than 0")
+        return value
+
+    @field_validator("api_timeout_ms")
+    @classmethod
+    def validate_api_timeout_ms(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("API_TIMEOUT_MS must be greater than 0")
         return value
 
     @field_validator("agent_timeout_seconds")

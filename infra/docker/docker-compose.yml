@@ -11,10 +11,18 @@ services:
       APP_NAME: SmartHRBI API
       APP_ENV: production
       DATABASE_URL: sqlite:////app/data/uploads/state/ai_views.sqlite3
-      MODEL_PROVIDER_URL: ${MODEL_PROVIDER_URL:-http://127.0.0.1:11434}
+      MODEL_PROVIDER_URL: ${MODEL_PROVIDER_URL:-https://api.deepseek.com}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
-      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-20}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-120}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-deepseek-chat}
+      API_TIMEOUT_MS: ${API_TIMEOUT_MS:-600000}
+      AGENT_MAX_TOOL_STEPS: ${AGENT_MAX_TOOL_STEPS:-20}
+      AGENT_MAX_SQL_ROWS: ${AGENT_MAX_SQL_ROWS:-2000}
+      AGENT_MAX_SQL_SCAN_ROWS: ${AGENT_MAX_SQL_SCAN_ROWS:-10000}
+      AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-120}
       AUTH_SECRET: docker-dev-secret
       LOG_LEVEL: INFO
       UPLOAD_DIR: /app/data/uploads

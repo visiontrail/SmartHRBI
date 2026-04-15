@@ -49,6 +49,10 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
                 "AI_API_KEY=test-api-key",
                 "AI_MODEL=qwen-plus",
                 "AI_TIMEOUT_SECONDS=12",
+                "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic",
+                "ANTHROPIC_AUTH_TOKEN=deepseek-agent-key",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-chat",
+                "API_TIMEOUT_MS=600000",
                 "AUTH_SECRET=secret",
                 "LOG_LEVEL=INFO",
                 "UPLOAD_DIR=./uploads",
@@ -64,6 +68,10 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
         "AI_API_KEY",
         "AI_MODEL",
         "AI_TIMEOUT_SECONDS",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "API_TIMEOUT_MS",
         "AUTH_SECRET",
         "LOG_LEVEL",
         "UPLOAD_DIR",
@@ -76,6 +84,10 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
     assert settings.ai_api_key == "test-api-key"
     assert settings.ai_model == "qwen-plus"
     assert settings.ai_timeout_seconds == 12
+    assert settings.anthropic_base_url == "https://api.deepseek.com/anthropic"
+    assert settings.anthropic_auth_token == "deepseek-agent-key"
+    assert settings.anthropic_default_haiku_model == "deepseek-chat"
+    assert settings.api_timeout_ms == 600000
 
 
 def test_agent_engine_requires_claude_agent_sdk_toggle(monkeypatch, tmp_path) -> None:

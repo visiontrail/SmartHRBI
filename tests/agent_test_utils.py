@@ -28,7 +28,13 @@ def set_agent_env(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'views.db'}")
-    monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.setenv("MODEL_PROVIDER_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("AI_API_KEY", "deepseek-test-key")
+    monkeypatch.setenv("AI_MODEL", "deepseek-chat")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek-chat")
+    monkeypatch.setenv("API_TIMEOUT_MS", "600000")
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
