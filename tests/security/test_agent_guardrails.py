@@ -5,8 +5,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from apps.api.agent_guardrails import AgentGuardrailContext, AgentGuardrailError, AgentGuardrails
+from apps.api.agent_runtime import get_agent_runtime
 from apps.api.main import app
-from tests.agent_test_utils import read_sse_events, set_agent_env, upload_dataset
+from tests.agent_test_utils import install_scripted_sdk_client, read_sse_events, set_agent_env, upload_dataset
 from tests.auth_utils import auth_headers
 
 
@@ -85,6 +86,32 @@ def test_agent_tool_audit_events_are_recorded(monkeypatch, tmp_path: Path) -> No
             role="admin",
             department="HR",
             clearance=9,
+        )
+        runtime = get_agent_runtime()
+        rows = [{"hire_year": 2022, "metric_value": 1}, {"hire_year": 2023, "metric_value": 1}]
+        install_scripted_sdk_client(
+            runtime,
+            lambda prompt, options: {  # type: ignore[no-untyped-def]
+                "tool_calls": [
+                    {
+                        "name": "execute_readonly_sql",
+                        "arguments": {"sql": 'SELECT "hire_year", COUNT(*) FROM dataset GROUP BY 1'},
+                        "result": {"rows": rows},
+                    }
+                ],
+                "final_answer": {
+                    "chart_type": "bar",
+                    "title": "入职年份统计",
+                    "x_key": "hire_year",
+                    "y_key": "metric_value",
+                    "series_key": None,
+                    "metric_name": "headcount",
+                    "rows": rows,
+                    "conclusion": "按入职年份统计。",
+                    "scope": "当前数据集",
+                    "anomalies": "none",
+                },
+            },
         )
         with client.stream(
             "POST",

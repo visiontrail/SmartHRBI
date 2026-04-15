@@ -12,25 +12,38 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+import anyio
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ClaudeSDKError,
+    HookMatcher,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ResultMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolAnnotations,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+    create_sdk_mcp_server,
+    tool,
+)
+
 from .agent_guardrails import AgentGuardrailContext, AgentGuardrailError, AgentGuardrails
 from .agent_logging import format_agent_debug_blocks
 from .agent_prompting import build_agent_system_prompt
 from .audit import get_audit_logger
 from .chart_strategy import ChartStrategyRouter
 from .config import get_settings
-from .llm_anthropic import (
-    AnthropicAgentClient,
-    AnthropicLLMError,
-    AnthropicLLMResponse,
-    AnthropicToolCall,
-    build_anthropic_content_blocks,
-)
 from .tool_calling import ToolCall, ToolCallRequest, ToolCallResponse, get_tool_calling_service
 
 logger = logging.getLogger("smarthrbi.agent")
 
 # ---------------------------------------------------------------------------
-# Tool definitions (converted to Anthropic format by the LLM client)
+# Tool definitions exposed as Claude Agent SDK in-process MCP tools.
 # ---------------------------------------------------------------------------
 
 AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -183,85 +196,6 @@ AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "submit_answer",
-            "description": (
-                "Submit the final structured answer when you have gathered enough data. "
-                "This produces the chart or table that the user will see.\n\n"
-                "## Chart type guide\n"
-                "- bar: compare categories side-by-side.\n"
-                "- line: show trends over time.\n"
-                "- pie: show proportion / share of a whole.\n"
-                "- area: like line but filled, good for volume over time.\n"
-                "- scatter: show correlation between two numeric variables.\n"
-                "- radar: compare multiple dimensions for a few items.\n"
-                "- treemap: show hierarchical part-of-whole; each rectangle = one item, "
-                "grouped by a category dimension. Set x_key to the grouping dimension "
-                "(e.g. department), name_key to the label shown inside each box "
-                "(e.g. employee name), and y_key to the size metric (or omit for equal sizing).\n"
-                "- funnel: show conversion / pipeline stages.\n"
-                "- radialBar: circular bar chart for ranking/comparison.\n"
-                "- composed: overlay bar + line + area on the same axes.\n"
-                "- heatmap: 2D grid coloured by intensity (uses ECharts).\n"
-                "- gauge: single KPI dial (uses ECharts).\n"
-                "- sankey: flow diagram between stages (uses ECharts).\n"
-                "- sunburst: nested ring hierarchy (uses ECharts).\n"
-                "- boxplot: statistical distribution (uses ECharts).\n"
-                "- graph: network / relationship diagram (uses ECharts).\n"
-                "- map: geographic choropleth map (uses ECharts). Best for showing province- or "
-                "city-level metrics on a China map. x_key = region/province name column, "
-                "y_key = numeric metric column. Province names can be short form like '北京' or "
-                "full form like '北京市'.\n"
-                "- table: structured row/column table.\n"
-                "- single_value: display one big number.\n"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "chart_type": {
-                        "type": "string",
-                        "enum": [
-                            "bar", "line", "pie", "area", "scatter", "radar",
-                            "treemap", "funnel", "radialBar", "composed",
-                            "heatmap", "gauge", "sankey", "sunburst",
-                            "boxplot", "graph", "map",
-                            "table", "single_value",
-                        ],
-                        "description": "Chart type for visualization",
-                    },
-                    "title": {"type": "string", "description": "Human-readable title"},
-                    "x_key": {"type": "string", "description": "Dimension / grouping column name"},
-                    "y_key": {"type": "string", "description": "Metric / size column name"},
-                    "name_key": {
-                        "type": "string",
-                        "description": (
-                            "Label column name shown inside each element "
-                            "(e.g. employee name in treemap boxes). Only used for treemap/graph."
-                        ),
-                    },
-                    "series_key": {
-                        "type": "string",
-                        "description": "Series column name for multi-series charts, or null",
-                    },
-                    "metric_name": {"type": "string", "description": "Short internal metric name"},
-                    "rows": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "Array of data objects for the chart",
-                    },
-                    "conclusion": {"type": "string", "description": "1-2 sentence insight from the data"},
-                    "scope": {"type": "string", "description": "What the query covers, filters applied"},
-                    "anomalies": {
-                        "type": "string",
-                        "description": "Empty result reason, access restriction, or 'none'",
-                    },
-                },
-                "required": ["chart_type", "title", "rows", "conclusion"],
-            },
-        },
-    },
 ]
 
 GROUNDING_TOOL_NAMES = frozenset(
@@ -287,7 +221,74 @@ TOOL_RESULT_RECOVERY_PRIORITY = (
     "list_tables",
 )
 
-SUBMIT_ANSWER_TOOL_NAME = "submit_answer"
+SDK_MCP_SERVER_NAME = "smarthrbi"
+SDK_RUNTIME_BACKEND = "claude-agent-sdk"
+SDK_TOOL_DEFINITIONS = AGENT_TOOL_DEFINITIONS
+SDK_TOOL_NAMES = tuple(
+    str(item.get("function", {}).get("name") or "")
+    for item in SDK_TOOL_DEFINITIONS
+    if item.get("function", {}).get("name")
+)
+SDK_ALLOWED_TOOL_NAMES = tuple(
+    f"mcp__{SDK_MCP_SERVER_NAME}__{name}" for name in SDK_TOOL_NAMES
+)
+FINAL_ANSWER_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "chart_type": {
+            "type": "string",
+            "enum": [
+                "bar",
+                "line",
+                "pie",
+                "area",
+                "scatter",
+                "radar",
+                "treemap",
+                "funnel",
+                "radialBar",
+                "composed",
+                "heatmap",
+                "gauge",
+                "sankey",
+                "sunburst",
+                "boxplot",
+                "graph",
+                "map",
+                "table",
+                "single_value",
+            ],
+            "description": "Chart type for visualization",
+        },
+        "title": {"type": "string", "description": "Human-readable title"},
+        "x_key": {"type": ["string", "null"], "description": "Dimension / grouping column name"},
+        "y_key": {"type": ["string", "null"], "description": "Metric / size column name"},
+        "name_key": {
+            "type": ["string", "null"],
+            "description": (
+                "Label column name shown inside each element "
+                "(e.g. employee name in treemap boxes). Only used for treemap/graph."
+            ),
+        },
+        "series_key": {
+            "type": ["string", "null"],
+            "description": "Series column name for multi-series charts, or null",
+        },
+        "metric_name": {"type": ["string", "null"], "description": "Short internal metric name"},
+        "rows": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Array of data objects for the chart",
+        },
+        "conclusion": {"type": "string", "description": "1-2 sentence insight from the data"},
+        "scope": {"type": ["string", "null"], "description": "What the query covers, filters applied"},
+        "anomalies": {
+            "type": ["string", "null"],
+            "description": "Empty result reason, access restriction, or 'none'",
+        },
+    },
+    "required": ["chart_type", "title", "rows", "conclusion"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +335,7 @@ class AgentSessionState:
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
     turn_count: int = 0
-    runtime_backend: str = "anthropic-agent-loop"
+    runtime_backend: str = SDK_RUNTIME_BACKEND
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -362,7 +363,7 @@ class AgentSessionState:
             created_at=str(record.get("created_at") or _utc_now()),
             updated_at=str(record.get("updated_at") or _utc_now()),
             turn_count=int(record.get("turn_count") or 0),
-            runtime_backend=str(record.get("runtime_backend") or "anthropic-agent-loop"),
+            runtime_backend=str(record.get("runtime_backend") or SDK_RUNTIME_BACKEND),
         )
 
 
@@ -377,6 +378,34 @@ class AgentTurnResult:
     final_status: str
     spec: dict[str, Any]
     ai_state: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SDKToolInvocationRecord:
+    tool_name: str
+    arguments: dict[str, Any]
+    step: int
+    tool_use_id: str | None = None
+    tool_use_emitted: bool = False
+    tool_result_emitted: bool = False
+    status: str = "pending"
+    result_data: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    from_cache: bool = False
+
+
+@dataclass(slots=True)
+class SDKRunContext:
+    request: AgentRequest
+    session: AgentSessionState
+    events: list[tuple[str, dict[str, Any]]]
+    tool_trace: list[dict[str, Any]]
+    next_tool_step: int = 1
+    planning_emitted: bool = False
+    text_blocks: list[str] = field(default_factory=list)
+    result_message: ResultMessage | None = None
+    records_by_key: dict[str, SDKToolInvocationRecord] = field(default_factory=dict)
+    records_by_tool_use_id: dict[str, SDKToolInvocationRecord] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +492,7 @@ class AgentSessionStore:
 
 
 # ---------------------------------------------------------------------------
-# Agent runtime — Anthropic SDK agent loop
+# Agent runtime — Claude Agent SDK client and MCP tools
 # ---------------------------------------------------------------------------
 
 
@@ -480,19 +509,16 @@ class AgentRuntime:
         )
         self._hot_sessions: dict[str, AgentSessionState] = {}
         self._lock = Lock()
-        self._llm = AnthropicAgentClient(
-            base_url=settings.model_provider_url,
-            api_key=settings.ai_api_key,
-            model=settings.ai_model,
-            timeout_seconds=settings.ai_timeout_seconds,
-            tool_definitions=AGENT_TOOL_DEFINITIONS,
-        )
+        self._sdk_client_factory = ClaudeSDKClient
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
     def run_turn(self, request: AgentRequest) -> AgentTurnResult:
+        return anyio.run(self._run_turn_with_sdk, request)
+
+    async def _run_turn_with_sdk(self, request: AgentRequest) -> AgentTurnResult:
         started = time.perf_counter()
         session = self._load_session(request.conversation_id)
         guard_context = AgentGuardrailContext(
@@ -514,9 +540,17 @@ class AgentRuntime:
 
         tool_trace: list[dict[str, Any]] = []
         events: list[tuple[str, dict[str, Any]]] = []
-
         system_text = self._build_system_text(request=request, session=session)
-        messages = self._build_initial_messages(request=request, session=session)
+        run_context = SDKRunContext(
+            request=request,
+            session=session,
+            events=events,
+            tool_trace=tool_trace,
+        )
+        self._emit_planning_event(
+            run_context,
+            f"Analyzing request for dataset `{request.dataset_table}`.",
+        )
 
         logger.info(
             "agent_turn_start_debug conversation_id=%s request_id=%s agent_session_id=%s\n%s",
@@ -530,118 +564,65 @@ class AgentRuntime:
                     "agent_session_id": session.agent_session_id,
                     "dataset_table": request.dataset_table,
                     "message": request.message,
-                    "messages": messages,
+                    "runtime_backend": SDK_RUNTIME_BACKEND,
+                    "sdk_tools": list(SDK_ALLOWED_TOOL_NAMES),
                 },
             ),
         )
 
-        # ---------- Anthropic agent loop ----------
-        max_steps = self.settings.agent_max_tool_steps
         final_answer: dict[str, Any] | None = None
+        options = self._build_sdk_options(
+            request=request,
+            session=session,
+            system_text=system_text,
+            run_context=run_context,
+        )
 
-        for step in range(1, max_steps + 1):
-            logger.info(
-                "agent_loop_step conversation_id=%s request_id=%s step=%s/%s",
-                request.conversation_id,
-                request.request_id,
-                step,
-                max_steps,
+        try:
+            async with self._sdk_client_factory(options=options) as client:
+                await client.query(request.message, session_id=session.agent_session_id)
+                async for message in client.receive_response():
+                    candidate = self._consume_sdk_message(message=message, run_context=run_context)
+                    if candidate is not None:
+                        final_answer = candidate
+        except ClaudeSDKError as exc:
+            raise AgentRuntimeError(
+                code="AGENT_SDK_FAILED",
+                message=f"Claude Agent SDK failed: {exc}",
+                should_fallback=False,
+            ) from exc
+        except Exception as exc:
+            raise AgentRuntimeError(
+                code="AGENT_SDK_FAILED",
+                message=f"Claude Agent SDK failed: {exc}",
+                should_fallback=False,
+            ) from exc
+
+        self._flush_pending_sdk_tool_results(run_context)
+
+        if final_answer is None and run_context.text_blocks:
+            final_answer = _parse_final_answer("\n".join(run_context.text_blocks))
+        if final_answer is None and run_context.result_message and run_context.result_message.is_error:
+            details = run_context.result_message.errors or [run_context.result_message.result or "unknown SDK error"]
+            raise AgentRuntimeError(
+                code="AGENT_SDK_FAILED",
+                message="Claude Agent SDK returned an error: " + "; ".join(str(item) for item in details),
+                should_fallback=False,
             )
-
-            try:
-                llm_response = self._llm.chat(
-                    system=system_text,
-                    messages=messages,
-                    conversation_id=request.conversation_id,
-                    step=step,
-                )
-            except AnthropicLLMError as exc:
-                raise AgentRuntimeError(
-                    code="AGENT_LLM_FAILED",
-                    message=f"LLM call failed at step {step}: {exc.message}",
-                    should_fallback=False,
-                ) from exc
-
-            # Use model's own thinking/reasoning for planning events
-            if step == 1:
-                events.extend(
-                    self._extract_planning_events(
-                        llm_response=llm_response,
-                        request=request,
-                        session=session,
-                    )
-                )
-
-            logger.info(
-                "agent_loop_step_debug conversation_id=%s request_id=%s step=%s\n%s",
-                request.conversation_id,
-                request.request_id,
-                step,
-                format_agent_debug_blocks(
-                    ai_output={
-                        "conversation_id": request.conversation_id,
-                        "request_id": request.request_id,
-                        "step": step,
-                        "stop_reason": llm_response.stop_reason,
-                    },
-                    thinking=llm_response.thinking or llm_response.content,
-                ),
-            )
-
-            # No tool calls → model produced a text-only final response
-            if not llm_response.tool_calls:
-                candidate_answer = _parse_final_answer(llm_response.content)
-                if candidate_answer is not None:
-                    final_answer = candidate_answer
-                break
-
-            # Check if the model submitted a structured answer via submit_answer
-            submit_call = next(
-                (tc for tc in llm_response.tool_calls if tc.tool_name == SUBMIT_ANSWER_TOOL_NAME),
-                None,
-            )
-
-            # Build assistant message (OpenAI format) and add to history
-            assistant_msg = build_anthropic_content_blocks(llm_response)
-            messages.append(assistant_msg)
-
-            # Execute tool calls (submit_answer is acknowledged, not executed)
-            for tc in llm_response.tool_calls:
-                if tc.tool_name == SUBMIT_ANSWER_TOOL_NAME:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.call_id,
-                        "content": '{"status": "accepted"}',
-                    })
-                    continue
-
-                tool_result = self._execute_tool_call(
-                    tool_call=tc,
-                    request=request,
-                    session=session,
-                    tool_trace=tool_trace,
-                    events=events,
-                    step=step,
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.call_id,
-                    "content": json.dumps(tool_result, ensure_ascii=False, default=str),
-                })
-
-            if submit_call:
-                final_answer = submit_call.arguments
-                break
+        if run_context.result_message and run_context.result_message.session_id:
+            session.agent_session_id = run_context.result_message.session_id
+        session.runtime_backend = SDK_RUNTIME_BACKEND
 
         # ------ Build chart spec from final answer ------
-        if final_answer is not None:
+        has_current_grounding = _has_grounding_tool_observation(tool_trace)
+        has_prior_grounding = _has_grounding_tool_observation(session.last_tool_trace)
+        if final_answer is not None and (has_current_grounding or has_prior_grounding):
             spec = self._spec_from_final_answer(final_answer, request=request)
             final_text = _compose_final_text(final_answer)
             result_payload = final_answer
         else:
             spec = self._empty_spec(request=request)
-            has_grounding = _has_grounding_tool_observation(tool_trace)
-            if has_grounding:
+            if has_current_grounding:
                 recovered_answer = _recover_final_answer_from_tool_trace(
                     tool_trace=tool_trace,
                     request_message=request.message,
@@ -681,6 +662,565 @@ class AgentRuntime:
     def get_persisted_session(self, conversation_id: str) -> AgentSessionState | None:
         return self._store.load(conversation_id)
 
+    def _build_sdk_options(
+        self,
+        *,
+        request: AgentRequest,
+        session: AgentSessionState,
+        system_text: str,
+        run_context: SDKRunContext,
+    ) -> ClaudeAgentOptions:
+        async def can_use_tool(
+            tool_name: str,
+            input_data: dict[str, Any],
+            permission_context: Any,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            return await self._sdk_can_use_tool(
+                tool_name=tool_name,
+                input_data=input_data,
+                permission_context=permission_context,
+                run_context=run_context,
+            )
+
+        async def pre_tool_use(
+            input_data: dict[str, Any],
+            tool_use_id: str | None,
+            hook_context: dict[str, Any],
+        ) -> dict[str, Any]:
+            return await self._sdk_pre_tool_use_hook(
+                input_data=input_data,
+                tool_use_id=tool_use_id,
+                hook_context=hook_context,
+                run_context=run_context,
+            )
+
+        async def post_tool_use(
+            input_data: dict[str, Any],
+            tool_use_id: str | None,
+            hook_context: dict[str, Any],
+        ) -> dict[str, Any]:
+            return await self._sdk_post_tool_use_hook(
+                input_data=input_data,
+                tool_use_id=tool_use_id,
+                hook_context=hook_context,
+                run_context=run_context,
+            )
+
+        async def post_tool_failure(
+            input_data: dict[str, Any],
+            tool_use_id: str | None,
+            hook_context: dict[str, Any],
+        ) -> dict[str, Any]:
+            return await self._sdk_post_tool_failure_hook(
+                input_data=input_data,
+                tool_use_id=tool_use_id,
+                hook_context=hook_context,
+                run_context=run_context,
+            )
+
+        server = create_sdk_mcp_server(
+            name=SDK_MCP_SERVER_NAME,
+            version="1.0.0",
+            tools=self._build_sdk_tools(run_context=run_context),
+        )
+        env: dict[str, str] = {}
+        if self.settings.ai_api_key:
+            env["ANTHROPIC_API_KEY"] = self.settings.ai_api_key
+
+        model = self.settings.ai_model if self.settings.ai_model.startswith("claude") else None
+        resume_session = session.agent_session_id if session.turn_count > 0 else None
+
+        return ClaudeAgentOptions(
+            tools=[],
+            system_prompt=system_text,
+            mcp_servers={SDK_MCP_SERVER_NAME: server},
+            can_use_tool=can_use_tool,
+            hooks={
+                "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use])],
+                "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use])],
+                "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[post_tool_failure])],
+            },
+            permission_mode="default",
+            session_id=None if resume_session else session.agent_session_id,
+            resume=resume_session,
+            max_turns=self.settings.agent_max_tool_steps,
+            model=model,
+            cwd=str(Path.cwd()),
+            env=env,
+            output_format={"type": "json_schema", "schema": FINAL_ANSWER_OUTPUT_SCHEMA},
+        )
+
+    def _build_sdk_tools(self, *, run_context: SDKRunContext) -> list[Any]:
+        sdk_tools: list[Any] = []
+        for definition in SDK_TOOL_DEFINITIONS:
+            function_def = definition.get("function", {})
+            tool_name = str(function_def.get("name") or "")
+            if not tool_name:
+                continue
+            description = str(function_def.get("description") or tool_name)
+            input_schema = function_def.get("parameters") or {"type": "object", "properties": {}}
+            is_read_only = tool_name != "save_view"
+            annotations = ToolAnnotations(
+                readOnlyHint=is_read_only,
+                destructiveHint=not is_read_only,
+                idempotentHint=is_read_only,
+                openWorldHint=False,
+            )
+
+            async def handler(args: dict[str, Any], _tool_name: str = tool_name) -> dict[str, Any]:
+                return await self._invoke_sdk_tool(
+                    run_context=run_context,
+                    tool_name=_tool_name,
+                    arguments=args,
+                )
+
+            sdk_tools.append(
+                tool(
+                    tool_name,
+                    description,
+                    input_schema,
+                    annotations=annotations,
+                )(handler)
+            )
+        return sdk_tools
+
+    async def _sdk_can_use_tool(
+        self,
+        *,
+        tool_name: str,
+        input_data: dict[str, Any],
+        permission_context: Any,
+        run_context: SDKRunContext,
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        _ = permission_context
+        try:
+            self._validate_sdk_tool_call(
+                run_context=run_context,
+                tool_name=tool_name,
+                arguments=input_data,
+            )
+        except AgentGuardrailError as exc:
+            return PermissionResultDeny(message=exc.message)
+        return PermissionResultAllow()
+
+    async def _sdk_pre_tool_use_hook(
+        self,
+        *,
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        hook_context: dict[str, Any],
+        run_context: SDKRunContext,
+    ) -> dict[str, Any]:
+        _ = hook_context
+        tool_name = str(input_data.get("tool_name") or "")
+        arguments = input_data.get("tool_input")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        resolved_tool_use_id = tool_use_id or str(input_data.get("tool_use_id") or "") or None
+
+        try:
+            self._validate_sdk_tool_call(
+                run_context=run_context,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+        except AgentGuardrailError as exc:
+            get_audit_logger().log(
+                event_type="agent",
+                action="agent_pre_tool_use",
+                status="failed",
+                severity="ALERT",
+                user_id=run_context.request.user_id,
+                project_id=run_context.request.project_id,
+                detail={
+                    "tool_name": tool_name,
+                    "conversation_id": run_context.request.conversation_id,
+                    "code": exc.code,
+                },
+            )
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": exc.message,
+                }
+            }
+
+        self._record_sdk_tool_use(
+            run_context=run_context,
+            tool_name=tool_name,
+            arguments=arguments,
+            tool_use_id=resolved_tool_use_id,
+        )
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "SmartHRBI BI tool call allowed.",
+            }
+        }
+
+    async def _sdk_post_tool_use_hook(
+        self,
+        *,
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        hook_context: dict[str, Any],
+        run_context: SDKRunContext,
+    ) -> dict[str, Any]:
+        _ = hook_context
+        tool_name = str(input_data.get("tool_name") or "")
+        arguments = input_data.get("tool_input")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        resolved_tool_use_id = tool_use_id or str(input_data.get("tool_use_id") or "") or None
+        record = self._get_or_create_sdk_tool_record(
+            run_context=run_context,
+            tool_name=tool_name,
+            arguments=arguments,
+            tool_use_id=resolved_tool_use_id,
+        )
+        if record.result_data is None:
+            record.result_data = _extract_sdk_tool_response_payload(input_data.get("tool_response"))
+            record.status = "success"
+        self._record_sdk_tool_result(run_context=run_context, record=record)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "SmartHRBI recorded the BI tool result for audit and SSE trace.",
+            }
+        }
+
+    async def _sdk_post_tool_failure_hook(
+        self,
+        *,
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        hook_context: dict[str, Any],
+        run_context: SDKRunContext,
+    ) -> dict[str, Any]:
+        _ = hook_context
+        tool_name = str(input_data.get("tool_name") or "")
+        arguments = input_data.get("tool_input")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        resolved_tool_use_id = tool_use_id or str(input_data.get("tool_use_id") or "") or None
+        record = self._get_or_create_sdk_tool_record(
+            run_context=run_context,
+            tool_name=tool_name,
+            arguments=arguments,
+            tool_use_id=resolved_tool_use_id,
+        )
+        error_message = str(input_data.get("error") or "Tool execution failed")
+        record.status = "error"
+        record.error = {
+            "code": "SDK_TOOL_FAILED",
+            "message": error_message,
+            "retryable": False,
+        }
+        record.result_data = {"error": record.error}
+        self._record_sdk_tool_result(run_context=run_context, record=record)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUseFailure",
+                "additionalContext": error_message,
+            }
+        }
+
+    async def _invoke_sdk_tool(
+        self,
+        *,
+        run_context: SDKRunContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(arguments, dict):
+            arguments = {}
+        canonical_name = _canonical_sdk_tool_name(tool_name)
+        record = self._record_sdk_tool_use(
+            run_context=run_context,
+            tool_name=canonical_name,
+            arguments=arguments,
+            tool_use_id=None,
+        )
+        try:
+            self._validate_sdk_tool_call(
+                run_context=run_context,
+                tool_name=canonical_name,
+                arguments=arguments,
+            )
+        except AgentGuardrailError as exc:
+            record.status = "error"
+            record.error = {
+                "code": exc.code,
+                "message": exc.message,
+                "retryable": False,
+            }
+            record.result_data = {"error": record.error}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(record.result_data, ensure_ascii=False, default=str),
+                    }
+                ],
+                "is_error": True,
+            }
+
+        def invoke() -> ToolCallResponse:
+            return self.tool_service.invoke(
+                ToolCallRequest(
+                    conversation_id=run_context.request.conversation_id,
+                    request_id=run_context.request.request_id,
+                    idempotency_key=(
+                        f"{run_context.request.request_id}:{canonical_name}:{record.step}"
+                    ),
+                    user_id=run_context.request.user_id,
+                    project_id=run_context.request.project_id,
+                    dataset_table=run_context.request.dataset_table,
+                    role=run_context.request.role,
+                    department=run_context.request.department,
+                    clearance=run_context.request.clearance,
+                    emit_debug_blocks=False,
+                    tool=ToolCall(name=canonical_name, arguments=arguments),
+                )
+            )
+
+        response = await anyio.to_thread.run_sync(invoke)
+        result_data = response.result if response.status == "success" else {"error": response.error}
+        record.status = response.status
+        record.result_data = result_data or {}
+        record.error = response.error
+        record.from_cache = response.from_cache
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(record.result_data, ensure_ascii=False, default=str),
+                }
+            ],
+            "is_error": response.status != "success",
+        }
+
+    def _validate_sdk_tool_call(
+        self,
+        *,
+        run_context: SDKRunContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        canonical_name = _canonical_sdk_tool_name(tool_name)
+        if canonical_name not in SDK_TOOL_NAMES:
+            raise AgentGuardrailError(
+                code="TOOL_NOT_ALLOWED",
+                message=f"Tool '{tool_name}' is outside the allowed SmartHRBI BI tool surface.",
+            )
+        guard_context = AgentGuardrailContext(
+            role=run_context.request.role,
+            user_id=run_context.request.user_id,
+            project_id=run_context.request.project_id,
+        )
+        self.guardrails.validate_tool_call(
+            tool_name=canonical_name,
+            arguments=arguments,
+            context=guard_context,
+        )
+
+    def _consume_sdk_message(
+        self,
+        *,
+        message: Any,
+        run_context: SDKRunContext,
+    ) -> dict[str, Any] | None:
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    if block.text:
+                        run_context.text_blocks.append(block.text)
+                elif isinstance(block, ThinkingBlock):
+                    if block.thinking and not run_context.planning_emitted:
+                        self._emit_planning_event(run_context, block.thinking)
+                elif isinstance(block, ToolUseBlock):
+                    self._record_sdk_tool_use(
+                        run_context=run_context,
+                        tool_name=block.name,
+                        arguments=block.input,
+                        tool_use_id=block.id,
+                    )
+            return None
+
+        if isinstance(message, UserMessage) and isinstance(message.content, list):
+            for block in message.content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                record = run_context.records_by_tool_use_id.get(block.tool_use_id)
+                if record is None:
+                    continue
+                if record.result_data is None:
+                    record.result_data = _extract_sdk_tool_response_payload(block.content)
+                    record.status = "error" if block.is_error else "success"
+                self._record_sdk_tool_result(run_context=run_context, record=record)
+            return None
+
+        if isinstance(message, ResultMessage):
+            run_context.result_message = message
+            if isinstance(message.structured_output, dict):
+                return message.structured_output
+            if message.result:
+                return _parse_final_answer(message.result)
+        return None
+
+    def _emit_planning_event(self, run_context: SDKRunContext, text: str) -> None:
+        if run_context.planning_emitted:
+            return
+        planning_text = text.strip() or f"Analyzing request for dataset `{run_context.request.dataset_table}`."
+        payload = {
+            "conversation_id": run_context.request.conversation_id,
+            "request_id": run_context.request.request_id,
+            "agent_session_id": run_context.session.agent_session_id,
+            "text": planning_text,
+        }
+        compatibility = {
+            **payload,
+            "compatibility_mirror": True,
+        }
+        run_context.events.append(("planning", payload))
+        run_context.events.append(("reasoning", compatibility))
+        run_context.planning_emitted = True
+
+    def _record_sdk_tool_use(
+        self,
+        *,
+        run_context: SDKRunContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_use_id: str | None,
+    ) -> SDKToolInvocationRecord:
+        record = self._get_or_create_sdk_tool_record(
+            run_context=run_context,
+            tool_name=tool_name,
+            arguments=arguments,
+            tool_use_id=tool_use_id,
+        )
+        if record.tool_use_emitted:
+            return record
+
+        tool_use_payload = {
+            "conversation_id": run_context.request.conversation_id,
+            "request_id": run_context.request.request_id,
+            "agent_session_id": run_context.session.agent_session_id,
+            "tool_name": record.tool_name,
+            "step": record.step,
+            "arguments": record.arguments,
+        }
+        run_context.events.append(("tool_use", tool_use_payload))
+        run_context.tool_trace.append({"event": "tool_use", **tool_use_payload})
+        record.tool_use_emitted = True
+        get_audit_logger().log(
+            event_type="agent",
+            action="agent_pre_tool_use",
+            status="success",
+            user_id=run_context.request.user_id,
+            project_id=run_context.request.project_id,
+            detail={
+                "tool_name": record.tool_name,
+                "step": record.step,
+                "conversation_id": run_context.request.conversation_id,
+            },
+        )
+        return record
+
+    def _record_sdk_tool_result(
+        self,
+        *,
+        run_context: SDKRunContext,
+        record: SDKToolInvocationRecord,
+    ) -> None:
+        if record.tool_result_emitted:
+            return
+        result_data = record.result_data or {}
+        tool_result_payload = {
+            "conversation_id": run_context.request.conversation_id,
+            "request_id": run_context.request.request_id,
+            "agent_session_id": run_context.session.agent_session_id,
+            "tool_name": record.tool_name,
+            "step": record.step,
+            "status": record.status if record.status in {"success", "error"} else "success",
+            "result": result_data,
+            "error": record.error,
+            "from_cache": record.from_cache,
+        }
+        run_context.events.append(("tool_result", tool_result_payload))
+        run_context.events.append(
+            (
+                "tool",
+                {
+                    "conversation_id": run_context.request.conversation_id,
+                    "request_id": run_context.request.request_id,
+                    "tool_name": record.tool_name,
+                    "status": tool_result_payload["status"],
+                    "result": result_data,
+                    "error": record.error,
+                    "compatibility_mirror": True,
+                },
+            )
+        )
+        run_context.tool_trace.append({"event": "tool_result", **tool_result_payload})
+        record.tool_result_emitted = True
+        get_audit_logger().log(
+            event_type="agent",
+            action="agent_post_tool_use",
+            status="success" if tool_result_payload["status"] == "success" else "failed",
+            severity="INFO" if tool_result_payload["status"] == "success" else "ALERT",
+            user_id=run_context.request.user_id,
+            project_id=run_context.request.project_id,
+            detail={
+                "tool_name": record.tool_name,
+                "step": record.step,
+                "conversation_id": run_context.request.conversation_id,
+            },
+        )
+
+    def _get_or_create_sdk_tool_record(
+        self,
+        *,
+        run_context: SDKRunContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_use_id: str | None,
+    ) -> SDKToolInvocationRecord:
+        canonical_name = _canonical_sdk_tool_name(tool_name)
+        clean_arguments = dict(arguments or {})
+        if tool_use_id and tool_use_id in run_context.records_by_tool_use_id:
+            return run_context.records_by_tool_use_id[tool_use_id]
+
+        key = _sdk_tool_record_key(canonical_name, clean_arguments)
+        record = run_context.records_by_key.get(key)
+        if record is not None and record.tool_result_emitted:
+            is_same_sdk_call = bool(tool_use_id and record.tool_use_id == tool_use_id)
+            if not is_same_sdk_call:
+                record = None
+
+        if record is None:
+            record = SDKToolInvocationRecord(
+                tool_name=canonical_name,
+                arguments=clean_arguments,
+                step=run_context.next_tool_step,
+                tool_use_id=tool_use_id,
+            )
+            run_context.next_tool_step += 1
+            run_context.records_by_key[key] = record
+
+        if tool_use_id:
+            record.tool_use_id = tool_use_id
+            run_context.records_by_tool_use_id[tool_use_id] = record
+        return record
+
+    def _flush_pending_sdk_tool_results(self, run_context: SDKRunContext) -> None:
+        for record in list(run_context.records_by_key.values()):
+            if record.result_data is not None and not record.tool_result_emitted:
+                self._record_sdk_tool_result(run_context=run_context, record=record)
+
     def _load_session(self, conversation_id: str) -> AgentSessionState:
         with self._lock:
             session = self._hot_sessions.get(conversation_id)
@@ -695,8 +1235,8 @@ class AgentRuntime:
 
         session = AgentSessionState(
             conversation_id=conversation_id,
-            agent_session_id=uuid.uuid4().hex,
-            runtime_backend="anthropic-agent-loop",
+            agent_session_id=str(uuid.uuid4()),
+            runtime_backend=SDK_RUNTIME_BACKEND,
         )
         with self._lock:
             self._hot_sessions[conversation_id] = session
@@ -739,9 +1279,8 @@ class AgentRuntime:
     ) -> str:
         """Compose the system prompt with per-request context.
 
-        The Anthropic Messages API takes system as a separate parameter,
-        so context that varies per request is appended here rather than
-        injected as extra messages.
+        Claude Agent SDK takes a system prompt in options, so per-request
+        context is appended here while the SDK owns the conversation transcript.
         """
         parts = [self.system_prompt]
 
@@ -778,202 +1317,6 @@ class AgentRuntime:
             )
 
         return "\n\n".join(parts)
-
-    def _build_initial_messages(
-        self,
-        *,
-        request: AgentRequest,
-        session: AgentSessionState,
-    ) -> list[dict[str, Any]]:
-        """Build the Anthropic-format message list (user/assistant only; no system role)."""
-        messages: list[dict[str, Any]] = []
-
-        for item in session.history[-10:]:
-            role = str(item.get("role") or "")
-            content = item.get("content") or ""
-            if role in {"user", "assistant"} and content:
-                messages.append({"role": role, "content": str(content)})
-
-        messages.append({"role": "user", "content": request.message})
-        return messages
-
-    def _extract_planning_events(
-        self,
-        *,
-        llm_response: AnthropicLLMResponse,
-        request: AgentRequest,
-        session: AgentSessionState,
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Build planning events from the model's own thinking/reasoning."""
-        planning_text = llm_response.thinking or llm_response.content or ""
-        if not planning_text.strip():
-            planning_text = f"Analyzing request for dataset `{request.dataset_table}`."
-
-        payload = {
-            "conversation_id": request.conversation_id,
-            "request_id": request.request_id,
-            "agent_session_id": session.agent_session_id,
-            "text": planning_text,
-        }
-        compatibility = {
-            "conversation_id": request.conversation_id,
-            "request_id": request.request_id,
-            "agent_session_id": session.agent_session_id,
-            "text": planning_text,
-            "compatibility_mirror": True,
-        }
-        return [("planning", payload), ("reasoning", compatibility)]
-
-    def _execute_tool_call(
-        self,
-        *,
-        tool_call: AnthropicToolCall,
-        request: AgentRequest,
-        session: AgentSessionState,
-        tool_trace: list[dict[str, Any]],
-        events: list[tuple[str, dict[str, Any]]],
-        step: int,
-    ) -> dict[str, Any]:
-        tool_name = tool_call.tool_name
-        arguments = tool_call.arguments
-
-        # Guardrail check
-        guard_context = AgentGuardrailContext(
-            role=request.role,
-            user_id=request.user_id,
-            project_id=request.project_id,
-        )
-        try:
-            self.guardrails.validate_tool_call(
-                tool_name=tool_name,
-                arguments=arguments,
-                context=guard_context,
-            )
-        except AgentGuardrailError as exc:
-            logger.warning(
-                "agent_tool_blocked conversation_id=%s step=%s tool=%s code=%s",
-                request.conversation_id,
-                step,
-                tool_name,
-                exc.code,
-            )
-            logger.warning(
-                "agent_tool_blocked_debug conversation_id=%s request_id=%s step=%s tool=%s\n%s",
-                request.conversation_id,
-                request.request_id,
-                step,
-                tool_name,
-                format_agent_debug_blocks(
-                    tool_trace={
-                        "conversation_id": request.conversation_id,
-                        "request_id": request.request_id,
-                        "step": step,
-                        "tool_name": tool_name,
-                        "arguments": arguments,
-                        "error": {"code": exc.code, "message": exc.message},
-                    }
-                ),
-            )
-            # Return the error as a tool result so the LLM can reason about it
-            return {"error": exc.code, "message": exc.message}
-
-        tool_step = len(tool_trace) + 1
-        tool_use_payload = {
-            "conversation_id": request.conversation_id,
-            "request_id": request.request_id,
-            "agent_session_id": session.agent_session_id,
-            "tool_name": tool_name,
-            "step": tool_step,
-            "arguments": arguments,
-        }
-        events.append(("tool_use", tool_use_payload))
-        tool_trace.append({"event": "tool_use", **tool_use_payload})
-        get_audit_logger().log(
-            event_type="agent",
-            action="agent_pre_tool_use",
-            status="success",
-            user_id=request.user_id,
-            project_id=request.project_id,
-            detail={"tool_name": tool_name, "step": tool_step, "conversation_id": request.conversation_id},
-        )
-
-        response = self.tool_service.invoke(
-            ToolCallRequest(
-                conversation_id=request.conversation_id,
-                request_id=request.request_id,
-                idempotency_key=f"{request.request_id}:{tool_name}:{tool_step}",
-                user_id=request.user_id,
-                project_id=request.project_id,
-                dataset_table=request.dataset_table,
-                role=request.role,
-                department=request.department,
-                clearance=request.clearance,
-                emit_debug_blocks=False,
-                tool=ToolCall(name=tool_name, arguments=arguments),
-            )
-        )
-
-        result_data = response.result if response.status == "success" else {"error": response.error}
-
-        tool_result_payload = {
-            "conversation_id": request.conversation_id,
-            "request_id": request.request_id,
-            "agent_session_id": session.agent_session_id,
-            "tool_name": tool_name,
-            "step": tool_step,
-            "status": response.status,
-            "result": result_data,
-            "error": response.error,
-            "from_cache": response.from_cache,
-        }
-        events.append(("tool_result", tool_result_payload))
-        events.append(
-            (
-                "tool",
-                {
-                    "conversation_id": request.conversation_id,
-                    "request_id": request.request_id,
-                    "tool_name": tool_name,
-                    "status": response.status,
-                    "result": result_data,
-                    "error": response.error,
-                    "compatibility_mirror": True,
-                },
-            )
-        )
-        tool_trace.append({"event": "tool_result", **tool_result_payload})
-        logger.info(
-            "agent_tool_trace_debug conversation_id=%s request_id=%s step=%s tool_name=%s\n%s",
-            request.conversation_id,
-            request.request_id,
-            tool_step,
-            tool_name,
-            format_agent_debug_blocks(
-                tool_result={
-                    "conversation_id": request.conversation_id,
-                    "request_id": request.request_id,
-                    "agent_session_id": session.agent_session_id,
-                    "step": tool_step,
-                    "tool_name": tool_name,
-                    "arguments": arguments,
-                    "status": response.status,
-                    "result": result_data,
-                    "error": response.error,
-                    "from_cache": response.from_cache,
-                }
-            ),
-        )
-        get_audit_logger().log(
-            event_type="agent",
-            action="agent_post_tool_use",
-            status="success" if response.status == "success" else "failed",
-            severity="INFO" if response.status == "success" else "ALERT",
-            user_id=request.user_id,
-            project_id=request.project_id,
-            detail={"tool_name": tool_name, "step": tool_step, "conversation_id": request.conversation_id},
-        )
-
-        return result_data or {}
 
     # Chart types that Recharts can render natively
     RECHARTS_TYPES = frozenset({
@@ -1057,10 +1400,10 @@ class AgentRuntime:
             "route": {
                 "complexity_score": len(rows) + (3 if series_key else 1),
                 "threshold": self.router.COMPLEXITY_THRESHOLD,
-                "reasons": ["llm_react_loop"],
+                "reasons": ["claude_agent_sdk"],
                 "selected_engine": engine,
             },
-            "meta": {"intent": request.message, "generated_by": "anthropic_agent_loop"},
+            "meta": {"intent": request.message, "generated_by": SDK_RUNTIME_BACKEND},
         }
 
     def _empty_spec(self, *, request: AgentRequest) -> dict[str, Any]:
@@ -1076,7 +1419,7 @@ class AgentRuntime:
                 "reasons": ["agent_no_answer"],
                 "selected_engine": "recharts",
             },
-            "meta": {"intent": request.message, "generated_by": "anthropic_agent_loop"},
+            "meta": {"intent": request.message, "generated_by": SDK_RUNTIME_BACKEND},
         }
 
     def _finalize_turn(
@@ -1193,6 +1536,75 @@ def get_agent_runtime() -> AgentRuntime:
 
 def clear_agent_runtime_cache() -> None:
     _cached_agent_runtime.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# SDK message helpers
+# ---------------------------------------------------------------------------
+
+
+def _canonical_sdk_tool_name(tool_name: str) -> str:
+    name = tool_name.strip()
+    prefix = f"mcp__{SDK_MCP_SERVER_NAME}__"
+    if name.startswith(prefix):
+        return name[len(prefix):]
+    return name
+
+
+def _sdk_tool_record_key(tool_name: str, arguments: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "tool_name": _canonical_sdk_tool_name(tool_name),
+            "arguments": arguments or {},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
+def _extract_sdk_tool_response_payload(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+
+    if isinstance(value, dict):
+        if "content" in value:
+            return _extract_sdk_tool_response_payload(value.get("content"))
+        if "text" in value:
+            return _parse_sdk_tool_response_text(str(value.get("text") or ""))
+        return dict(value)
+
+    if isinstance(value, list):
+        for item in value:
+            parsed = _extract_sdk_tool_response_payload(item)
+            if parsed:
+                return parsed
+        return {}
+
+    text_attr = getattr(value, "text", None)
+    if isinstance(text_attr, str):
+        return _parse_sdk_tool_response_text(text_attr)
+
+    content_attr = getattr(value, "content", None)
+    if content_attr is not None:
+        return _extract_sdk_tool_response_payload(content_attr)
+
+    if isinstance(value, str):
+        return _parse_sdk_tool_response_text(value)
+
+    return {"value": str(value)}
+
+
+def _parse_sdk_tool_response_text(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if not stripped:
+        return {}
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return {"text": stripped}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
 # ---------------------------------------------------------------------------

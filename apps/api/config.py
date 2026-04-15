@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     database_url: str = Field(alias="DATABASE_URL")
     model_provider_url: str = Field(alias="MODEL_PROVIDER_URL")
     ai_api_key: str = Field(default="", alias="AI_API_KEY")
-    ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
+    ai_model: str = Field(default="claude-sonnet-4-5", alias="AI_MODEL")
     ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
     claude_agent_sdk_enabled: bool = Field(default=True, alias="CLAUDE_AGENT_SDK_ENABLED")
     agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")

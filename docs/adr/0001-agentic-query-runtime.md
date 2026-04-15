@@ -54,9 +54,11 @@ We introduce an Agentic Query runtime with these decisions:
 
 ## `AgentRuntime` Implementation
 
-The current implementation is a self-developed orchestration layer in
-`apps/api/agent_runtime.py`. It owns the whole agent turn lifecycle instead of
-delegating orchestration to the old fixed chat router.
+The current implementation uses Claude Agent SDK as the primary agent runtime.
+`apps/api/agent_runtime.py` is now a thin host around SDK capabilities: it
+constructs SDK options, exposes SmartHRBI BI tools as an in-process SDK MCP
+server, maps SDK stream/hook events into the frontend SSE contract, and keeps
+SmartHRBI-specific chart normalization and persistence.
 
 At a high level, one chat turn is executed as:
 
@@ -64,21 +66,30 @@ At a high level, one chat turn is executed as:
    `AgentRequest`.
 2. `AgentRuntime.run_turn()` loads or creates the session for
    `conversation_id`.
-3. `AgentGuardrails` validates the user message before any LLM call.
-4. `AgentRuntime` composes the system prompt from:
+3. `AgentGuardrails` validates the user message before starting the SDK client.
+4. `AgentRuntime` composes the SDK system prompt from:
    - the static BI analyst prompt,
    - active dataset and available table hints,
    - user role and RLS context,
-   - the previous turn result when available.
-5. `AnthropicAgentClient` sends the conversation to an OpenAI-compatible
-   Chat Completions endpoint with function-calling tool definitions.
-6. The runtime runs a bounded ReAct/tool loop up to `AGENT_MAX_TOOL_STEPS`.
-7. Each model tool call is validated, audited, executed through
-   `ToolCallingService`, and appended back to the model as a tool result.
-8. The turn ends when the model calls the virtual `submit_answer` tool, returns
-   parseable structured JSON, or exhausts the bounded loop.
-9. The final answer is normalized into a frontend chart/table spec and emitted
-   as SSE events.
+   - the previous structured result when available.
+5. `AgentRuntime` creates a Claude Agent SDK in-process MCP server with
+   `create_sdk_mcp_server()` and `@tool` handlers for the SmartHRBI BI tools.
+6. `ClaudeSDKClient` is started with:
+   - `tools=[]` so Claude Code built-in filesystem/shell/browser tools are not
+     part of the base tool surface;
+   - `mcp_servers={"smarthrbi": sdk_server}`;
+   - `can_use_tool` for SDK permission decisions;
+   - `PreToolUse` / `PostToolUse` / `PostToolUseFailure` hooks for deterministic
+     validation, audit, and SSE tracing;
+   - `max_turns=AGENT_MAX_TOOL_STEPS`;
+   - `output_format={"type": "json_schema", ...}` for the final structured
+     answer.
+7. Claude Agent SDK owns tool selection, the agent loop, tool result appending,
+   and final structured-output completion.
+8. Each MCP tool handler executes the existing BI data path through
+   `ToolCallingService`.
+9. The final structured answer is normalized into a frontend chart/table spec
+   and emitted as SSE events.
 10. Session state and the latest AI state are persisted for follow-up turns and
     restart recovery.
 
@@ -101,14 +112,18 @@ in-memory session cache keyed by `conversation_id`, so normal multi-turn
 conversations avoid a database read while service restarts can still recover
 the same `agent_session_id`.
 
-Only the latest ten user/assistant messages are replayed into the LLM request.
-The previous structured result is additionally summarized into the system
-context so follow-up requests such as "改成折线图" can reuse the last result
-without forcing the model to rediscover the dataset.
+Claude Agent SDK owns the live conversation transcript through
+`ClaudeSDKClient` and the SDK session id. SmartHRBI stores the same
+`agent_session_id` plus the latest structured result/spec/tool trace in SQLite
+so service restarts and frontend state recovery can reattach to the known
+conversation. The previous structured result is also summarized into the
+system context so follow-up requests such as "改成折线图" can reuse the last
+result without forcing the model to rediscover the dataset.
 
-### Tool Loop
+### Tool Surface
 
-The runtime exposes a narrow BI tool registry through `AGENT_TOOL_DEFINITIONS`:
+The runtime exposes a narrow BI tool registry as an SDK MCP server named
+`smarthrbi`:
 
 - `list_tables`
 - `describe_table`
@@ -118,34 +133,34 @@ The runtime exposes a narrow BI tool registry through `AGENT_TOOL_DEFINITIONS`:
 - `run_semantic_query`
 - `execute_readonly_sql`
 - `save_view`
-- `submit_answer`
 
-`submit_answer` is a virtual finalization tool. It is not executed by
-`ToolCallingService`; the runtime acknowledges it and uses its arguments as the
-structured final answer. All other tools are delegated to `ToolCallingService`,
-which keeps the existing secure data path in place.
+There is no longer a virtual `submit_answer` tool. Finalization uses Claude
+Agent SDK structured output (`output_format`) with the same chart/table answer
+schema.
 
-For every non-final tool call, `AgentRuntime`:
+For every SDK MCP tool call:
 
-1. validates the tool name and arguments with `AgentGuardrails`;
-2. emits a `tool_use` event and writes an `agent_pre_tool_use` audit entry;
-3. invokes `ToolCallingService` with request identity, role, department,
-   clearance, dataset table, and an idempotency key;
-4. emits `tool_result` plus legacy `tool` mirror events;
-5. writes an `agent_post_tool_use` audit entry;
-6. appends the result to the LLM message list as a tool response.
+1. SDK permission flow calls `can_use_tool`;
+2. `PreToolUse` validates the tool name and arguments with `AgentGuardrails`,
+   emits `tool_use`, and writes an `agent_pre_tool_use` audit entry;
+3. the SDK MCP handler invokes `ToolCallingService` with request identity,
+   role, department, clearance, dataset table, and an idempotency key;
+4. `PostToolUse` emits `tool_result` plus legacy `tool` mirror events and writes
+   an `agent_post_tool_use` audit entry;
+5. Claude Agent SDK appends the MCP tool result back into the model context.
 
 This keeps tool execution deterministic and auditable even though the model
-chooses the tool sequence.
+chooses the tool sequence and the SDK owns the loop.
 
 ### Guardrails
 
-`AgentGuardrails` applies checks before and during the loop:
+`AgentGuardrails` applies SmartHRBI domain checks before and during SDK tool
+permission/hook flow:
 
 - user messages that ask for system prompts, shell/filesystem access, web
   access, or instruction override are blocked;
 - sensitive columns forbidden for the caller's role are rejected early;
-- only the BI allowlisted tools can be called;
+- only `mcp__smarthrbi__*` BI tools can be called;
 - `execute_readonly_sql` must contain SQL and cannot use write/DDL verbs;
 - oversized SQL result limits and scan budgets are rejected before execution.
 
@@ -165,21 +180,19 @@ into the frontend visualization spec:
 - ECharts for advanced chart types such as `heatmap`, `gauge`, `sankey`,
   `sunburst`, `boxplot`, `graph`, and `map`.
 
-If the model fails to call `submit_answer` but has successful grounding tool
-observations, the runtime attempts a conservative recovery from the latest tool
-result. If no successful grounding observation exists, it returns an empty spec
-instead of producing an ungrounded answer.
+If the SDK run does not return a usable structured answer but has successful
+grounding tool observations, the runtime attempts a conservative recovery from
+the latest tool result. If no successful grounding observation exists, it
+returns an empty spec instead of producing an ungrounded answer.
 
 ## Claude Agent SDK Positioning
 
-`AgentRuntime` is intentionally shaped around Claude Agent SDK concepts, but the
-current code does not directly instantiate `ClaudeSDKClient`. Instead, it maps
-the SDK's agent capabilities onto an in-process Python orchestration layer and
-an OpenAI-compatible Chat Completions function-calling adapter. This keeps the
-runtime portable across providers while preserving a clear migration path to a
-native Claude Agent SDK client.
+`AgentRuntime` now directly instantiates `ClaudeSDKClient` and uses SDK-native
+capabilities wherever they map cleanly to SmartHRBI's product requirements.
+SmartHRBI code remains responsible for BI domain execution, security policy,
+frontend SSE compatibility, and visualization-spec normalization.
 
-The SDK capabilities used or mirrored are:
+The SDK capabilities used directly are:
 
 1. **Resumable session model**
 
@@ -188,46 +201,43 @@ The SDK capabilities used or mirrored are:
 
    - `conversation_id -> agent_session_id -> persisted AgentSessionState`
 
-   This mirrors a long-lived agent session that can survive hot cache eviction
-   and process restarts.
+   `ClaudeSDKClient` receives the SDK session id via `session_id`/`resume`.
+   SmartHRBI persists the id and latest app state for hot cache eviction and
+   process restart recovery.
 
 2. **Tool-first agent execution**
 
-   The model is not asked to answer from prior knowledge. It receives a tool
-   surface and must inspect schema, samples, metrics, or SQL results before
-   finalizing. This follows the SDK pattern where the agent's progress is
-   expressed as tool use and tool results rather than a single opaque text
-   completion.
+   The model receives an SDK MCP tool surface and Claude Agent SDK owns the
+   tool-selection and bounded agent loop. SmartHRBI rejects ungrounded final
+   answers when no current or prior successful BI observation exists.
 
 3. **Custom tool definitions**
 
-   The BI tools are described with JSON schemas equivalent to SDK custom tool
-   contracts. The runtime currently transports them through Chat Completions
-   `tools` / `tool_choice=auto`, then parses returned tool calls into internal
-   `AnthropicToolCall` objects.
+   The BI tools are implemented with the SDK `@tool` decorator and exposed via
+   `create_sdk_mcp_server()` as in-process MCP tools.
 
 4. **Permission boundary**
 
-   Claude Agent SDK permission controls are represented by
-   `AgentGuardrails.allowed_tools`, prompt restrictions, SQL budget checks, and
-   role-aware sensitive field checks. The effective permission model is
-   least-privilege: the agent can only call SmartHRBI BI tools and cannot access
-   shell, filesystem, browser, or arbitrary network tools.
+   SDK `tools=[]`, SDK MCP configuration, SDK `can_use_tool`, and SDK
+   `PreToolUse` hooks enforce a least-privilege surface: the agent can only call
+   SmartHRBI BI tools and cannot access shell, filesystem, browser, or arbitrary
+   network tools.
 
 5. **PreToolUse/PostToolUse hook semantics**
 
-   The SDK hook lifecycle is mirrored around every tool invocation:
+   The SDK hook lifecycle is used around every tool invocation:
 
    - pre-tool: validate the tool call, enforce budgets, emit `tool_use`, and
      audit `agent_pre_tool_use`;
-   - post-tool: emit `tool_result`, audit `agent_post_tool_use`, and append the
-     result back into the agent message stream.
+   - post-tool: emit `tool_result` and audit `agent_post_tool_use`; the SDK
+     owns appending the tool result back into the agent message stream.
 
-   These hooks are implemented in-process today instead of using SDK hook APIs.
+   These hooks are SDK hook callbacks, not a hand-rolled hook simulation.
 
 6. **Streaming/event surface**
 
-   SDK-style agent stream events are translated into the frontend SSE contract:
+   SDK agent stream and hook events are translated into the frontend SSE
+   contract:
 
    - `planning`
    - `tool_use`
@@ -240,16 +250,12 @@ The SDK capabilities used or mirrored are:
 
 7. **MCP-compatible boundary**
 
-   The current runtime keeps tools in process behind `ToolCallingService`
-   instead of exposing a separate MCP server. The tool registry and permission
-   boundary are deliberately shaped so the same BI tools can later be exposed as
-   SDK MCP tools without changing the frontend API or security model.
+   The current runtime uses an in-process SDK MCP server. The MCP tool handlers
+   delegate to `ToolCallingService` so the existing secure BI data path remains
+   the single execution implementation.
 
 The `claude-agent-sdk` dependency and `CLAUDE_AGENT_SDK_ENABLED=true` setting
-therefore mark the intended agent architecture and integration boundary. The
-production path today is the self-developed `AgentRuntime` plus compatible tool
-calling adapter; a future native SDK swap should be an adapter replacement, not
-a frontend or data-access rewrite.
+therefore mark the production agent architecture and integration boundary.
 
 ## Alternatives Considered
 

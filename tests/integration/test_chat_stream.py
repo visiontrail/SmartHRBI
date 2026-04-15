@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from apps.api.agent_runtime import clear_agent_runtime_cache
+from apps.api.agent_runtime import clear_agent_runtime_cache, get_agent_runtime
 from apps.api.chat import clear_chat_stream_service_cache
 from apps.api.config import get_settings
 from apps.api.datasets import clear_dataset_service_cache
@@ -108,6 +108,22 @@ def _read_sse_events(response) -> tuple[list[dict[str, object]], float | None]:
     return events, first_chunk_at
 
 
+def _install_failing_sdk_client() -> None:
+    runtime = get_agent_runtime()
+
+    class _FailingSDKClient:
+        def __init__(self, *, options):  # type: ignore[no-untyped-def]
+            _ = options
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            raise RuntimeError("sdk timed out")
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+    runtime._sdk_client_factory = _FailingSDKClient
+
+
 def test_chat_stream_emits_required_events_with_low_first_token_latency(
     monkeypatch,
     tmp_path: Path,
@@ -124,6 +140,7 @@ def test_chat_stream_emits_required_events_with_low_first_token_latency(
             department="HR",
             clearance=1,
         )
+        _install_failing_sdk_client()
         start = time.perf_counter()
         with client.stream(
             "POST",
@@ -163,6 +180,7 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
             department="HR",
             clearance=1,
         )
+        _install_failing_sdk_client()
 
         with client.stream(
             "POST",
@@ -208,18 +226,12 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
     assert replay_events[-1]["data"]["status"] == "failed"
 
 
-def test_chat_stream_returns_agent_error_when_llm_times_out(monkeypatch, tmp_path: Path) -> None:
+def test_chat_stream_returns_agent_error_when_sdk_fails(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
     monkeypatch.setenv("AI_API_KEY", "test-api-key")
     get_settings.cache_clear()
     clear_chat_stream_service_cache()
     clear_agent_runtime_cache()
-
-    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
-        _ = (request, timeout)
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr("apps.api.llm_anthropic.urllib_request.urlopen", fake_urlopen)
 
     with TestClient(app) as client:
         dataset_table = _upload_dataset(client)
@@ -231,6 +243,7 @@ def test_chat_stream_returns_agent_error_when_llm_times_out(monkeypatch, tmp_pat
             department="HR",
             clearance=1,
         )
+        _install_failing_sdk_client()
 
         with client.stream(
             "POST",
@@ -252,5 +265,5 @@ def test_chat_stream_returns_agent_error_when_llm_times_out(monkeypatch, tmp_pat
             events, _ = _read_sse_events(response)
 
     assert [item["event"] for item in events] == ["error", "final"]
-    assert events[0]["data"]["code"] == "AGENT_LLM_FAILED"
+    assert events[0]["data"]["code"] == "AGENT_SDK_FAILED"
     assert events[-1]["data"]["status"] == "failed"

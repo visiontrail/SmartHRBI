@@ -233,7 +233,10 @@ def test_agent_tools_fallback_to_existing_table_when_request_dataset_table_misma
     assert semantic.status_code == 200
     semantic_payload = semantic.json()
     assert semantic_payload["status"] == "success"
-    assert semantic_payload["result"]["rows"] == [{"department": "HR", "metric_value": 1}, {"department": "PM", "metric_value": 1}]
+    assert sorted(semantic_payload["result"]["rows"], key=lambda row: row["department"]) == [
+        {"department": "HR", "metric_value": 1},
+        {"department": "PM", "metric_value": 1},
+    ]
 
     assert readonly_sql.status_code == 200
     sql_payload = readonly_sql.json()

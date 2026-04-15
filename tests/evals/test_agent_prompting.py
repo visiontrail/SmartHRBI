@@ -4,8 +4,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from apps.api.agent_runtime import get_agent_runtime
 from apps.api.main import app
-from tests.agent_test_utils import read_sse_events, set_agent_env, upload_dataset
+from tests.agent_test_utils import install_scripted_sdk_client, read_sse_events, set_agent_env, upload_dataset
 from tests.auth_utils import auth_headers
 
 QUERY_CASES = [
@@ -113,6 +114,58 @@ def test_agent_prompting_long_tail_queries_complete(monkeypatch, tmp_path: Path)
             clearance=9,
             filename="agent.xlsx",
         )
+        runtime = get_agent_runtime()
+
+        def scenario(prompt: str, options) -> dict[str, object]:  # type: ignore[no-untyped-def]
+            _ = options
+            if "地区" in prompt:
+                chart_rows = [
+                    {"region": "East", "metric_value": 1},
+                    {"region": "West", "metric_value": 1},
+                ]
+                title = "按地区离职人数"
+                x_key = "region"
+                metric_name = "terminations_by_region"
+            elif "延期率" in prompt:
+                chart_rows = [
+                    {"project": "Apollo", "metric_value": 0.5},
+                    {"project": "Nova", "metric_value": 0.5},
+                ]
+                title = "项目延期率"
+                x_key = "project"
+                metric_name = "delay_rate"
+            else:
+                chart_rows = [
+                    {"hire_year": 2022, "metric_value": 1},
+                    {"hire_year": 2023, "metric_value": 2},
+                    {"hire_year": 2024, "metric_value": 1},
+                ]
+                title = "入职年份统计"
+                x_key = "hire_year"
+                metric_name = "headcount_by_hire_year"
+            return {
+                "tool_calls": [
+                    {
+                        "name": "execute_readonly_sql",
+                        "arguments": {"sql": "SELECT ...", "max_rows": 200},
+                        "result": {"rows": chart_rows},
+                    }
+                ],
+                "final_answer": {
+                    "chart_type": "bar",
+                    "title": title,
+                    "x_key": x_key,
+                    "y_key": "metric_value",
+                    "series_key": None,
+                    "metric_name": metric_name,
+                    "rows": chart_rows,
+                    "conclusion": "测试场景已通过 SDK 工具观测生成。",
+                    "scope": "当前测试数据集",
+                    "anomalies": "none",
+                },
+            }
+
+        install_scripted_sdk_client(runtime, scenario)
         agent_successes, final_texts = _evaluate_queries(
             agent_client,
             dataset_table=agent_table,

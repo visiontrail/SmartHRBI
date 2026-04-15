@@ -9,7 +9,9 @@ from typing import Any
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from apps.api.agent_runtime import clear_agent_runtime_cache
+from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
+
+from apps.api.agent_runtime import SDK_MCP_SERVER_NAME, clear_agent_runtime_cache
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
 from apps.api.chat import clear_chat_stream_service_cache
@@ -126,3 +128,100 @@ def read_sse_events(response) -> tuple[list[dict[str, Any]], float | None]:
             current["data"] = line.split(":", 1)[1].strip()
 
     return events, first_chunk_at
+
+
+def install_scripted_sdk_client(runtime: Any, scenario: Any) -> None:
+    """Install a fake ClaudeSDKClient that exercises SDK hooks in tests.
+
+    ``scenario(prompt, options)`` should return:
+    {
+        "tool_calls": [
+            {"name": "execute_readonly_sql", "arguments": {...}, "result": {...}},
+        ],
+        "final_answer": {...},
+        "session_id": "optional-session-id",
+    }
+    """
+
+    class _ScriptedClaudeSDKClient:
+        def __init__(self, *, options: Any) -> None:
+            self.options = options
+            self.prompt = ""
+            self.session_id = ""
+
+        async def __aenter__(self) -> "_ScriptedClaudeSDKClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        async def query(self, prompt: str, session_id: str = "default") -> None:
+            self.prompt = prompt
+            self.session_id = session_id
+
+        async def receive_response(self):  # type: ignore[no-untyped-def]
+            script = scenario(self.prompt, self.options)
+            final_answer = dict(script.get("final_answer") or {})
+            session_id = str(script.get("session_id") or self.session_id)
+
+            for index, call in enumerate(script.get("tool_calls") or [], start=1):
+                raw_name = str(call["name"])
+                tool_name = (
+                    raw_name
+                    if raw_name.startswith("mcp__")
+                    else f"mcp__{SDK_MCP_SERVER_NAME}__{raw_name}"
+                )
+                arguments = dict(call.get("arguments") or {})
+                result = dict(call.get("result") or {})
+                tool_use_id = str(call.get("id") or f"toolu_test_{index}")
+                hook_input = {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool_name,
+                    "tool_input": arguments,
+                    "tool_use_id": tool_use_id,
+                }
+                await self._run_hooks("PreToolUse", hook_input, tool_use_id)
+                yield AssistantMessage(
+                    content=[
+                        ToolUseBlock(
+                            id=tool_use_id,
+                            name=tool_name,
+                            input=arguments,
+                        )
+                    ],
+                    model="claude-test",
+                    session_id=session_id,
+                )
+                post_input = {
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": tool_name,
+                    "tool_input": arguments,
+                    "tool_use_id": tool_use_id,
+                    "tool_response": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        ]
+                    },
+                }
+                await self._run_hooks("PostToolUse", post_input, tool_use_id)
+
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id=session_id,
+                result=json.dumps(final_answer, ensure_ascii=False, default=str),
+                structured_output=final_answer,
+            )
+
+        async def _run_hooks(self, event: str, input_data: dict[str, Any], tool_use_id: str) -> None:
+            for matcher in (self.options.hooks or {}).get(event, []):
+                for hook in matcher.hooks:
+                    await hook(input_data, tool_use_id, {"signal": None})
+
+    runtime._sdk_client_factory = _ScriptedClaudeSDKClient

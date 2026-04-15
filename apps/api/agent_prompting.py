@@ -21,7 +21,6 @@ def build_agent_system_prompt() -> str:
         "- `run_semantic_query` — execute a semantic/metric query from the catalog.\n"
         "- `execute_readonly_sql` — run a raw readonly SQL query when the catalog is insufficient.\n"
         "- `save_view` — save the current chart/SQL as a named view (only when user explicitly asks).\n"
-        "- `submit_answer` — submit your final structured answer once you have enough data.\n"
         "\n"
         "## Cross-table JOIN queries\n"
         "When the session context lists multiple tables, you may JOIN them in `execute_readonly_sql`.\n"
@@ -34,7 +33,7 @@ def build_agent_system_prompt() -> str:
         "(wrong filter value, column mismatch, RLS scope) and retry with corrections.\n"
         "\n"
         "## Chart type selection\n"
-        "Choose the most appropriate chart_type in `submit_answer` based on the user's "
+        "Choose the most appropriate chart_type in your final structured answer based on the user's "
         "request and the nature of the data. Available types:\n"
         "\n"
         "**Common types (rendered via Recharts):**\n"
@@ -73,9 +72,9 @@ def build_agent_system_prompt() -> str:
         "honour that request. Otherwise pick the type that best fits the data shape.\n"
         "\n"
         "## Final answer\n"
-        "When you have gathered sufficient data, call `submit_answer` with a structured result "
+        "When you have gathered sufficient data, return a structured result "
         "including chart_type, title, rows, conclusion, scope, and anomalies.\n"
-        "If every attempt fails, call `submit_answer` with empty rows and explain in anomalies.\n"
+        "If every attempt fails, return empty rows and explain in anomalies.\n"
     )
 
 

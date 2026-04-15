@@ -5,9 +5,67 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from apps.api.agent_runtime import get_agent_runtime
 from apps.api.main import app
-from tests.agent_test_utils import read_sse_events, set_agent_env, upload_dataset
+from tests.agent_test_utils import install_scripted_sdk_client, read_sse_events, set_agent_env, upload_dataset
 from tests.auth_utils import auth_headers
+
+
+def _install_success_sdk_client() -> None:
+    runtime = get_agent_runtime()
+    rows = [{"hire_year": 2022, "metric_value": 1}, {"hire_year": 2023, "metric_value": 2}]
+
+    def scenario(prompt: str, options) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        _ = (prompt, options)
+        return {
+            "tool_calls": [
+                {
+                    "name": "list_tables",
+                    "arguments": {},
+                    "result": {"tables": ["dataset"]},
+                },
+                {
+                    "name": "describe_table",
+                    "arguments": {"table": "dataset"},
+                    "result": {"sample_rows": rows},
+                },
+                {
+                    "name": "execute_readonly_sql",
+                    "arguments": {"sql": 'SELECT "hire_year", COUNT(*) AS metric_value FROM dataset GROUP BY 1'},
+                    "result": {"rows": rows},
+                },
+            ],
+            "final_answer": {
+                "chart_type": "bar",
+                "title": "入职年份统计",
+                "x_key": "hire_year",
+                "y_key": "metric_value",
+                "series_key": None,
+                "metric_name": "headcount",
+                "rows": rows,
+                "conclusion": "按入职年份统计员工数。",
+                "scope": "当前数据集",
+                "anomalies": "none",
+            },
+        }
+
+    install_scripted_sdk_client(runtime, scenario)
+
+
+def _install_failing_sdk_client() -> None:
+    runtime = get_agent_runtime()
+
+    class _FailingSDKClient:
+        def __init__(self, *, options):  # type: ignore[no-untyped-def]
+            _ = options
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            raise RuntimeError("sdk failed")
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+    runtime._sdk_client_factory = _FailingSDKClient
 
 
 def test_agent_chat_stream_emits_planning_tool_trace_spec_and_final(monkeypatch, tmp_path: Path) -> None:
@@ -34,6 +92,7 @@ def test_agent_chat_stream_emits_planning_tool_trace_spec_and_final(monkeypatch,
             department="HR",
             clearance=9,
         )
+        _install_success_sdk_client()
 
         start = time.perf_counter()
         with client.stream(
@@ -89,6 +148,7 @@ def test_agent_chat_stream_replays_agent_events(monkeypatch, tmp_path: Path) -> 
             department="HR",
             clearance=9,
         )
+        _install_success_sdk_client()
 
         with client.stream(
             "POST",
@@ -154,6 +214,7 @@ def test_agent_runtime_returns_failure_on_runtime_error(
             department="HR",
             clearance=9,
         )
+        _install_failing_sdk_client()
 
         with client.stream(
             "POST",
