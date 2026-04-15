@@ -138,7 +138,6 @@ DATABASE_URL=sqlite:///./data/uploads/state/ai_views.sqlite3
 MODEL_PROVIDER_URL=http://localhost:11434
 AI_API_KEY=
 AI_MODEL=gpt-4o-mini
-CHAT_ENGINE=agent_primary
 CLAUDE_AGENT_SDK_ENABLED=true
 AUTH_SECRET=replace-with-a-strong-secret
 UPLOAD_DIR=./data/uploads
@@ -164,18 +163,15 @@ NEXT_PUBLIC_DEFAULT_CLEARANCE=1
 NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide
 ```
 
-如果没有配置 `AI_API_KEY`，`agent_primary` 对话会返回 LLM 配置错误；配置 OpenAI-compatible endpoint 后，可用于 Agent 编排和 schema inference。
+如果没有配置 `AI_API_KEY`，Agent 对话会返回 LLM 配置错误；配置 OpenAI-compatible endpoint 后，可用于 Agent 编排和 schema inference。
 
 ## Agentic Query
 
-`CHAT_ENGINE` 仅保留 Agent 前台链路：
-
-- `agent_primary`：前台直接使用 agent 结果。
+对话入口统一走 Agent 编排主路径。
 
 Agent 相关配置：
 
 ```env
-CHAT_ENGINE=agent_primary
 CLAUDE_AGENT_SDK_ENABLED=true
 AGENT_MAX_TOOL_STEPS=6
 AGENT_MAX_SQL_ROWS=200

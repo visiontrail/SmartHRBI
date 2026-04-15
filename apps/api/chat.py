@@ -296,7 +296,6 @@ def get_chat_stream_service() -> ChatStreamService:
             settings.model_provider_url.strip(),
             settings.ai_model.strip(),
             "enabled" if bool(settings.ai_api_key.strip()) else "disabled",
-            settings.chat_engine,
         ]
     )
     return _cached_chat_stream_service(settings_key)

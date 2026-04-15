@@ -11,7 +11,7 @@ from tests.auth_utils import auth_headers
 
 
 def test_agent_chat_stream_emits_planning_tool_trace_spec_and_final(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -67,7 +67,7 @@ def test_agent_chat_stream_emits_planning_tool_trace_spec_and_final(monkeypatch,
 
 
 def test_agent_chat_stream_replays_agent_events(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -129,10 +129,10 @@ def test_agent_chat_stream_replays_agent_events(monkeypatch, tmp_path: Path) -> 
     assert replay_events[-1]["event"] == "final"
 
 
-def test_agent_primary_returns_failure_on_runtime_error(
+def test_agent_runtime_returns_failure_on_runtime_error(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(

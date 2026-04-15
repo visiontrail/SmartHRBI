@@ -1109,7 +1109,6 @@ class AgentRuntime:
             "agent_session_id": session.agent_session_id,
             "status": "completed",
             "text": final_text,
-            "engine": "agent_primary",
             "duration_ms": duration_ms,
             "tool_steps": len([item for item in tool_trace if item.get("event") == "tool_use"]),
         }
@@ -1184,7 +1183,6 @@ def get_agent_runtime() -> AgentRuntime:
     key = "|".join(
         [
             str(settings.upload_dir.resolve()),
-            settings.chat_engine,
             str(settings.agent_max_tool_steps),
             str(settings.agent_max_sql_rows),
             str(settings.agent_max_sql_scan_rows),

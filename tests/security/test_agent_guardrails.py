@@ -11,7 +11,7 @@ from tests.auth_utils import auth_headers
 
 
 def test_agent_guardrails_block_prompt_injection_and_generic_tool_requests(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -64,7 +64,7 @@ def test_agent_guardrails_reject_dangerous_sql_and_write_operations() -> None:
 
 
 def test_agent_tool_audit_events_are_recorded(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(

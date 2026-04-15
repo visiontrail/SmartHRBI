@@ -101,7 +101,7 @@ def test_agent_prompting_long_tail_queries_complete(monkeypatch, tmp_path: Path)
         },
     ]
 
-    set_agent_env(monkeypatch, tmp_path / "agent", chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path / "agent")
     with TestClient(app) as agent_client:
         agent_table = upload_dataset(
             agent_client,

@@ -23,7 +23,6 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
     monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
     monkeypatch.delenv("AI_API_KEY", raising=False)
-    monkeypatch.delenv("CHAT_ENGINE", raising=False)
     monkeypatch.delenv("CLAUDE_AGENT_SDK_ENABLED", raising=False)
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")

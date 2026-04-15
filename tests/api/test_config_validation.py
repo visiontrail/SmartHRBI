@@ -85,7 +85,6 @@ def test_agent_engine_requires_claude_agent_sdk_toggle(monkeypatch, tmp_path) ->
             [
                 "DATABASE_URL=postgresql://user:pass@localhost:5432/db",
                 "MODEL_PROVIDER_URL=https://api.openai.com",
-                "CHAT_ENGINE=agent_primary",
                 "CLAUDE_AGENT_SDK_ENABLED=false",
                 "AUTH_SECRET=secret",
                 "LOG_LEVEL=INFO",
@@ -99,7 +98,6 @@ def test_agent_engine_requires_claude_agent_sdk_toggle(monkeypatch, tmp_path) ->
     for key in [
         "DATABASE_URL",
         "MODEL_PROVIDER_URL",
-        "CHAT_ENGINE",
         "CLAUDE_AGENT_SDK_ENABLED",
         "AUTH_SECRET",
         "LOG_LEVEL",

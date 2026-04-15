@@ -23,7 +23,7 @@ REQUIRED_KEYS = {
 
 OPTIONAL_WARNINGS = {
     "api": {
-        "AI_API_KEY": "AI_API_KEY is not set; agent_primary chat will return an LLM configuration error until a key is provided.",
+        "AI_API_KEY": "AI_API_KEY is not set; Agent chat will return an LLM configuration error until a key is provided.",
     },
 }
 

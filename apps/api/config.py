@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     ai_api_key: str = Field(default="", alias="AI_API_KEY")
     ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
     ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
-    chat_engine: str = Field(default="agent_primary", alias="CHAT_ENGINE")
     claude_agent_sdk_enabled: bool = Field(default=True, alias="CLAUDE_AGENT_SDK_ENABLED")
     agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")
     agent_max_sql_rows: int = Field(default=200, alias="AGENT_MAX_SQL_ROWS")
@@ -73,23 +72,16 @@ class Settings(BaseSettings):
             raise ValueError(f"{field_name} must be greater than 0")
         return value
 
-    @field_validator("chat_engine")
-    @classmethod
-    def validate_chat_engine(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized != "agent_primary":
-            raise ValueError("CHAT_ENGINE must be agent_primary")
-        return normalized
-
     @model_validator(mode="after")
     def validate_agent_engine_sdk_toggle(self) -> "Settings":
         if not self.claude_agent_sdk_enabled:
-            raise ValueError("CLAUDE_AGENT_SDK_ENABLED must be true for agent_primary")
+            raise ValueError("CLAUDE_AGENT_SDK_ENABLED must be true for Agent runtime")
         return self
 
     @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

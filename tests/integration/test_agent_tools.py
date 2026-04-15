@@ -10,7 +10,7 @@ from tests.auth_utils import auth_headers
 
 
 def test_agent_tools_expose_schema_sample_semantic_and_readonly_sql(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -143,7 +143,7 @@ def test_agent_tools_expose_schema_sample_semantic_and_readonly_sql(monkeypatch,
 def test_agent_tools_fallback_to_existing_table_when_request_dataset_table_mismatches(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         uploaded_table = upload_dataset(

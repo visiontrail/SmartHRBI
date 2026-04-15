@@ -12,7 +12,7 @@ from tests.agent_test_utils import set_agent_env, upload_dataset
 
 
 def test_agent_runtime_supports_single_turn_follow_up_and_restart_recovery(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -87,7 +87,7 @@ def test_agent_runtime_supports_single_turn_follow_up_and_restart_recovery(monke
 def test_agent_runtime_casts_string_hire_dates_before_extracting_year(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -126,7 +126,7 @@ def test_agent_runtime_casts_string_hire_dates_before_extracting_year(
 def test_agent_runtime_builds_salary_distribution_with_bucketed_sql(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -167,7 +167,7 @@ def test_agent_runtime_builds_salary_distribution_with_bucketed_sql(
 def test_agent_runtime_builds_distribution_for_generic_numeric_columns(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(
@@ -207,7 +207,7 @@ def test_agent_runtime_builds_distribution_for_generic_numeric_columns(
 def test_agent_runtime_rejects_ungrounded_final_answer_until_model_issues_tool_calls(
     monkeypatch, tmp_path: Path
 ) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")
+    set_agent_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         dataset_table = upload_dataset(

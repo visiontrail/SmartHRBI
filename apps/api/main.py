@@ -134,9 +134,8 @@ async def on_startup() -> None:
         settings.upload_dir,
     )
     logger.info(
-        "chat_runtime_config chat_engine=%s claude_agent_sdk_enabled=%s "
+        "chat_runtime_config claude_agent_sdk_enabled=%s "
         "agent_max_tool_steps=%s agent_max_sql_rows=%s agent_timeout_seconds=%s",
-        settings.chat_engine,
         settings.claude_agent_sdk_enabled,
         settings.agent_max_tool_steps,
         settings.agent_max_sql_rows,
@@ -480,7 +479,6 @@ async def chat_stream(
         project_id=identity.project_id,
         detail={
             "conversation_id": enforced_request.conversation_id,
-            "chat_engine": get_settings().chat_engine,
         },
     )
 
