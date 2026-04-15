@@ -11,6 +11,7 @@ type WorkspaceState = {
 
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (workspace: Workspace) => void;
+  updateWorkspaceTitle: (workspaceId: string, title: string) => void;
   removeWorkspace: (workspaceId: string) => void;
   setActiveWorkspace: (workspaceId: string | null) => void;
   setNodes: (nodes: WorkspaceNode[]) => void;
@@ -37,6 +38,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   addWorkspace: (workspace) =>
     set((state) => ({
       workspaces: [workspace, ...state.workspaces],
+    })),
+
+  updateWorkspaceTitle: (workspaceId, title) =>
+    set((state) => ({
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? { ...workspace, title, updatedAt: new Date().toISOString() }
+          : workspace
+      ),
     })),
 
   removeWorkspace: (workspaceId) =>

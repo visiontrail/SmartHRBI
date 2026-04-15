@@ -21,10 +21,10 @@ test: ## Run automated tests
 build: ## Build web and verify backend compile
 	@bash scripts/build.sh
 
-dev: ## Run web/api locally and ensure postgres is reachable
+dev: ## Run web/api locally
 	@bash scripts/dev_all.sh
 
-dev-local: ## Run local debug stack without Docker bootstrap (requires local postgres)
+dev-local: ## Run local debug stack with local logs
 	@bash scripts/dev_local_debug.sh
 
 dev-web: ## Run Next.js frontend dev server

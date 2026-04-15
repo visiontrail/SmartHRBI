@@ -62,6 +62,25 @@ export function useDeleteWorkspace() {
   });
 }
 
+export function useRenameWorkspace() {
+  const queryClient = useQueryClient();
+  const updateWorkspaceTitle = useWorkspaceStore((s) => s.updateWorkspaceTitle);
+
+  return useMutation({
+    mutationFn: async ({ workspaceId, title }: { workspaceId: string; title: string }) => {
+      const trimmedTitle = title.trim();
+      if (!trimmedTitle) throw new Error("Workspace name cannot be empty");
+
+      await api.updateWorkspaceTitle(workspaceId, trimmedTitle);
+      return { workspaceId, title: trimmedTitle };
+    },
+    onSuccess: ({ workspaceId, title }) => {
+      updateWorkspaceTitle(workspaceId, title);
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+  });
+}
+
 export function useSaveWorkspace() {
   const queryClient = useQueryClient();
   const setIsSaving = useUIStore((s) => s.setIsSaving);

@@ -12,12 +12,75 @@ import {
 import { generateId } from "@/lib/utils";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const WORKSPACE_STORAGE_KEY = "smarthrbi.mock.workspaces";
+
+type StoredWorkspaceState = {
+  version: 1;
+  workspaces: Workspace[];
+  snapshots: Record<string, WorkspaceSnapshot>;
+};
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 let sessions = [...MOCK_SESSIONS];
 let messages: Record<string, ChatMessage[]> = JSON.parse(JSON.stringify(MOCK_MESSAGES));
 let assets = [...MOCK_CHART_ASSETS];
-let workspaces = [...MOCK_WORKSPACES];
-let snapshots: Record<string, WorkspaceSnapshot> = JSON.parse(JSON.stringify(MOCK_WORKSPACE_SNAPSHOTS));
+let workspaces = clone(MOCK_WORKSPACES);
+let snapshots: Record<string, WorkspaceSnapshot> = clone(MOCK_WORKSPACE_SNAPSHOTS);
+let hasLoadedPersistedWorkspaces = false;
+
+function getWorkspaceStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function loadPersistedWorkspaceState() {
+  if (hasLoadedPersistedWorkspaces) return;
+  hasLoadedPersistedWorkspaces = true;
+
+  const storage = getWorkspaceStorage();
+  if (!storage) return;
+
+  try {
+    const rawState = storage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!rawState) {
+      persistWorkspaceState();
+      return;
+    }
+
+    const parsed = JSON.parse(rawState) as Partial<StoredWorkspaceState>;
+    if (!Array.isArray(parsed.workspaces) || typeof parsed.snapshots !== "object" || !parsed.snapshots) {
+      return;
+    }
+
+    workspaces = parsed.workspaces;
+    snapshots = parsed.snapshots as Record<string, WorkspaceSnapshot>;
+  } catch {
+    storage.removeItem(WORKSPACE_STORAGE_KEY);
+  }
+}
+
+function persistWorkspaceState() {
+  const storage = getWorkspaceStorage();
+  if (!storage) return;
+
+  const state: StoredWorkspaceState = {
+    version: 1,
+    workspaces,
+    snapshots,
+  };
+
+  try {
+    storage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore quota or private browsing errors; the in-memory mock API still works.
+  }
+}
 
 // ─── Chat API ───────────────────────────────────────────────────────────────
 
@@ -122,11 +185,13 @@ export async function fetchChartAsset(assetId: string): Promise<ChartAsset | nul
 
 export async function fetchWorkspaces(): Promise<Workspace[]> {
   await delay(300);
+  loadPersistedWorkspaceState();
   return [...workspaces].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
 export async function createWorkspace(title?: string, description?: string): Promise<Workspace> {
   await delay(200);
+  loadPersistedWorkspaceState();
   const ws: Workspace = {
     id: `ws-${generateId()}`,
     title: title || "Untitled Workspace",
@@ -142,35 +207,43 @@ export async function createWorkspace(title?: string, description?: string): Pro
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
   };
+  persistWorkspaceState();
   return ws;
 }
 
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
   await delay(200);
+  loadPersistedWorkspaceState();
   workspaces = workspaces.filter((w) => w.id !== workspaceId);
   delete snapshots[workspaceId];
+  persistWorkspaceState();
 }
 
 export async function fetchWorkspaceSnapshot(workspaceId: string): Promise<WorkspaceSnapshot | null> {
   await delay(300);
+  loadPersistedWorkspaceState();
   return snapshots[workspaceId] ?? null;
 }
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot): Promise<void> {
   await delay(400);
+  loadPersistedWorkspaceState();
   snapshots[snapshot.workspaceId] = JSON.parse(JSON.stringify(snapshot));
   const ws = workspaces.find((w) => w.id === snapshot.workspaceId);
   if (ws) {
     ws.updatedAt = new Date().toISOString();
     ws.nodeCount = snapshot.nodes.length;
   }
+  persistWorkspaceState();
 }
 
 export async function updateWorkspaceTitle(workspaceId: string, title: string): Promise<void> {
   await delay(200);
+  loadPersistedWorkspaceState();
   const ws = workspaces.find((w) => w.id === workspaceId);
   if (ws) {
     ws.title = title;
     ws.updatedAt = new Date().toISOString();
+    persistWorkspaceState();
   }
 }

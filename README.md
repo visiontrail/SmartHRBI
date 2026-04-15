@@ -8,7 +8,7 @@ SmartHRBI is an AI-Native HR/PM BI system scaffold with FastAPI + DuckDB backend
 - Node.js 20+
 - npm 10+
 - GNU Make
-- Docker Desktop (recommended, used for PostgreSQL auto-start and full container delivery)
+- Docker Desktop (optional, only needed for container delivery)
 
 ## Quick Start (Local)
 
@@ -24,18 +24,17 @@ make bootstrap
 make env-check
 ```
 
-3. Start local stack (web + api + postgres):
+3. Start local stack (web + api):
 
 ```bash
 make dev
 ```
 
-`make dev` starts web/api processes locally and ensures PostgreSQL is reachable.
-If local PostgreSQL is not running, it attempts to start `postgres` via Docker Compose.
+`make dev` starts web/api processes locally. It does not install or start PostgreSQL.
 
-## Local Debug Start (No Docker)
+## Local Debug Start
 
-If you only want local debug startup and do not want any Docker auto-bootstrap:
+If you want local debug startup with separate web/api logs:
 
 ```bash
 make dev-local
@@ -47,7 +46,7 @@ Equivalent direct script:
 bash scripts/dev_local_debug.sh
 ```
 
-`dev-local` is intended for debug only. It skips PostgreSQL bootstrap and reachability checks, so API startup does not depend on a local PostgreSQL process.
+`dev-local` is intended for debug only. It writes logs under `logs/dev-local` and does not install or start PostgreSQL.
 
 ## Local Smoke Validation
 

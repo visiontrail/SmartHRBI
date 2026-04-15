@@ -18,7 +18,7 @@ export WEB_LOG_FILE="${WEB_LOG_FILE:-$LOG_DIR/web.log}"
 echo "[dev-local] Validating environment variables"
 .venv/bin/python scripts/env_check.py --web-env-file apps/web/.env --api-env-file apps/api/.env
 
-echo "[dev-local] Starting local debug stack (web + api) without Docker bootstrap"
+echo "[dev-local] Starting local debug stack (web + api)"
 echo "[dev-local] API log: $API_LOG_FILE"
 echo "[dev-local] Web log: $WEB_LOG_FILE"
-SKIP_POSTGRES_BOOTSTRAP=1 DISABLE_DOCKER_POSTGRES_BOOTSTRAP=1 bash scripts/dev_all.sh
+bash scripts/dev_all.sh

@@ -12,7 +12,6 @@ API_BASE_URL="http://${API_HOST}:${API_PORT}"
 WEB_BASE_URL="http://${WEB_HOST}:${WEB_PORT}"
 
 .venv/bin/python scripts/env_check.py --web-env-file apps/web/.env --api-env-file apps/api/.env
-bash scripts/ensure_postgres.sh
 
 API_LOG="/tmp/smarthrbi-smoke-api.log"
 WEB_LOG="/tmp/smarthrbi-smoke-web.log"
