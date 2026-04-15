@@ -53,7 +53,7 @@ def _evaluate_queries(client: TestClient, *, dataset_table: str, user_id: str, p
     return successes, final_texts
 
 
-def test_agent_prompting_long_tail_success_rate_beats_deterministic(monkeypatch, tmp_path: Path) -> None:
+def test_agent_prompting_long_tail_queries_complete(monkeypatch, tmp_path: Path) -> None:
     rows = [
         {
             "employee_id": "E-001",
@@ -101,25 +101,6 @@ def test_agent_prompting_long_tail_success_rate_beats_deterministic(monkeypatch,
         },
     ]
 
-    set_agent_env(monkeypatch, tmp_path / "deterministic", chat_engine="deterministic")
-    with TestClient(app) as deterministic_client:
-        deterministic_table = upload_dataset(
-            deterministic_client,
-            rows=rows,
-            user_id="admin",
-            project_id="north",
-            role="admin",
-            department="HR",
-            clearance=9,
-            filename="deterministic.xlsx",
-        )
-        deterministic_successes, _ = _evaluate_queries(
-            deterministic_client,
-            dataset_table=deterministic_table,
-            user_id="admin",
-            project_id="north",
-        )
-
     set_agent_env(monkeypatch, tmp_path / "agent", chat_engine="agent_primary")
     with TestClient(app) as agent_client:
         agent_table = upload_dataset(
@@ -139,7 +120,6 @@ def test_agent_prompting_long_tail_success_rate_beats_deterministic(monkeypatch,
             project_id="north",
         )
 
-    assert deterministic_successes < agent_successes
     assert agent_successes == len(QUERY_CASES)
     assert all("口径:" in text for text in final_texts)
     assert all("异常说明:" in text for text in final_texts)

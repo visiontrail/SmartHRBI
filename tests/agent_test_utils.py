@@ -26,7 +26,6 @@ def set_agent_env(
     tmp_path: Path,
     *,
     chat_engine: str = "agent_primary",
-    chat_engine_users: str = "",
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'views.db'}")
     monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
@@ -34,7 +33,6 @@ def set_agent_env(
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("CHAT_ENGINE", chat_engine)
-    monkeypatch.setenv("CHAT_ENGINE_USERS", chat_engine_users)
     monkeypatch.setenv("CLAUDE_AGENT_SDK_ENABLED", "true")
     monkeypatch.setenv("AGENT_MAX_TOOL_STEPS", "6")
     monkeypatch.setenv("AGENT_MAX_SQL_ROWS", "200")

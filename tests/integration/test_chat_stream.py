@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from apps.api.agent_runtime import clear_agent_runtime_cache
 from apps.api.chat import clear_chat_stream_service_cache
 from apps.api.config import get_settings
 from apps.api.datasets import clear_dataset_service_cache
@@ -21,6 +22,9 @@ from tests.auth_utils import auth_headers
 def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
     monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("CHAT_ENGINE", raising=False)
+    monkeypatch.delenv("CLAUDE_AGENT_SDK_ENABLED", raising=False)
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
@@ -30,6 +34,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_tool_calling_service_cache()
     clear_chat_stream_service_cache()
     clear_view_storage_service_cache()
+    clear_agent_runtime_cache()
 
 
 def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
@@ -142,9 +147,8 @@ def test_chat_stream_emits_required_events_with_low_first_token_latency(
 
     assert first_chunk_at is not None
     assert first_chunk_at - start < 2.0
-    assert [item["event"] for item in events] == ["reasoning", "tool", "spec", "final"]
-    spec_event = events[2]["data"]
-    assert spec_event["spec"]["engine"] in {"recharts", "echarts"}
+    assert [item["event"] for item in events] == ["error", "final"]
+    assert events[-1]["data"]["status"] == "failed"
 
 
 def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Path) -> None:
@@ -180,8 +184,8 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
             assert first_response.status_code == 200
             first_events, _ = _read_sse_events(first_response)
 
-        assert len(first_events) == 4
-        assert [item["id"] for item in first_events] == [1, 2, 3, 4]
+        assert len(first_events) == 2
+        assert [item["id"] for item in first_events] == [1, 2]
 
         with client.stream(
             "POST",
@@ -192,7 +196,7 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
                 "user_id": "alice",
                 "project_id": "north",
                 "dataset_table": dataset_table,
-                "last_event_id": 2,
+                "last_event_id": 1,
                 "message": None,
             },
             headers=headers,
@@ -200,22 +204,23 @@ def test_chat_stream_reconnect_replays_missing_events(monkeypatch, tmp_path: Pat
             assert replay_response.status_code == 200
             replay_events, _ = _read_sse_events(replay_response)
 
-    assert [item["id"] for item in replay_events] == [3, 4]
-    assert [item["event"] for item in replay_events] == ["spec", "final"]
-    assert replay_events[-1]["data"]["status"] in {"completed", "failed"}
+    assert [item["id"] for item in replay_events] == [2]
+    assert [item["event"] for item in replay_events] == ["final"]
+    assert replay_events[-1]["data"]["status"] == "failed"
 
 
-def test_chat_stream_falls_back_when_llm_selector_times_out(monkeypatch, tmp_path: Path) -> None:
+def test_chat_stream_returns_agent_error_when_llm_times_out(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
     monkeypatch.setenv("AI_API_KEY", "test-api-key")
     get_settings.cache_clear()
     clear_chat_stream_service_cache()
+    clear_agent_runtime_cache()
 
     def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
         _ = (request, timeout)
         raise TimeoutError("timed out")
 
-    monkeypatch.setattr("apps.api.llm_openai.urllib_request.urlopen", fake_urlopen)
+    monkeypatch.setattr("apps.api.llm_anthropic.urllib_request.urlopen", fake_urlopen)
 
     with TestClient(app) as client:
         dataset_table = _upload_dataset(client)
@@ -247,7 +252,6 @@ def test_chat_stream_falls_back_when_llm_selector_times_out(monkeypatch, tmp_pat
             assert response.status_code == 200
             events, _ = _read_sse_events(response)
 
-    assert [item["event"] for item in events] == ["reasoning", "tool", "spec", "final"]
-    assert events[0]["data"]["tool_name"] == "query_metrics"
-    assert events[1]["data"]["status"] == "error"
+    assert [item["event"] for item in events] == ["error", "final"]
+    assert events[0]["data"]["code"] == "AGENT_LLM_FAILED"
     assert events[-1]["data"]["status"] == "failed"

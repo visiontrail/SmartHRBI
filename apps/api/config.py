@@ -19,9 +19,8 @@ class Settings(BaseSettings):
     ai_api_key: str = Field(default="", alias="AI_API_KEY")
     ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
     ai_timeout_seconds: float = Field(default=20.0, alias="AI_TIMEOUT_SECONDS")
-    chat_engine: str = Field(default="deterministic", alias="CHAT_ENGINE")
-    chat_engine_users: str = Field(default="", alias="CHAT_ENGINE_USERS")
-    claude_agent_sdk_enabled: bool = Field(default=False, alias="CLAUDE_AGENT_SDK_ENABLED")
+    chat_engine: str = Field(default="agent_primary", alias="CHAT_ENGINE")
+    claude_agent_sdk_enabled: bool = Field(default=True, alias="CLAUDE_AGENT_SDK_ENABLED")
     agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")
     agent_max_sql_rows: int = Field(default=200, alias="AGENT_MAX_SQL_ROWS")
     agent_max_sql_scan_rows: int = Field(default=10000, alias="AGENT_MAX_SQL_SCAN_ROWS")
@@ -78,31 +77,19 @@ class Settings(BaseSettings):
     @classmethod
     def validate_chat_engine(cls, value: str) -> str:
         normalized = value.strip().lower()
-        allowed = {"deterministic", "agent_shadow", "agent_primary"}
-        if normalized not in allowed:
-            raise ValueError("CHAT_ENGINE must be one of: deterministic, agent_shadow, agent_primary")
+        if normalized != "agent_primary":
+            raise ValueError("CHAT_ENGINE must be agent_primary")
         return normalized
 
     @model_validator(mode="after")
     def validate_agent_engine_sdk_toggle(self) -> "Settings":
-        if self.chat_engine in {"agent_primary", "agent_shadow"} and not self.claude_agent_sdk_enabled:
-            raise ValueError(
-                "CLAUDE_AGENT_SDK_ENABLED must be true when CHAT_ENGINE is agent_primary or agent_shadow"
-            )
+        if not self.claude_agent_sdk_enabled:
+            raise ValueError("CLAUDE_AGENT_SDK_ENABLED must be true for agent_primary")
         return self
 
     @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
-
-    @property
-    def chat_engine_user_allowlist(self) -> set[str]:
-        return {
-            item.strip()
-            for item in self.chat_engine_users.split(",")
-            if item.strip()
-        }
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -6,7 +6,7 @@ Accepted, implemented in M9.
 
 ## Context
 
-The original SmartHRBI chat path used a deterministic flow:
+The original SmartHRBI chat path used a fixed rule-based flow:
 
 1. Parse user intent with `IntentParser`.
 2. Map the request to a fixed tool.
@@ -25,9 +25,7 @@ These requests require schema exploration, sample inspection, fallback SQL plann
 We introduce an Agentic Query runtime with these decisions:
 
 1. `POST /chat/stream` remains the single frontend entrypoint.
-2. Backend orchestration now supports three modes through `CHAT_ENGINE`:
-   - `deterministic`
-   - `agent_shadow`
+2. Backend orchestration now supports one Agentic mode through `CHAT_ENGINE`:
    - `agent_primary`
 3. `AgentRuntime` is the new orchestration layer for agent mode.
 4. Conversation state is modeled as:
@@ -84,8 +82,7 @@ Rejected. It would complicate frontend integration and split observability betwe
 1. Add `AgentRuntime`, persisted agent sessions, and BI-only tools.
 2. Add guardrails and audit hooks around every tool invocation.
 3. Upgrade SSE to expose planning and tool traces.
-4. Gate rollout with `CHAT_ENGINE`.
-5. Keep deterministic mode as the immediate rollback path.
+4. Keep `CHAT_ENGINE=agent_primary` as the only supported runtime mode.
 
 ## Reused Modules
 
@@ -99,8 +96,8 @@ Rejected. It would complicate frontend integration and split observability betwe
 
 ## Replaced or Wrapped Modules
 
-- `ChatStreamService` now selects between deterministic orchestration and `AgentRuntime`.
-- Deterministic tool routing remains available but no longer owns the only chat path.
+- `ChatStreamService` now routes chat requests directly through `AgentRuntime`.
+- Legacy tool routing no longer owns a runtime mode.
 
 ## Consequences
 
@@ -112,6 +109,6 @@ Positive:
 
 Tradeoffs:
 
-- Agent mode is slower than deterministic mode.
+- Agent runtime has higher latency than the retired fixed tool-routing path.
 - Tool traces and session state increase storage and audit volume.
 - SQL planning heuristics still need evaluation and incremental hardening.

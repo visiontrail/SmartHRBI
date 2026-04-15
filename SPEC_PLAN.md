@@ -109,13 +109,13 @@
 | M8-03 | Backend Dockerfile | DONE | AI-Agent | 2026-04-08 12:03 CST | 2026-04-08 12:19 CST | 新增 `apps/api/Dockerfile`（包含 DuckDB 依赖安装、`/healthz` 健康检查、Uvicorn 启动）并接入 CORS 配置；`.venv/bin/python -m py_compile apps/api/config.py apps/api/main.py` 通过 |
 | M8-04 | docker-compose 编排 | DONE | AI-Agent | 2026-04-08 12:03 CST | 2026-04-08 12:19 CST | 新增根目录 `docker-compose.yml` 并同步 `infra/docker/docker-compose.yml`（web/api/postgres 三服务、健康检查、依赖顺序、数据卷）；`scripts/docker_up.sh`/`docker_down.sh` 已切换默认 compose |
 | M8-05 | 本机与 Docker 冒烟验收 | DONE | AI-Agent | 2026-04-08 12:03 CST | 2026-04-08 13:25 CST | 已补齐本机 Docker 运行时（colima + docker compose）；`make smoke-local`、`make smoke-docker`、`make test-all` 全部通过，本机与容器链路均完成上传->问答->图表->保存->分享闭环 |
-| M9-01 | Agent 架构设计与 ADR | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增 ADR `docs/adr/0001-agentic-query-runtime.md`，冻结 `conversation_id -> agent_session_id -> persisted session state`、SSE 事件映射与 `deterministic/agent_shadow/agent_primary` 灰度策略；`rg -n "Agentic Query|agent_session_id|CHAT_ENGINE" docs/adr/0001-agentic-query-runtime.md SPEC_PLAN.md` 通过 |
+| M9-01 | Agent 架构设计与 ADR | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增 ADR `docs/adr/0001-agentic-query-runtime.md`，冻结 `conversation_id -> agent_session_id -> persisted session state`、SSE 事件映射与 `agent_primary` 运行策略；`rg -n "Agentic Query|agent_session_id|CHAT_ENGINE" docs/adr/0001-agentic-query-runtime.md SPEC_PLAN.md` 通过 |
 | M9-02 | Claude Agent SDK 运行时接入 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增 `apps/api/agent_runtime.py`、会话持久化 sqlite、热会话恢复与 `agent_session_id` 贯穿；`.venv/bin/python -m pytest tests/integration/test_agent_runtime.py -q` 通过 |
 | M9-03 | BI 领域工具面设计与实现 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已扩展 `ToolCallingService` 支持 `list_tables/describe_table/sample_rows/get_metric_catalog/run_semantic_query/execute_readonly_sql/get_distinct_values/save_view`；`.venv/bin/python -m pytest tests/integration/test_agent_tools.py -q` 通过 |
 | M9-04 | Agent 权限与安全护栏 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增 `apps/api/agent_guardrails.py`、只允许 BI 工具面、提示注入/通用工具/危险 SQL 拦截，以及 `agent_pre_tool_use/agent_post_tool_use` 审计；`.venv/bin/python -m pytest tests/security/test_agent_guardrails.py -q` 通过 |
 | M9-05 | 多轮对话与 SSE 编排升级 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | `POST /chat/stream` 已支持 `planning/tool_use/tool_result/spec/final/error`，并保留 `reasoning/tool` 兼容事件；前端新增 tool trace 面板与 `agent_session_id` 恢复；`.venv/bin/python -m pytest tests/integration/test_agent_chat_stream.py -q`、`npm --prefix apps/web run test:ui` 通过 |
 | M9-06 | Agent Prompting 与思考策略 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增 `apps/api/agent_prompting.py`，明确 schema-first、semantic-first、distinct-before-filter、失败回退与最终答案格式；长尾查询评测全部通过；`.venv/bin/python -m pytest tests/evals/test_agent_prompting.py -q` 通过 |
-| M9-07 | 双引擎灰度与迁移开关 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已接入 `CHAT_ENGINE` 与 `CHAT_ENGINE_USERS`，支持 `deterministic`、`agent_shadow`、`agent_primary` 三档切换和非白名单用户自动回退；`.venv/bin/python -m pytest tests/integration/test_chat_engine_switch.py -q` 通过 |
+| M9-07 | Agent 主路径配置收敛 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已收敛为 `CHAT_ENGINE=agent_primary` 单一模式，移除影子链路与白名单回退；`.venv/bin/python -m pytest tests/integration/test_chat_engine_switch.py -q` 通过 |
 | M9-08 | Agent 评测、性能与成本基线 | DONE | AI-Agent | 2026-04-10 10:55 CST | 2026-04-10 11:46 CST | 已新增长尾/安全/灰度评测并完成全量回归与降载 k6 基线；`.venv/bin/python -m pytest tests/evals -q`、`.venv/bin/python -m pytest tests -q`、`npm --prefix apps/web run test`、`npm --prefix apps/web run build`、`API_BASE_URL=http://127.0.0.1:8010 K6_VUS_50=1 K6_VUS_100=1 K6_DURATION_50=3s K6_DURATION_100=3s K6_START_100=4s k6 run tests/perf/chat_query.js` 通过（`chat_query_duration p95=219.96ms`、`http_req_failed=0.00%`） |
 <!-- TASK_BOARD_END -->
 
@@ -149,7 +149,7 @@
 | R-003 | 越权查询风险 | 高 | OPEN | RBAC + RLS + AST 三层拦截 | AI-Agent |
 | R-004 | 当前执行环境缺少 Docker 与本地 PostgreSQL，导致 M8 Docker 验收无法在本机完成 | 中 | CLOSED | 已安装并启动 Docker 运行时（colima + docker compose），并复验 `make smoke-docker` 与 `make test-all` 通过 | AI-Agent |
 | R-005 | 引入 Agent 后，模型可能绕过现有语义层约束而发起高成本或高风险查询 | 高 | CLOSED | 已落地 BI-only tool surface、提示注入/危险 SQL 拦截、RLS/脱敏复用与 `agent_pre_tool_use/agent_post_tool_use` 审计；`tests/security/test_agent_guardrails.py` 通过 | AI-Agent |
-| R-006 | 多轮 Agent 会话带来延迟、成本和会话状态漂移，影响交互稳定性 | 中 | CLOSED | 已实现热会话 + sqlite 持久化恢复、`CHAT_ENGINE` 灰度回退与 k6/pytest 基线；`tests/integration/test_agent_runtime.py`、`tests/integration/test_chat_engine_switch.py`、`tests/evals/test_agent_prompting.py`、`tests/perf/chat_query.js` 通过 | AI-Agent |
+| R-006 | 多轮 Agent 会话带来延迟、成本和会话状态漂移，影响交互稳定性 | 中 | CLOSED | 已实现热会话 + sqlite 持久化恢复、`agent_primary` 主路径与 k6/pytest 基线；`tests/integration/test_agent_runtime.py`、`tests/integration/test_chat_engine_switch.py`、`tests/evals/test_agent_prompting.py`、`tests/perf/chat_query.js` 通过 | AI-Agent |
 <!-- RISK_LOG_END -->
 
 ## 6. 分阶段实施计划（一步一步）
@@ -745,13 +745,13 @@ make test-all
 1. Agent 只获得 BI 域工具，不开放生产环境下不必要的通用代码工具。
 2. Agent 可以自由规划步骤，但不能绕过现有 SQL 安全、RLS、脱敏与审计链路。
 3. 优先采用多轮上下文会话，而不是每轮独立无状态 Prompt。
-4. 保留 deterministic semantic pipeline 作为可灰度回退的稳定路径。
+4. `agent_primary` 是唯一对话运行路径，旧固定工具路由不再作为 Agentic 模式暴露。
 5. 图表渲染层继续坚持“Agent 决策，后端校验，前端白名单渲染”。
 
 ### M9 目标架构概览
 
 1. 前端继续调用 `POST /chat/stream`，但后端编排器从当前 `rule router + tool executor` 升级为 `AgentOrchestratorService`。
-2. `AgentOrchestratorService` 优先使用 `ClaudeSDKClient` 维护连续会话；若热会话丢失，则使用已持久化 `agent_session_id` 恢复上下文或降级到现有 deterministic pipeline。
+2. `AgentOrchestratorService` 优先使用 `ClaudeSDKClient` 维护连续会话；若热会话丢失，则使用已持久化 `agent_session_id` 恢复上下文。
 3. Agent 只允许访问受控 BI 工具面，工具通过 Claude Agent SDK 的 in-process custom tools 或 SDK MCP server 暴露。
 4. 所有数据访问工具最终仍调用现有后端安全能力：`secure_query_sql`、AST 只读校验、RLS 注入、敏感列过滤、响应脱敏、审计落盘。
 5. SSE 事件从当前 `reasoning/tool/spec/final` 扩展为 `planning/tool_use/tool_result/spec/final/error`，同时保留兼容适配层，避免前端一次性重写。
@@ -763,7 +763,7 @@ make test-all
 1. 输出 ADR，明确为何当前 `IntentParser + metric matching` 无法覆盖长尾查询。
 2. 选择 Claude Agent SDK 作为运行时基座，并明确 `ClaudeSDKClient` 为连续会话主路径。
 3. 设计会话模型：`conversation_id -> agent_session_id -> ai_state/session metadata`。
-4. 明确灰度策略：`deterministic`、`agent_shadow`、`agent_primary` 三种模式。
+4. 明确运行策略：仅支持 `agent_primary` 模式。
 
 验收标准：
 1. 存在一份可审阅的 ADR，说明设计目标、边界、替代方案和迁移顺序。
@@ -878,9 +878,9 @@ npm --prefix apps/web run test:ui
    - 不确定列名时先查 schema
    - 不确定过滤值时先 `get_distinct_values`
    - SQL 结果为空时必须解释并尝试一次修正
-4. 规定失败回退：
+4. 规定失败处理：
    - 工具连续失败后给出可解释错误
-   - 必要时回退到 deterministic pipeline
+   - 不切回旧固定工具路由
 
 验收标准：
 1. 长尾问题不再第一步就因 metric 词表未命中而失败。
@@ -891,18 +891,18 @@ npm --prefix apps/web run test:ui
 .venv/bin/python -m pytest tests/evals/test_agent_prompting.py -q
 ```
 
-### M9-07 双引擎灰度与迁移开关
+### M9-07 Agent 主路径配置收敛
 
-目标：在不破坏现有稳定路径的前提下逐步切换到 Agent 编排。  
+目标：将对话入口收敛为 Agent 编排主路径。  
 实施步骤：
-1. 增加 `CHAT_ENGINE=deterministic|agent_shadow|agent_primary` 配置。
-2. `agent_shadow` 模式下同时运行现有 pipeline 与 Agent，只向用户返回 deterministic 结果，但保存 Agent 轨迹用于对比。
-3. 建立 query diff 分析：成功率、延迟、成本、图表可用率。
-4. 明确哪些 query pattern 先走 Agent，哪些继续走 deterministic。
+1. 仅保留 `CHAT_ENGINE=agent_primary` 配置。
+2. 移除影子链路和用户白名单回退。
+3. 建立 Agent 主路径指标：成功率、延迟、成本、图表可用率。
+4. 所有 query pattern 统一走 Agent 编排。
 
 验收标准：
-1. 可按环境变量或用户白名单切换引擎。
-2. 发生异常时可一键回退到现有实现。
+1. 旧固定路由与影子链路不再是合法 `CHAT_ENGINE` 值。
+2. 发生异常时返回明确的 Agent 错误事件。
 
 自测命令：
 ```bash
@@ -922,7 +922,7 @@ npm --prefix apps/web run test:ui
 4. 为 Agent 结果建立质量评分：是否命中正确列、是否产生可渲染 spec、是否有解释性结论。
 
 验收标准：
-1. 长尾查询成功率显著优于当前 deterministic parser。
+1. 长尾查询成功率满足 Agent 主路径验收标准。
 2. 安全用例全部受控。
 3. 延迟与成本在可接受范围内，并有明确上线门槛。
 
@@ -939,7 +939,7 @@ k6 run tests/perf/chat_query.js
 3. 安全测试和性能基线满足 M7 指标。
 4. README、部署文档、故障排查文档齐全。
 5. 关键功能均有自动化测试和可追踪证据。
-6. M9 灰度评测证明 Agent 路径在长尾查询上优于现有 deterministic pipeline，且具备可回退机制。
+6. M9 评测证明 Agent 主路径满足长尾查询、安全和性能门槛。
 
 ## 8. Coding Agent 执行顺序建议
 
@@ -947,7 +947,7 @@ k6 run tests/perf/chat_query.js
 2. 再做 M2 与 M3，打通语义编译和 LLM 查询。
 3. 然后做 M4 与 M5，完成 GenUI 和分享持久化。
 4. 最后做 M6、M7、M8，完成安全、测试、运行交付。
-5. 新增 M9 时，按 `M9-01/02 -> M9-03/04 -> M9-05/06 -> M9-07/08` 顺序推进，并始终保留 deterministic 回退路径。
+5. 新增 M9 时，按 `M9-01/02 -> M9-03/04 -> M9-05/06 -> M9-07/08` 顺序推进，并保持 `agent_primary` 为唯一对话运行路径。
 
 ## 9. 里程碑通过闸门（Gate）
 

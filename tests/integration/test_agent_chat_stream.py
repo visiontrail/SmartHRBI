@@ -129,7 +129,7 @@ def test_agent_chat_stream_replays_agent_events(monkeypatch, tmp_path: Path) -> 
     assert replay_events[-1]["event"] == "final"
 
 
-def test_agent_primary_does_not_fallback_to_deterministic_on_runtime_failure(
+def test_agent_primary_returns_failure_on_runtime_error(
     monkeypatch, tmp_path: Path
 ) -> None:
     set_agent_env(monkeypatch, tmp_path, chat_engine="agent_primary")

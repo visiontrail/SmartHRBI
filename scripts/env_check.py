@@ -23,7 +23,7 @@ REQUIRED_KEYS = {
 
 OPTIONAL_WARNINGS = {
     "api": {
-        "CHAT_ENGINE": "CHAT_ENGINE is not set; chat will default to deterministic and agent mode will stay disabled.",
+        "AI_API_KEY": "AI_API_KEY is not set; agent_primary chat will return an LLM configuration error until a key is provided.",
     },
 }
 

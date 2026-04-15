@@ -2,94 +2,40 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
 
-from apps.api.chat import get_chat_stream_service
-from apps.api.main import app
-from tests.agent_test_utils import read_sse_events, set_agent_env, upload_dataset
-from tests.auth_utils import auth_headers
+from apps.api.config import get_settings
 
 
-def test_chat_engine_shadow_keeps_deterministic_response_and_stores_shadow_trace(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(monkeypatch, tmp_path, chat_engine="agent_shadow")
+@pytest.mark.parametrize("deprecated_engine", ["legacy_fixed", "legacy_shadow"])
+def test_deprecated_chat_engines_are_rejected(
+    monkeypatch,
+    tmp_path: Path,
+    deprecated_engine: str,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'views.db'}")
+    monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.setenv("AUTH_SECRET", "test-secret")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("CHAT_ENGINE", deprecated_engine)
+    monkeypatch.setenv("CLAUDE_AGENT_SDK_ENABLED", "true")
+    get_settings.cache_clear()
 
-    with TestClient(app) as client:
-        dataset_table = upload_dataset(
-            client,
-            rows=[
-                {"employee_id": "E-001", "department": "HR", "hire_year": 2022, "status": "active"},
-                {"employee_id": "E-002", "department": "HR", "hire_year": 2023, "status": "active"},
-            ],
-        )
-        headers = auth_headers(
-            client,
-            user_id="alice",
-            project_id="north",
-            role="viewer",
-            department="HR",
-            clearance=1,
-        )
-        with client.stream(
-            "POST",
-            "/chat/stream",
-            json={
-                "conversation_id": "chat-engine-shadow-conv",
-                "request_id": "chat-engine-shadow-req",
-                "user_id": "alice",
-                "project_id": "north",
-                "dataset_table": dataset_table,
-                "message": "按部门看在职人数",
-            },
-            headers=headers,
-        ) as response:
-            assert response.status_code == 200
-            events, _ = read_sse_events(response)
-
-    assert [item["event"] for item in events] == ["reasoning", "tool", "spec", "final"]
-    shadow_context = get_chat_stream_service().sessions.get_context(
-        conversation_id="chat-engine-shadow-conv"
-    )
-    assert shadow_context["shadow_agent_events"]
+    with pytest.raises(RuntimeError):
+        get_settings()
 
 
-def test_chat_engine_allowlist_can_force_deterministic_fallback(monkeypatch, tmp_path: Path) -> None:
-    set_agent_env(
-        monkeypatch,
-        tmp_path,
-        chat_engine="agent_primary",
-        chat_engine_users="allowlisted-user",
-    )
+def test_chat_engine_defaults_to_agent_primary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'views.db'}")
+    monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.setenv("AUTH_SECRET", "test-secret")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.delenv("CHAT_ENGINE", raising=False)
+    monkeypatch.delenv("CLAUDE_AGENT_SDK_ENABLED", raising=False)
+    get_settings.cache_clear()
 
-    with TestClient(app) as client:
-        dataset_table = upload_dataset(
-            client,
-            rows=[
-                {"employee_id": "E-001", "department": "HR", "hire_year": 2022, "status": "active"},
-                {"employee_id": "E-002", "department": "HR", "hire_year": 2023, "status": "active"},
-            ],
-        )
-        headers = auth_headers(
-            client,
-            user_id="alice",
-            project_id="north",
-            role="viewer",
-            department="HR",
-            clearance=1,
-        )
-        with client.stream(
-            "POST",
-            "/chat/stream",
-            json={
-                "conversation_id": "chat-engine-switch-conv",
-                "request_id": "chat-engine-switch-req",
-                "user_id": "alice",
-                "project_id": "north",
-                "dataset_table": dataset_table,
-                "message": "按部门看在职人数",
-            },
-            headers=headers,
-        ) as response:
-            assert response.status_code == 200
-            events, _ = read_sse_events(response)
+    settings = get_settings()
 
-    assert [item["event"] for item in events] == ["reasoning", "tool", "spec", "final"]
+    assert settings.chat_engine == "agent_primary"
