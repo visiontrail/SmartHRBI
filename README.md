@@ -1,194 +1,198 @@
 # SmartHRBI
 
-SmartHRBI is an AI-Native HR/PM BI system scaffold with FastAPI + DuckDB backend and Next.js frontend.
+SmartHRBI 是一个面向 HR / PM 场景的 AI-Native BI 原型系统。项目当前由 FastAPI 后端、Next.js 前端、DuckDB 会话数据层和本地 SQLite 状态存储组成，支持 Excel 数据上传、语义指标查询、流式 AI 对话、图表生成、可视化画布、视图保存与分享。
 
-## Prerequisites
+## 当前进展
+
+- 前端主界面已经从单页联调台推进到产品化工作台：左侧全局侧栏管理 Conversations / Workspaces，中间支持 Chat、Canvas、Split 三种布局。
+- Chat 入口会调用后端 `POST /chat/stream`，消费 SSE 事件并把图表 spec 转成 ECharts 图表资产。
+- Workspace 使用 React Flow 画布，支持添加图表节点、文本节点、拖拽布局、重命名、复制、删除与本地保存。
+- Share 页面已接入后端保存的 view state，可通过 `/share/[viewId]` 重新渲染图表与保存时的对话上下文。
+- 后端已经具备上传、语义层、工具调用、Agentic Query、权限控制、审计、视图版本化等核心能力。
+- 仍处于原型/内测阶段：前端 Conversations / Workspaces / Chart Assets 的列表与画布状态当前主要通过 mock API 和 localStorage 管理，后端已承担真实数据上传、查询、对话流和分享视图存储。
+
+## 核心能力
+
+### 数据与语义层
+
+- 上传 `.xlsx` 文件，单文件上限 10MB，单批最多 20 个文件。
+- 自动规范常见 HR 字段别名，例如 `Employee ID`、`Dept`、`姓名`、`部门` 等。
+- 多文件合并后写入用户 + 项目隔离的 DuckDB 会话库，表名形如 `dataset_<batch_id>`。
+- 生成上传元数据与质量报告，可判断是否适合发布到语义层。
+- 内置 HR / PM 指标模型：
+  - HR：总人数、在职人数、离职人数、离职率、新入职人数、平均薪资、薪资总额、人员健康度均分。
+  - PM：项目总数、进行中项目数、延迟项目数、高风险项目数、项目健康度均分、项目经理数、项目延期率。
+
+### AI 对话与图表生成
+
+- `POST /chat/stream` 是统一对话入口，返回 `text/event-stream`。
+- deterministic 模式可基于固定指标与工具路由生成查询和图表。
+- Agentic Query 模式支持 schema 探索、样例读取、语义查询、只读 SQL、distinct values、保存视图等 BI 工具链。
+- SSE 事件包括 `planning`、`reasoning`、`tool_use`、`tool_result`、`tool`、`spec`、`final`、`error`。
+- 图表 spec 可渲染为 ECharts，当前支持 bar、line、pie、area、stacked_bar、scatter、radar、funnel、treemap、gauge、table、single_value 等类型，部分高级类型由后端/前端 spec 透传。
+
+### 安全与治理
+
+- `/auth/login` 签发本地 HS256 Bearer token。
+- 角色权限覆盖 `admin`、`hr`、`pm`、`viewer`。
+- API 入口统一校验 user/project scope。
+- SQL 查询经过只读校验、表白名单、敏感表/列拦截、RLS 注入与结果脱敏。
+- 非 HR/Admin 角色会屏蔽 salary、bonus、ssn、bank_account 等敏感字段。
+- 审计记录覆盖认证、授权、上传、查询、工具调用、分享和回滚。
+
+### 视图保存与分享
+
+- `POST /views` 保存当前 AI state，返回 `view_id` 和 `/share/<view_id>`。
+- 同一个 `view_id` 可追加新版本。
+- `GET /views/{view_id}` 读取私有视图，`GET /share/{view_id}` 读取分享视图。
+- `POST /views/{view_id}/rollback/{version}` 支持版本回滚。
+- 分享页会重新渲染保存的图表 spec，并展示保存时的会话摘要。
+
+## 技术栈
+
+- Backend：FastAPI、Pydantic Settings、DuckDB、Pandas、sqlglot、SQLite。
+- Agent Runtime：自研 `AgentRuntime` 编排层、Claude Agent SDK 风格会话模型、OpenAI-compatible Chat Completions、function calling / tool calling、BI-only tool registry、SQLite 持久化 agent sessions、Guardrails + Audit Hooks、SSE tool trace。
+- Frontend：Next.js App Router、React 18、TypeScript、Tailwind CSS、Zustand、TanStack Query、React Flow、ECharts。
+- Testing：pytest、Vitest、Playwright、smoke flow。
+- Delivery：Makefile、Dockerfile、Docker Compose。
+
+## 目录结构
+
+```text
+.
+├── apps/api              # FastAPI 后端
+├── apps/web              # Next.js 前端
+├── models                # HR / PM 语义模型
+├── sample_data           # 示例 Excel 数据
+├── tests                 # 后端、集成、安全、smoke 测试
+├── scripts               # 本地开发、构建、测试、重置脚本
+├── docs/adr              # 架构决策记录
+├── infra/docker          # 备用 Docker Compose 文件
+└── packages/shared       # 共享包占位
+```
+
+## 环境要求
 
 - Python 3.11+
 - Node.js 20+
 - npm 10+
 - GNU Make
-- Docker Desktop (optional, only needed for container delivery)
+- Docker Desktop，可选，仅容器交付和 Docker smoke 需要
 
-## Quick Start (Local)
+## 快速开始
 
-1. Install dependencies and generate local env files:
+安装依赖并生成本地环境文件：
 
 ```bash
 make bootstrap
 ```
 
-2. Validate environment variables:
+校验环境变量：
 
 ```bash
 make env-check
 ```
 
-3. Start local stack (web + api):
+启动本地 API 与 Web：
 
 ```bash
 make dev
 ```
 
-`make dev` starts web/api processes locally. It does not install or start PostgreSQL.
+默认访问地址：
 
-## Local Debug Start
+- Web：http://127.0.0.1:3000
+- API：http://127.0.0.1:8000
+- Health Check：http://127.0.0.1:8000/healthz
 
-If you want local debug startup with separate web/api logs:
+`make dev` 会启动本地 web/api 进程，不会安装或启动 PostgreSQL；当前默认状态存储使用本地 SQLite，上传数据和 DuckDB 文件位于 `apps/api/data/uploads`。
 
-```bash
-make dev-local
-```
-
-Equivalent direct script:
+## 常用命令
 
 ```bash
-bash scripts/dev_local_debug.sh
+make help              # 查看命令
+make bootstrap         # 安装 Python / Web 依赖并初始化 .env
+make env-check         # 校验 apps/api/.env 与 apps/web/.env
+make dev               # 同时启动 API 和 Web
+make dev-api           # 仅启动 FastAPI
+make dev-web           # 仅启动 Next.js
+make dev-local         # 调试模式启动，日志写入 logs/dev-local
+make lint              # 后端 compileall + 前端 lint
+make test              # 后端 pytest，设置 RUN_WEB_TESTS=1 后追加前端测试
+make build             # 后端编译检查 + 前端生产构建
+make smoke-local       # 本地端到端 smoke flow
+make smoke-docker      # Docker 端到端 smoke flow
+make test-all          # lint + test + build + smoke-local + 可选 smoke-docker
+make reset-local-data  # 清理本地运行数据
+make docker-up         # 构建并启动 Docker Compose
+make docker-down       # 停止 Docker Compose
 ```
 
-`dev-local` is intended for debug only. It writes logs under `logs/dev-local` and does not install or start PostgreSQL.
+注意：`scripts/test.sh` 在 `RUN_WEB_TESTS=1` 时会执行 `npm run --prefix apps/web test`。如果前端测试脚本尚未补齐，可直接运行 Vitest/Playwright 对应命令，或先只执行默认的 `make test`。
 
-## Local Smoke Validation
+## 本地配置
 
-Run complete smoke flow:
+`make bootstrap` 会在缺失时从模板生成：
 
-```bash
-make smoke-local
+- `apps/api/.env`
+- `apps/web/.env`
+
+后端关键变量：
+
+```env
+DATABASE_URL=sqlite:///./data/uploads/state/ai_views.sqlite3
+MODEL_PROVIDER_URL=http://localhost:11434
+AI_API_KEY=
+AI_MODEL=gpt-4o-mini
+CHAT_ENGINE=deterministic
+CLAUDE_AGENT_SDK_ENABLED=true
+AUTH_SECRET=replace-with-a-strong-secret
+UPLOAD_DIR=./data/uploads
+CORS_ALLOW_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 ```
 
-Smoke flow covers: `upload -> semantic query -> chat stream -> save view -> share view`.
+前端关键变量：
 
-## Docker Delivery
-
-Build and run full stack:
-
-```bash
-docker compose up -d --build
-docker compose ps
+```env
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+NEXTAUTH_URL=http://127.0.0.1:3000
+NEXTAUTH_SECRET=replace-with-a-strong-secret
 ```
 
-Stop stack:
+前端对话默认上下文可通过这些可选变量调整：
 
-```bash
-docker compose down --remove-orphans
+```env
+NEXT_PUBLIC_DEFAULT_USER_ID=demo-user
+NEXT_PUBLIC_DEFAULT_PROJECT_ID=demo-project
+NEXT_PUBLIC_DEFAULT_ROLE=hr
+NEXT_PUBLIC_DEFAULT_DEPARTMENT=HR
+NEXT_PUBLIC_DEFAULT_CLEARANCE=1
+NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide
 ```
 
-Or use wrappers:
+如果没有配置 `AI_API_KEY`，后端对话会回退到 deterministic / rule-based 路径；配置 OpenAI-compatible endpoint 后，可用于工具选择和 schema inference。
 
-```bash
-make docker-up
-make docker-down
+## Agentic Query
+
+`CHAT_ENGINE` 控制对话引擎：
+
+- `deterministic`：默认稳定路径，适合本地开发和回归。
+- `agent_shadow`：前台仍返回 deterministic 结果，后台运行 agent 作为影子链路。
+- `agent_primary`：前台直接使用 agent 结果。
+
+Agent 相关配置：
+
+```env
+CHAT_ENGINE=deterministic
+CHAT_ENGINE_USERS=
+CLAUDE_AGENT_SDK_ENABLED=true
+AGENT_MAX_TOOL_STEPS=6
+AGENT_MAX_SQL_ROWS=200
+AGENT_MAX_SQL_SCAN_ROWS=10000
+AGENT_TIMEOUT_SECONDS=25
 ```
 
-Run Docker smoke flow:
-
-```bash
-make smoke-docker
-```
-
-## Reset Local Runtime/Test Data
-
-To clear local runtime state, uploaded datasets, persisted chat/view session state, DuckDB/SQLite files under `UPLOAD_DIR`, and local test artifacts:
-
-```bash
-.venv/bin/python scripts/reset_local_data.py
-```
-
-One-command shell wrapper:
-
-```bash
-bash scripts/reset_local_data.sh
-```
-
-Preview what would be deleted without changing anything:
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --dry-run
-```
-
-If you explicitly also want to reset the database referenced by `apps/api/.env`:
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --with-db-reset
-```
-
-If you also want to remove Docker Compose named volumes for the local stack:
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --include-docker-volumes
-```
-
-Equivalent Make target:
-
-```bash
-make reset-local-data
-```
-
-## Full Test Gate
-
-Run lint, backend/frontend tests, build, and local smoke in one command:
-
-```bash
-make test-all
-```
-
-If Docker is available, `make test-all` also executes Docker smoke by default.
-
-## Repository Layout
-
-- `apps/web`: Next.js App Router frontend
-- `apps/api`: FastAPI backend
-- `packages/shared`: Shared contracts and helper modules
-- `infra/docker`: Alternative compose file location
-- `tests`: Backend tests + smoke scripts
-- `scripts`: Build/test/dev automation scripts
-
-## Standard Commands
-
-```bash
-make help
-make bootstrap
-make env-check
-make lint
-make test
-make build
-make dev
-make dev-local
-make smoke-local
-make smoke-docker
-make test-all
-make docker-up
-make docker-down
-```
-
-## OpenAI Compatible LLM Setup
-
-`apps/api` now supports OpenAI-compatible chat completion endpoints for tool routing.
-
-Set these in `apps/api/.env`:
-
-- `MODEL_PROVIDER_URL`: provider base URL (for example `https://api.openai.com`)
-- `AI_API_KEY`: API key used in `Authorization: Bearer ...`
-- `AI_MODEL`: model name (for example `gpt-4o-mini`, `qwen-plus`, etc.)
-- `AI_TIMEOUT_SECONDS`: HTTP timeout for LLM routing calls
-
-When `AI_API_KEY` is empty, chat falls back to deterministic rule routing.
-
-## Agentic Query Mode
-
-M9 adds an Agentic Query runtime behind the same `POST /chat/stream` API.
-
-Set these in `apps/api/.env` to control rollout:
-
-- `CHAT_ENGINE`: `deterministic`, `agent_shadow`, or `agent_primary`
-- `CHAT_ENGINE_USERS`: optional comma-separated allowlist; non-listed users fall back to `deterministic`
-- `CLAUDE_AGENT_SDK_ENABLED`: must be `true` for `agent_primary`/`agent_shadow`; startup rejects agent mode otherwise
-- `AGENT_MAX_TOOL_STEPS`: maximum tool steps per query
-- `AGENT_MAX_SQL_ROWS`: maximum rows returned by `execute_readonly_sql`
-- `AGENT_MAX_SQL_SCAN_ROWS`: hard cap for SQL scan-oriented limits
-- `AGENT_TIMEOUT_SECONDS`: end-to-end agent timeout budget
-
-Agent mode uses a BI-only tool surface:
+Agent 工具面限制在 BI 相关操作：
 
 - `list_tables`
 - `describe_table`
@@ -199,17 +203,127 @@ Agent mode uses a BI-only tool surface:
 - `get_distinct_values`
 - `save_view`
 
-All agent SQL still goes through the existing readonly guard, RLS injection, sensitive-column filtering, response redaction, and audit logging.
+设计细节见 `docs/adr/0001-agentic-query-runtime.md`。
 
-## M9 Verification
+## API 概览
 
-Key M9 verification commands:
+所有业务 API 除 `/healthz` 外都需要 `Authorization: Bearer <token>`。前端会自动调用 `/auth/login` 获取并缓存 token。
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/healthz` | 服务健康检查 |
+| `POST` | `/auth/login` | 签发访问 token |
+| `POST` | `/auth/roles/{user_id}` | 管理用户角色覆盖 |
+| `GET` | `/audit/events` | 查询审计事件 |
+| `POST` | `/datasets/upload` | 上传 Excel 数据集 |
+| `GET` | `/datasets/{batch_id}/quality-report` | 获取上传质量报告 |
+| `GET` | `/semantic/metrics` | 获取语义指标目录 |
+| `POST` | `/semantic/query` | 执行语义查询 |
+| `POST` | `/chat/tool-call` | 直接调用 BI 工具 |
+| `POST` | `/chat/stream` | 流式 AI 对话与图表生成 |
+| `POST` | `/views` | 保存 AI view |
+| `GET` | `/views/{view_id}` | 读取私有 view |
+| `GET` | `/share/{view_id}` | 读取分享 view |
+| `POST` | `/views/{view_id}/rollback/{version}` | 回滚 view 版本 |
+
+## 端到端验证
+
+本地 smoke flow：
 
 ```bash
-.venv/bin/python -m pytest tests/integration/test_agent_runtime.py tests/integration/test_agent_tools.py tests/integration/test_agent_chat_stream.py tests/integration/test_chat_engine_switch.py tests/security/test_agent_guardrails.py tests/evals/test_agent_prompting.py -q
-.venv/bin/python -m pytest tests -q
-npm --prefix apps/web run test
-npm --prefix apps/web run build
+make smoke-local
 ```
 
-An ADR for the runtime design is available at [`docs/adr/0001-agentic-query-runtime.md`](/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/SmartHRBI/docs/adr/0001-agentic-query-runtime.md).
+覆盖链路：
+
+```text
+healthz -> auth/login -> upload Excel -> semantic query -> chat stream -> save view -> share view
+```
+
+完整测试门禁：
+
+```bash
+make test-all
+```
+
+也可以按需运行更细的测试：
+
+```bash
+.venv/bin/python -m pytest tests -q
+.venv/bin/python -m pytest tests/security -q
+.venv/bin/python -m pytest tests/integration -q
+npm run --prefix apps/web build
+```
+
+## Docker 交付
+
+构建并启动：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+停止：
+
+```bash
+docker compose down --remove-orphans
+```
+
+Make 包装命令：
+
+```bash
+make docker-up
+make docker-down
+make smoke-docker
+```
+
+默认 Compose 暴露：
+
+- Web：`127.0.0.1:3000`
+- API：`127.0.0.1:8000`
+
+上传与状态数据保存在 Docker named volume `smarthrbi_upload_data`。
+
+## 数据重置
+
+清理本地运行数据、上传文件、DuckDB / SQLite 状态、日志和测试产物：
+
+```bash
+make reset-local-data
+```
+
+预览将删除的内容：
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --dry-run
+```
+
+同时重置 `apps/api/.env` 指向的数据库：
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --with-db-reset
+```
+
+同时移除 Docker Compose named volumes：
+
+```bash
+.venv/bin/python scripts/reset_local_data.py --include-docker-volumes
+```
+
+## 示例数据
+
+可用于本地上传验证的 Excel 样例：
+
+- `sample_data/galaxyspace-hr-sample.xlsx`
+- `sample_data/hr_workforce_upload_sample.xlsx`
+- `sample_data/hr_workforce_upload_sample_zh.xlsx`
+
+上传后，API 会返回 `batch_id`、`dataset_table`、`quality_report`、`diagnostics` 等信息。后续语义查询和对话请求需要使用返回的 `dataset_table`。
+
+## 已知边界
+
+- 前端主界面的 session、workspace、chart asset 列表仍是 mock/localStorage 形态，不等同于后端持久化对象。
+- `ChatWorkbench` 组件仍保留为测试/联调用途，但当前主路由渲染的是 `AppShell`。
+- 默认 `NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide` 需要和实际 DuckDB 会话表对齐；上传新文件后应使用返回的 `dataset_table`。
+- Agent 模式已具备运行时和测试覆盖，但生产级模型接入、评测集扩展和长会话体验还需要继续打磨。

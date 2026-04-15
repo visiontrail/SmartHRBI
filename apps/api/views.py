@@ -14,6 +14,8 @@ from urllib.parse import unquote, urlparse
 
 from .config import get_settings
 
+SQLITE_RELATIVE_BASE = Path(__file__).resolve().parent
+
 
 class ViewStorageError(Exception):
     def __init__(self, *, code: str, message: str, status_code: int = 400) -> None:
@@ -449,9 +451,7 @@ def _cached_view_storage_service(storage_key: str) -> ViewStorageService:
     parsed = urlparse(storage_key)
     db_path: Path
     if parsed.scheme == "sqlite":
-        db_path = Path(unquote(parsed.path))
-        if not db_path.is_absolute():
-            db_path = db_path.resolve()
+        db_path = _sqlite_db_path_from_url(storage_key)
         audit_dir = db_path.parent
     else:
         fallback_root = Path(storage_key)
@@ -480,6 +480,19 @@ def get_view_storage_service() -> ViewStorageService:
 
 def clear_view_storage_service_cache() -> None:
     _cached_view_storage_service.cache_clear()
+
+
+def _sqlite_db_path_from_url(database_url: str) -> Path:
+    parsed = urlparse(database_url)
+    raw_path = unquote(parsed.path)
+
+    if raw_path.startswith("//"):
+        return Path("/" + raw_path.lstrip("/")).resolve()
+
+    if raw_path.startswith("/"):
+        raw_path = raw_path[1:]
+
+    return (SQLITE_RELATIVE_BASE / raw_path).resolve()
 
 
 def _utc_now() -> str:

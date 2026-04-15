@@ -10,6 +10,12 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+source "$ROOT_DIR/scripts/lib/env.sh"
+API_ENV_FILE="${API_ENV_FILE:-$ROOT_DIR/apps/api/.env}"
+export API_ENV_FILE
+echo "[dev-api] Loading API env: $API_ENV_FILE"
+load_env_file "$API_ENV_FILE"
+
 HOST="${API_HOST:-127.0.0.1}"
 PORT="${API_PORT:-8000}"
 BASE_CMD=("$PYTHON_BIN" -m uvicorn apps.api.main:app --host "$HOST" --port "$PORT")

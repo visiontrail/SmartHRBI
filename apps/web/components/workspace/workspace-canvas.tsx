@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   ReactFlow,
   Background,
@@ -22,6 +22,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useSaveWorkspace } from "@/hooks/use-workspace";
 import { ChartNode } from "./nodes/chart-node";
 import { TextNode } from "./nodes/text-node";
+import type { WorkspaceNode } from "@/types/workspace";
 
 const nodeTypes: NodeTypes = {
   chartNode: ChartNode,
@@ -37,11 +38,14 @@ export function WorkspaceCanvas() {
 
   const [nodes, setNodes] = useNodesState(storeNodes as Node[]);
   const [edges, setEdges] = useEdgesState(storeEdges as Edge[]);
+  const nodesRef = useRef<Node[]>(storeNodes as Node[]);
 
   const saveWorkspace = useSaveWorkspace();
 
   useEffect(() => {
-    setNodes(storeNodes as Node[]);
+    const nextNodes = storeNodes as Node[];
+    nodesRef.current = nextNodes;
+    setNodes(nextNodes);
   }, [storeNodes, setNodes]);
 
   useEffect(() => {
@@ -50,16 +54,16 @@ export function WorkspaceCanvas() {
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
-      setNodes((nds) => {
-        const next = applyNodeChanges(changes, nds);
-        const hasMeaningfulChange = changes.some(
-          (c) => c.type === "position" || c.type === "remove" || c.type === "dimensions"
-        );
-        if (hasMeaningfulChange) {
-          setStoreNodes(next as any);
-        }
-        return next;
-      });
+      const nextNodes = applyNodeChanges(changes, nodesRef.current);
+      nodesRef.current = nextNodes;
+      setNodes(nextNodes);
+
+      const hasMeaningfulChange = changes.some(
+        (c) => c.type === "position" || c.type === "remove" || c.type === "dimensions"
+      );
+      if (hasMeaningfulChange) {
+        setStoreNodes(nextNodes as WorkspaceNode[]);
+      }
     },
     [setNodes, setStoreNodes]
   );
