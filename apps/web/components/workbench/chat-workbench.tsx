@@ -1,11 +1,16 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel } from "../genui/state-panels";
 import { getAuthorizationHeader } from "../../lib/auth/session";
 import { parseSSEStream } from "../../lib/chat/sse";
+import {
+  SESSION_STORAGE_KEY,
+  safeLoadFromStorage,
+  safeSaveToStorage
+} from "../../lib/chat/session-storage";
 
 type ChatWorkbenchProps = {
   apiBaseUrl: string;
@@ -21,6 +26,22 @@ type StreamStatus = "idle" | "streaming";
 type SaveStatus = "idle" | "saving";
 type UploadStatus = "idle" | "uploading";
 
+type StoredWorkbenchState = {
+  version: 1;
+  conversationId: string;
+  agentSessionId: string | null;
+  userId: string;
+  projectId: string;
+  role: string;
+  department: string;
+  clearance: number;
+  datasetTable: string;
+  composer: string;
+  messages: Message[];
+  activeSpec: unknown;
+  lastToolEvent: Record<string, unknown> | null;
+  toolTrace: Record<string, unknown>[];
+};
 
 const DEFAULT_USER_ID = "demo-user";
 const DEFAULT_PROJECT_ID = "demo-project";
@@ -31,19 +52,27 @@ const DEFAULT_DATASET = "employees_wide";
 
 export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const [conversationId, setConversationId] = useState<string>(makeRequestId());
-  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
-  const [userId, setUserId] = useState(DEFAULT_USER_ID);
-  const [projectId, setProjectId] = useState(DEFAULT_PROJECT_ID);
-  const [role, setRole] = useState(DEFAULT_ROLE);
-  const [department, setDepartment] = useState(DEFAULT_DEPARTMENT);
-  const [clearance, setClearance] = useState(DEFAULT_CLEARANCE);
-  const [datasetTable, setDatasetTable] = useState(DEFAULT_DATASET);
-  const [composer, setComposer] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [activeSpec, setActiveSpec] = useState<unknown>(null);
-  const [lastToolEvent, setLastToolEvent] = useState<Record<string, unknown> | null>(null);
-  const [toolTrace, setToolTrace] = useState<Record<string, unknown>[]>([]);
+  const restoredStateRef = useRef<StoredWorkbenchState | null | undefined>(undefined);
+  if (restoredStateRef.current === undefined) {
+    restoredStateRef.current = loadStoredWorkbenchState();
+  }
+  const restoredState = restoredStateRef.current;
+
+  const [conversationId, setConversationId] = useState<string>(restoredState?.conversationId ?? makeRequestId());
+  const [agentSessionId, setAgentSessionId] = useState<string | null>(restoredState?.agentSessionId ?? null);
+  const [userId, setUserId] = useState(restoredState?.userId ?? DEFAULT_USER_ID);
+  const [projectId, setProjectId] = useState(restoredState?.projectId ?? DEFAULT_PROJECT_ID);
+  const [role, setRole] = useState(restoredState?.role ?? DEFAULT_ROLE);
+  const [department, setDepartment] = useState(restoredState?.department ?? DEFAULT_DEPARTMENT);
+  const [clearance, setClearance] = useState(restoredState?.clearance ?? DEFAULT_CLEARANCE);
+  const [datasetTable, setDatasetTable] = useState(restoredState?.datasetTable ?? DEFAULT_DATASET);
+  const [composer, setComposer] = useState(restoredState?.composer ?? "");
+  const [messages, setMessages] = useState<Message[]>(restoredState?.messages ?? []);
+  const [activeSpec, setActiveSpec] = useState<unknown>(restoredState?.activeSpec ?? null);
+  const [lastToolEvent, setLastToolEvent] = useState<Record<string, unknown> | null>(
+    restoredState?.lastToolEvent ?? null
+  );
+  const [toolTrace, setToolTrace] = useState<Record<string, unknown>[]>(restoredState?.toolTrace ?? []);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("idle");
   const [streamError, setStreamError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -55,6 +84,39 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const [uploadBatchId, setUploadBatchId] = useState<string | null>(null);
   const [uploadDiagnostics, setUploadDiagnostics] = useState<Record<string, unknown> | null>(null);
   const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    safeSaveToStorage<StoredWorkbenchState>(SESSION_STORAGE_KEY, {
+      version: 1,
+      conversationId,
+      agentSessionId,
+      userId,
+      projectId,
+      role,
+      department,
+      clearance,
+      datasetTable,
+      composer,
+      messages,
+      activeSpec,
+      lastToolEvent,
+      toolTrace
+    });
+  }, [
+    activeSpec,
+    agentSessionId,
+    clearance,
+    composer,
+    conversationId,
+    datasetTable,
+    department,
+    lastToolEvent,
+    messages,
+    projectId,
+    role,
+    toolTrace,
+    userId
+  ]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -545,4 +607,50 @@ function readApiErrorMessage(payload: unknown, fallback: string): string {
 
   const payloadMessage = String(payload.message ?? "");
   return payloadMessage || fallback;
+}
+
+function loadStoredWorkbenchState(): StoredWorkbenchState | null {
+  const state = safeLoadFromStorage<Partial<StoredWorkbenchState>>(SESSION_STORAGE_KEY);
+  if (!state || typeof state.conversationId !== "string" || !state.conversationId.trim()) {
+    return null;
+  }
+
+  const messages = Array.isArray(state.messages) ? state.messages.filter(isMessage) : [];
+  const toolTrace = Array.isArray(state.toolTrace) ? state.toolTrace.filter(isRecord) : [];
+  const lastToolEvent = isRecord(state.lastToolEvent) ? state.lastToolEvent : null;
+  const clearance = Number(state.clearance);
+
+  return {
+    version: 1,
+    conversationId: state.conversationId,
+    agentSessionId:
+      typeof state.agentSessionId === "string" && state.agentSessionId.trim()
+        ? state.agentSessionId
+        : null,
+    userId: typeof state.userId === "string" && state.userId.trim() ? state.userId : DEFAULT_USER_ID,
+    projectId: typeof state.projectId === "string" && state.projectId.trim() ? state.projectId : DEFAULT_PROJECT_ID,
+    role: typeof state.role === "string" && state.role.trim() ? state.role : DEFAULT_ROLE,
+    department: typeof state.department === "string" ? state.department : DEFAULT_DEPARTMENT,
+    clearance: Number.isFinite(clearance) ? Math.max(0, Math.trunc(clearance)) : DEFAULT_CLEARANCE,
+    datasetTable:
+      typeof state.datasetTable === "string" && state.datasetTable.trim()
+        ? state.datasetTable
+        : DEFAULT_DATASET,
+    composer: typeof state.composer === "string" ? state.composer : "",
+    messages,
+    activeSpec: state.activeSpec ?? null,
+    lastToolEvent,
+    toolTrace
+  };
+}
+
+function isMessage(value: unknown): value is Message {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    (value.role === "user" || value.role === "assistant") &&
+    typeof value.text === "string"
+  );
 }

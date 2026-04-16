@@ -1,4 +1,6 @@
 export const SESSION_STORAGE_KEY = "smarthrbi:chat-workbench:v1";
+export const CHAT_STORAGE_KEY = "smarthrbi:chat:v1";
+export const CHART_ASSETS_STORAGE_KEY = "smarthrbi:chart-assets:v1";
 
 export function safeLoadFromStorage<T>(key: string): T | null {
   if (typeof window === "undefined") {

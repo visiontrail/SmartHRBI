@@ -203,6 +203,17 @@ describe("Chat workbench streaming UI", () => {
       expect(screen.getByTestId("tool-status")).toHaveTextContent("describe_table");
       expect(screen.getByTestId("tool-status")).toHaveTextContent("agent-session-restored");
     });
+
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText("done");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8000/chat/stream",
+      expect.objectContaining({
+        body: expect.stringContaining('"conversation_id":"conv-1"')
+      })
+    );
   });
 
   it("uploads excel files and switches the active dataset table", async () => {

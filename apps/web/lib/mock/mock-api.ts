@@ -2,14 +2,17 @@ import type { ChatSession, ChatMessage } from "@/types/chat";
 import type { ChartAsset } from "@/types/chart";
 import type { Workspace, WorkspaceSnapshot } from "@/types/workspace";
 import {
-  MOCK_SESSIONS,
-  MOCK_MESSAGES,
-  MOCK_CHART_ASSETS,
   MOCK_WORKSPACES,
   MOCK_WORKSPACE_SNAPSHOTS,
   generateMockResponse,
 } from "./mock-data";
 import { generateId } from "@/lib/utils";
+import {
+  CHAT_STORAGE_KEY,
+  CHART_ASSETS_STORAGE_KEY,
+  safeLoadFromStorage,
+  safeSaveToStorage,
+} from "@/lib/chat/session-storage";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const WORKSPACE_STORAGE_KEY = "smarthrbi.mock.workspaces";
@@ -20,11 +23,24 @@ type StoredWorkspaceState = {
   snapshots: Record<string, WorkspaceSnapshot>;
 };
 
+type StoredChatState = {
+  version: 1;
+  sessions: ChatSession[];
+  activeSessionId: string | null;
+  messagesBySession: Record<string, ChatMessage[]>;
+};
+
+type StoredAssetState = {
+  version: 1;
+  assets: ChartAsset[];
+};
+
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
-let sessions = [...MOCK_SESSIONS];
-let messages: Record<string, ChatMessage[]> = JSON.parse(JSON.stringify(MOCK_MESSAGES));
-let assets = [...MOCK_CHART_ASSETS];
+let sessions: ChatSession[] = [];
+let activeSessionId: string | null = null;
+let messages: Record<string, ChatMessage[]> = {};
+let assets: ChartAsset[] = [];
 let workspaces = clone(MOCK_WORKSPACES);
 let snapshots: Record<string, WorkspaceSnapshot> = clone(MOCK_WORKSPACE_SNAPSHOTS);
 let hasLoadedPersistedWorkspaces = false;
@@ -37,6 +53,58 @@ function getWorkspaceStorage(): Storage | null {
   } catch {
     return null;
   }
+}
+
+function loadPersistedChatState() {
+  const state = safeLoadFromStorage<Partial<StoredChatState>>(CHAT_STORAGE_KEY);
+  if (!state || !Array.isArray(state.sessions)) {
+    sessions = [];
+    activeSessionId = null;
+    messages = {};
+    return;
+  }
+
+  const sessionIds = new Set(state.sessions.map((session) => session.id));
+  sessions = clone(state.sessions);
+  activeSessionId =
+    typeof state.activeSessionId === "string" && sessionIds.has(state.activeSessionId)
+      ? state.activeSessionId
+      : sessions[0]?.id ?? null;
+  messages = isMessageMap(state.messagesBySession)
+    ? clone(
+        Object.fromEntries(
+          Object.entries(state.messagesBySession).filter(([sessionId]) => sessionIds.has(sessionId))
+        )
+      )
+    : {};
+}
+
+function persistChatState() {
+  safeSaveToStorage<StoredChatState>(CHAT_STORAGE_KEY, {
+    version: 1,
+    sessions,
+    activeSessionId,
+    messagesBySession: messages,
+  });
+}
+
+function loadPersistedAssets() {
+  const state = safeLoadFromStorage<Partial<StoredAssetState>>(CHART_ASSETS_STORAGE_KEY);
+  assets = Array.isArray(state?.assets) ? clone(state.assets) : [];
+}
+
+function persistAssets() {
+  safeSaveToStorage<StoredAssetState>(CHART_ASSETS_STORAGE_KEY, {
+    version: 1,
+    assets,
+  });
+}
+
+function isMessageMap(value: unknown): value is Record<string, ChatMessage[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every((item) => Array.isArray(item));
 }
 
 function loadPersistedWorkspaceState() {
@@ -86,11 +154,13 @@ function persistWorkspaceState() {
 
 export async function fetchSessions(): Promise<ChatSession[]> {
   await delay(300);
+  loadPersistedChatState();
   return [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
 export async function createSession(title?: string): Promise<ChatSession> {
   await delay(200);
+  loadPersistedChatState();
   const session: ChatSession = {
     id: `session-${generateId()}`,
     title: title || "New Conversation",
@@ -99,19 +169,27 @@ export async function createSession(title?: string): Promise<ChatSession> {
     messageCount: 0,
   };
   sessions.unshift(session);
+  activeSessionId = session.id;
   messages[session.id] = [];
+  persistChatState();
   return session;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
   await delay(200);
+  loadPersistedChatState();
   sessions = sessions.filter((s) => s.id !== sessionId);
+  if (activeSessionId === sessionId) {
+    activeSessionId = sessions[0]?.id ?? null;
+  }
   delete messages[sessionId];
+  persistChatState();
 }
 
 export async function fetchMessages(sessionId: string): Promise<ChatMessage[]> {
   await delay(300);
-  return messages[sessionId] ?? [];
+  loadPersistedChatState();
+  return clone(messages[sessionId] ?? []);
 }
 
 export async function sendMessage(
@@ -119,6 +197,8 @@ export async function sendMessage(
   content: string
 ): Promise<{ userMessage: ChatMessage; assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
   await delay(800 + Math.random() * 700);
+  loadPersistedChatState();
+  loadPersistedAssets();
 
   const userMsg: ChatMessage = {
     id: `msg-${generateId()}`,
@@ -143,6 +223,7 @@ export async function sendMessage(
       updatedAt: new Date().toISOString(),
     };
     assets.push(newAsset);
+    persistAssets();
   }
 
   const assistantMsg: ChatMessage = {
@@ -165,6 +246,7 @@ export async function sendMessage(
     session.lastMessage = content;
     session.updatedAt = new Date().toISOString();
   }
+  persistChatState();
 
   return { userMessage: userMsg, assistantMessage: assistantMsg, chartAsset: newAsset };
 }
@@ -173,11 +255,13 @@ export async function sendMessage(
 
 export async function fetchChartAssets(): Promise<ChartAsset[]> {
   await delay(300);
+  loadPersistedAssets();
   return [...assets].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 export async function fetchChartAsset(assetId: string): Promise<ChartAsset | null> {
   await delay(200);
+  loadPersistedAssets();
   return assets.find((a) => a.id === assetId) ?? null;
 }
 

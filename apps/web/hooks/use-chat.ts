@@ -27,13 +27,17 @@ export function useChatSessions() {
 }
 
 export function useChatMessages(sessionId: string | null) {
+  const setMessages = useChatStore((s) => s.setMessages);
+
   return useQuery({
     queryKey: ["chat-messages", sessionId],
     queryFn: async () => {
       if (!sessionId) {
         return EMPTY_MESSAGES;
       }
-      return useChatStore.getState().messagesBySession[sessionId] ?? EMPTY_MESSAGES;
+      const messages = await api.fetchMessages(sessionId);
+      setMessages(sessionId, messages);
+      return messages;
     },
     enabled: !!sessionId,
     staleTime: Infinity,
