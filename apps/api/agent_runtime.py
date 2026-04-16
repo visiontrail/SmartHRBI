@@ -586,17 +586,33 @@ class AgentRuntime:
                     if candidate is not None:
                         final_answer = candidate
         except ClaudeSDKError as exc:
-            raise AgentRuntimeError(
-                code="AGENT_SDK_FAILED",
-                message=f"Claude Agent SDK failed: {exc}",
-                should_fallback=False,
-            ) from exc
+            self._flush_pending_sdk_tool_results(run_context)
+            if _has_tool_observation(tool_trace):
+                final_answer = _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace,
+                    request_message=request.message,
+                    sdk_error=str(exc),
+                )
+            else:
+                raise AgentRuntimeError(
+                    code="AGENT_SDK_FAILED",
+                    message=f"Claude Agent SDK failed: {exc}",
+                    should_fallback=False,
+                ) from exc
         except Exception as exc:
-            raise AgentRuntimeError(
-                code="AGENT_SDK_FAILED",
-                message=f"Claude Agent SDK failed: {exc}",
-                should_fallback=False,
-            ) from exc
+            self._flush_pending_sdk_tool_results(run_context)
+            if _has_tool_observation(tool_trace):
+                final_answer = _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace,
+                    request_message=request.message,
+                    sdk_error=str(exc),
+                )
+            else:
+                raise AgentRuntimeError(
+                    code="AGENT_SDK_FAILED",
+                    message=f"Claude Agent SDK failed: {exc}",
+                    should_fallback=False,
+                ) from exc
 
         self._flush_pending_sdk_tool_results(run_context)
 
@@ -604,19 +620,30 @@ class AgentRuntime:
             final_answer = _parse_final_answer("\n".join(run_context.text_blocks))
         if final_answer is None and run_context.result_message and run_context.result_message.is_error:
             details = run_context.result_message.errors or [run_context.result_message.result or "unknown SDK error"]
-            raise AgentRuntimeError(
-                code="AGENT_SDK_FAILED",
-                message="Claude Agent SDK returned an error: " + "; ".join(str(item) for item in details),
-                should_fallback=False,
-            )
+            if _has_tool_observation(tool_trace):
+                final_answer = _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace,
+                    request_message=request.message,
+                    sdk_error="; ".join(str(item) for item in details),
+                )
+            else:
+                raise AgentRuntimeError(
+                    code="AGENT_SDK_FAILED",
+                    message="Claude Agent SDK returned an error: " + "; ".join(str(item) for item in details),
+                    should_fallback=False,
+                )
+
         if run_context.result_message and run_context.result_message.session_id:
             session.agent_session_id = run_context.result_message.session_id
         session.runtime_backend = SDK_RUNTIME_BACKEND
 
         # ------ Build chart spec from final answer ------
+        has_current_observation = _has_tool_observation(tool_trace)
         has_current_grounding = _has_grounding_tool_observation(tool_trace)
         has_prior_grounding = _has_grounding_tool_observation(session.last_tool_trace)
-        if final_answer is not None and (has_current_grounding or has_prior_grounding):
+        if final_answer is not None and (has_current_observation or has_prior_grounding):
+            if has_current_observation and not has_current_grounding and not has_prior_grounding:
+                final_answer = _empty_rows_final_answer(final_answer)
             spec = self._spec_from_final_answer(final_answer, request=request)
             final_text = _compose_final_text(final_answer)
             result_payload = final_answer
@@ -634,9 +661,17 @@ class AgentRuntime:
                 else:
                     final_text = "Agent collected tool observations but did not return a usable structured answer."
                     result_payload = {"rows": [], "conclusion": "", "anomalies": "final_answer_parse_failed"}
+            elif has_current_observation:
+                recovered_answer = _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace,
+                    request_message=request.message,
+                )
+                spec = self._spec_from_final_answer(recovered_answer, request=request)
+                final_text = _compose_final_text(recovered_answer)
+                result_payload = recovered_answer
             else:
-                final_text = "Agent stopped to avoid ungrounded output because no successful BI tool observation was produced."
-                result_payload = {"rows": [], "conclusion": "", "anomalies": "no_grounded_tool_observation"}
+                final_text = "Agent stopped to avoid ungrounded output because no BI tool observation was produced."
+                result_payload = {"rows": [], "conclusion": "", "anomalies": "no_tool_observation"}
 
         return self._finalize_turn(
             request=request,
@@ -976,7 +1011,9 @@ class AgentRuntime:
                         "text": json.dumps(record.result_data, ensure_ascii=False, default=str),
                     }
                 ],
-                "is_error": True,
+                # Treat expected BI guardrail denials as model-visible observations so
+                # the assistant can summarize the outcome for the user.
+                "is_error": False,
             }
 
         def invoke() -> ToolCallResponse:
@@ -1011,7 +1048,10 @@ class AgentRuntime:
                     "text": json.dumps(record.result_data, ensure_ascii=False, default=str),
                 }
             ],
-            "is_error": response.status != "success",
+            # Business/data execution failures are returned as JSON observations.
+            # Marking them as MCP-level errors can terminate the SDK loop before
+            # the model has a chance to produce the required final summary.
+            "is_error": False,
         }
 
     def _validate_sdk_tool_call(
@@ -1659,9 +1699,82 @@ def _has_grounding_tool_observation(tool_trace: list[dict[str, Any]]) -> bool:
             continue
         if item.get("status") != "success":
             continue
+        result = item.get("result")
+        if isinstance(result, dict) and isinstance(result.get("error"), dict):
+            continue
         if str(item.get("tool_name") or "") in GROUNDING_TOOL_NAMES:
             return True
     return False
+
+
+def _has_tool_observation(tool_trace: list[dict[str, Any]]) -> bool:
+    return any(item.get("event") == "tool_result" for item in tool_trace)
+
+
+def _empty_rows_final_answer(answer: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(answer)
+    normalized["rows"] = []
+    normalized.setdefault("chart_type", "table")
+    normalized.setdefault("title", "分析未完成")
+    normalized.setdefault("conclusion", "本次分析未能返回可展示数据。")
+    normalized.setdefault("scope", "未生成数据结果。")
+    normalized.setdefault("anomalies", "工具执行未成功，已按工具返回的错误信息生成说明。")
+    return normalized
+
+
+def _recover_failed_final_answer_from_tool_trace(
+    *,
+    tool_trace: list[dict[str, Any]],
+    request_message: str,
+    sdk_error: str | None = None,
+) -> dict[str, Any]:
+    failed_results = [
+        item
+        for item in tool_trace
+        if item.get("event") == "tool_result"
+        and (
+            item.get("status") == "error"
+            or (
+                isinstance(item.get("result"), dict)
+                and isinstance(item.get("result", {}).get("error"), dict)
+            )
+        )
+    ]
+    last_failure = failed_results[-1] if failed_results else {}
+    tool_name = str(last_failure.get("tool_name") or "BI tool")
+    error = _extract_tool_error(last_failure.get("result"), last_failure.get("error"))
+    code = str(error.get("code") or "TOOL_EXECUTION_FAILED")
+    message = str(error.get("message") or sdk_error or "Tool execution failed")
+
+    if code == "NO_DATASET_TABLES":
+        conclusion = "当前会话没有可用数据表，因此无法完成这次分析。请先上传数据集，或确认当前用户和项目下已有数据。"
+    else:
+        conclusion = f"本次分析在调用 {tool_name} 时未能完成：{message}"
+
+    anomalies = f"{code}: {message}"
+    if sdk_error:
+        anomalies = f"{anomalies}; SDK: {sdk_error}"
+
+    return {
+        "chart_type": "table",
+        "title": "分析未完成",
+        "x_key": None,
+        "y_key": None,
+        "series_key": None,
+        "metric_name": None,
+        "rows": [],
+        "conclusion": conclusion,
+        "scope": f"用户问题: {request_message}",
+        "anomalies": anomalies,
+    }
+
+
+def _extract_tool_error(result: Any, direct_error: Any) -> dict[str, Any]:
+    if isinstance(direct_error, dict):
+        return direct_error
+    if isinstance(result, dict) and isinstance(result.get("error"), dict):
+        return dict(result["error"])
+    return {}
 
 
 def _recover_final_answer_from_tool_trace(
@@ -1865,11 +1978,16 @@ def _compose_final_text(answer: dict[str, Any]) -> str:
     anomalies = str(answer.get("anomalies") or "")
 
     if not rows:
-        return (
-            f"{title} 没有返回可展示数据。"
-            f"{('口径: ' + scope) if scope else ''} "
-            f"{('异常说明: ' + anomalies) if anomalies else '可能原因: 过滤条件、权限范围或源数据分布导致结果为空。'}"
-        ).strip()
+        parts = [f"{title} 没有返回可展示数据。"]
+        if conclusion:
+            parts.append(f"结论: {conclusion}")
+        if scope:
+            parts.append(f"口径: {scope}")
+        if anomalies:
+            parts.append(f"异常说明: {anomalies}")
+        else:
+            parts.append("可能原因: 过滤条件、权限范围或源数据分布导致结果为空。")
+        return " ".join(parts)
 
     parts = [f"{title} 已生成，共 {len(rows)} 行。"]
     if conclusion:

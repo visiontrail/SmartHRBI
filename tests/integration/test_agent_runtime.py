@@ -1,9 +1,19 @@
 from __future__ import annotations
+import json
 from pathlib import Path
 
+import anyio
 from fastapi.testclient import TestClient
+from claude_agent_sdk import AssistantMessage, ResultMessage, ToolResultBlock, ToolUseBlock, UserMessage
 
-from apps.api.agent_runtime import AgentRequest, clear_agent_runtime_cache, get_agent_runtime
+from apps.api.agent_runtime import (
+    SDK_MCP_SERVER_NAME,
+    AgentRequest,
+    AgentSessionState,
+    SDKRunContext,
+    clear_agent_runtime_cache,
+    get_agent_runtime,
+)
 from apps.api.main import app
 from tests.agent_test_utils import install_scripted_sdk_client, set_agent_env, upload_dataset
 
@@ -387,5 +397,149 @@ def test_agent_runtime_rejects_ungrounded_final_answer_without_sdk_tool_use(
 
     assert result.final_status == "completed"
     assert result.spec["chart_type"] == "empty"
-    assert result.ai_state["latest_result"]["anomalies"] == "no_grounded_tool_observation"
+    assert result.ai_state["latest_result"]["anomalies"] == "no_tool_observation"
     assert not any(item.get("event") == "tool_use" for item in result.tool_trace)
+
+
+def test_sdk_tool_execution_errors_are_model_visible_observations(monkeypatch, tmp_path: Path) -> None:
+    set_agent_env(monkeypatch, tmp_path)
+    runtime = get_agent_runtime()
+    request = AgentRequest(
+        conversation_id="agent-runtime-conv-tool-error-observation",
+        request_id="agent-runtime-req-tool-error-observation",
+        user_id="alice",
+        project_id="north",
+        dataset_table="employees_wide",
+        message="hi",
+        role="viewer",
+        department="HR",
+        clearance=1,
+    )
+    run_context = SDKRunContext(
+        request=request,
+        session=AgentSessionState(
+            conversation_id=request.conversation_id,
+            agent_session_id="session-tool-error-observation",
+        ),
+        events=[],
+        tool_trace=[],
+    )
+
+    async def invoke() -> dict[str, object]:
+        return await runtime._invoke_sdk_tool(
+            run_context=run_context,
+            tool_name="describe_table",
+            arguments={"table": "employees_wide"},
+        )
+
+    payload = anyio.run(invoke)
+
+    assert payload["is_error"] is False
+    content = payload["content"]
+    assert isinstance(content, list)
+    parsed = json.loads(str(content[0]["text"]))
+    assert parsed["error"]["code"] == "NO_DATASET_TABLES"
+
+
+def test_agent_runtime_surfaces_llm_summary_after_failed_tool_observation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    set_agent_env(monkeypatch, tmp_path)
+    runtime = get_agent_runtime()
+
+    class _ToolErrorThenSummarySDKClient:
+        def __init__(self, *, options):  # type: ignore[no-untyped-def]
+            self.options = options
+            self.prompt = ""
+            self.session_id = ""
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        async def query(self, prompt: str, session_id: str = "default") -> None:
+            self.prompt = prompt
+            self.session_id = session_id
+
+        async def receive_response(self):  # type: ignore[no-untyped-def]
+            tool_use_id = "toolu_failed_describe"
+            tool_name = f"mcp__{SDK_MCP_SERVER_NAME}__describe_table"
+            yield AssistantMessage(
+                content=[
+                    ToolUseBlock(
+                        id=tool_use_id,
+                        name=tool_name,
+                        input={"table": "employees_wide"},
+                    )
+                ],
+                model="claude-test",
+                session_id=self.session_id,
+            )
+            yield UserMessage(
+                content=[
+                    ToolResultBlock(
+                        tool_use_id=tool_use_id,
+                        content=[
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "error": {
+                                            "code": "NO_DATASET_TABLES",
+                                            "message": "No dataset tables are available. Upload a dataset first.",
+                                            "retryable": False,
+                                        }
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        ],
+                        is_error=True,
+                    )
+                ]
+            )
+            final_answer = {
+                "chart_type": "table",
+                "title": "数据集未就绪",
+                "x_key": None,
+                "y_key": None,
+                "series_key": None,
+                "metric_name": None,
+                "rows": [{"should_not": "be rendered"}],
+                "conclusion": "当前项目没有可用数据表，暂时无法回答分析问题。",
+                "scope": "未执行数据分析查询。",
+                "anomalies": "NO_DATASET_TABLES",
+            }
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id=self.session_id,
+                result=json.dumps(final_answer, ensure_ascii=False),
+                structured_output=final_answer,
+            )
+
+    runtime._sdk_client_factory = _ToolErrorThenSummarySDKClient
+    result = runtime.run_turn(
+        AgentRequest(
+            conversation_id="agent-runtime-conv-failed-tool-summary",
+            request_id="agent-runtime-req-failed-tool-summary",
+            user_id="alice",
+            project_id="north",
+            dataset_table="employees_wide",
+            message="hi",
+            role="viewer",
+            department="HR",
+            clearance=1,
+        )
+    )
+
+    assert result.final_status == "completed"
+    assert result.spec["chart_type"] == "empty"
+    assert result.spec["data"] == []
+    assert "当前项目没有可用数据表" in result.final_text
+    assert result.ai_state["latest_result"]["rows"] == []

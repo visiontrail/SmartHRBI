@@ -74,7 +74,10 @@ def build_agent_system_prompt() -> str:
         "## Final answer\n"
         "When you have gathered sufficient data, return a structured result "
         "including chart_type, title, rows, conclusion, scope, and anomalies.\n"
-        "If every attempt fails, return empty rows and explain in anomalies.\n"
+        "Tool errors are still observations. If a tool reports an execution error, "
+        "summarize what failed for the user instead of stopping silently.\n"
+        "If every attempt fails, return empty rows and explain the failure in "
+        "conclusion and anomalies.\n"
     )
 
 
