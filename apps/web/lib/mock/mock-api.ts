@@ -1,5 +1,6 @@
 import type { ChatSession, ChatMessage } from "@/types/chat";
 import type { ChartAsset } from "@/types/chart";
+import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
 import type { TableCatalogEntry, Workspace, WorkspaceSnapshot } from "@/types/workspace";
 import {
   MOCK_TABLE_CATALOG,
@@ -345,4 +346,55 @@ export async function fetchWorkspaceCatalog(workspaceId: string): Promise<TableC
   await delay(250);
   loadPersistedWorkspaceState();
   return clone(tableCatalogByWorkspace[workspaceId] ?? []);
+}
+
+export async function createWorkspaceCatalogFromSetup(
+  workspaceId: string,
+  seed: IngestionCatalogSetupSeed
+): Promise<TableCatalogEntry> {
+  await delay(300);
+  loadPersistedWorkspaceState();
+
+  const existing = tableCatalogByWorkspace[workspaceId] ?? [];
+  const now = new Date().toISOString();
+  const normalizedTableName = seed.tableName.trim().toLowerCase();
+  const normalizedPrimaryKeys = Array.from(
+    new Set(seed.primaryKeys.map((value) => value.trim().toLowerCase()).filter(Boolean))
+  );
+  const normalizedMatchColumns = Array.from(
+    new Set(seed.matchColumns.map((value) => value.trim().toLowerCase()).filter(Boolean))
+  );
+  const entry: TableCatalogEntry = {
+    id: `catalog-${generateId()}`,
+    workspaceId,
+    tableName: normalizedTableName,
+    humanLabel: seed.humanLabel.trim(),
+    businessType: seed.businessType,
+    writeMode: seed.writeMode,
+    timeGrain: seed.timeGrain,
+    isActiveTarget: seed.isActiveTarget,
+    primaryKeys: normalizedPrimaryKeys.length > 0 ? normalizedPrimaryKeys : normalizedMatchColumns,
+    matchColumns: normalizedMatchColumns.length > 0 ? normalizedMatchColumns : normalizedPrimaryKeys,
+    description: seed.description.trim(),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const nextEntries = existing
+    .filter(
+      (item) =>
+        !(
+          item.tableName === normalizedTableName &&
+          item.businessType === seed.businessType
+        )
+    )
+    .map((item) =>
+      seed.isActiveTarget && item.businessType === seed.businessType
+        ? { ...item, isActiveTarget: false, updatedAt: now }
+        : item
+    );
+  nextEntries.push(entry);
+  tableCatalogByWorkspace[workspaceId] = nextEntries;
+  persistWorkspaceState();
+  return clone(entry);
 }

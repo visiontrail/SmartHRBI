@@ -8,7 +8,7 @@ from ..auth import AuthIdentity, require_permission
 from ..config import get_settings
 from ..workspaces import WorkspaceError, get_workspace_service
 from .feature_flags import ensure_agentic_ingestion_enabled
-from .models import IngestionHealth, IngestionPlanRequest
+from .models import IngestionHealth, IngestionPlanRequest, IngestionSetupConfirmRequest
 from .runtime import IngestionPlanningError, WriteIngestionAgentRuntime
 from .uploads import IngestionUploadError, get_ingestion_upload_service
 
@@ -63,6 +63,32 @@ async def create_ingestion_plan(
             workspace_id=request.workspace_id,
             job_id=request.job_id,
             requested_by=identity.user_id,
+            conversation_id=request.conversation_id,
+            message=request.message,
+        )
+    except IngestionPlanningError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.post("/setup/confirm")
+async def confirm_ingestion_setup(
+    request: IngestionSetupConfirmRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> dict[str, Any]:
+    settings = get_settings()
+    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
+    _assert_workspace_role(
+        workspace_id=request.workspace_id,
+        identity=identity,
+        minimum_role="editor",
+    )
+
+    try:
+        return runtime.confirm_setup(
+            workspace_id=request.workspace_id,
+            job_id=request.job_id,
+            requested_by=identity.user_id,
+            setup_seed=request.setup,
             conversation_id=request.conversation_id,
             message=request.message,
         )

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 BUSINESS_TYPES = ("roster", "project_progress", "attendance", "other")
 PROPOSAL_ACTIONS = ("update_existing", "time_partitioned_new_table", "new_table", "cancel")
 TIME_GRAINS = ("none", "month", "quarter", "year")
+SETUP_WRITE_MODES = ("update_existing", "time_partitioned_new_table", "new_table")
 
 
 class IngestionJobStatus(str, Enum):
@@ -25,7 +26,7 @@ class IngestionJobStatus(str, Enum):
 
 class IngestionHealth(BaseModel):
     status: str = "ok"
-    stage: str = "M4"
+    stage: str = "M5"
     message: str
 
 
@@ -44,6 +45,76 @@ class IngestionPlanRequest(BaseModel):
         return normalized
 
     @field_validator("conversation_id")
+    @classmethod
+    def _trim_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class IngestionCatalogSetupSeed(BaseModel):
+    business_type: Literal["roster", "project_progress", "attendance", "other"]
+    table_name: str = Field(min_length=1, max_length=128)
+    human_label: str = Field(min_length=1, max_length=120)
+    write_mode: Literal["update_existing", "time_partitioned_new_table", "new_table"]
+    time_grain: Literal["none", "month", "quarter", "year"] = "none"
+    primary_keys: list[str] = Field(default_factory=list)
+    match_columns: list[str] = Field(default_factory=list)
+    is_active_target: bool = True
+    description: str = Field(default="", max_length=1000)
+
+    @field_validator("table_name")
+    @classmethod
+    def _trim_table_name(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("table_name is required")
+        return normalized
+
+    @field_validator("human_label")
+    @classmethod
+    def _trim_human_label(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("human_label is required")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def _trim_description(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("primary_keys", "match_columns")
+    @classmethod
+    def _normalize_columns(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            column = item.strip()
+            if not column:
+                continue
+            lowered = column.lower()
+            if lowered not in normalized:
+                normalized.append(lowered)
+        return normalized
+
+
+class IngestionSetupConfirmRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    conversation_id: str | None = None
+    message: str | None = None
+    setup: IngestionCatalogSetupSeed
+
+    @field_validator("workspace_id", "job_id")
+    @classmethod
+    def _trim_required(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+    @field_validator("conversation_id", "message")
     @classmethod
     def _trim_optional(cls, value: str | None) -> str | None:
         if value is None:

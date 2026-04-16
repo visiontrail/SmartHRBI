@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .models import IngestionProposalPayload
+from .models import IngestionCatalogSetupSeed, IngestionProposalPayload, SETUP_WRITE_MODES
 from .routing import RouteDecision, select_agent_route
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -45,10 +45,10 @@ class IngestionPlanningError(Exception):
 
 @dataclass(slots=True)
 class WriteIngestionAgentRuntime:
-    stage: str = "M4"
+    stage: str = "M5"
 
     def health_summary(self) -> str:
-        return "Write ingestion runtime supports planning/proposal lifecycle"
+        return "Write ingestion runtime supports setup/planning/proposal lifecycle"
 
     def build_plan(
         self,
@@ -293,6 +293,100 @@ class WriteIngestionAgentRuntime:
             "tool_trace": tool_trace,
         }
 
+    def confirm_setup(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        requested_by: str,
+        setup_seed: IngestionCatalogSetupSeed,
+        conversation_id: str | None = None,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_requested_by = requested_by.strip()
+        normalized_conversation_id = (conversation_id or "").strip() or None
+
+        if not normalized_workspace_id:
+            raise IngestionPlanningError(
+                code="WORKSPACE_ID_REQUIRED",
+                message="workspace_id is required",
+                status_code=422,
+            )
+        if not normalized_job_id:
+            raise IngestionPlanningError(
+                code="JOB_ID_REQUIRED",
+                message="job_id is required",
+                status_code=422,
+            )
+        if not normalized_requested_by:
+            raise IngestionPlanningError(
+                code="AUTH_REQUIRED",
+                message="user_id is required",
+                status_code=401,
+            )
+        if not SAFE_IDENTIFIER_RE.match(setup_seed.table_name):
+            raise IngestionPlanningError(
+                code="CATALOG_TABLE_NAME_INVALID",
+                message="setup.table_name must be a valid SQL identifier",
+                status_code=422,
+            )
+
+        with self._connect() as conn:
+            job = self._load_job_context(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+            )
+            current_status = str(job["status"])
+            if current_status not in {"uploaded", "planning", "awaiting_catalog_setup"}:
+                raise IngestionPlanningError(
+                    code="INGESTION_SETUP_NOT_ALLOWED",
+                    message=f"Setup cannot be confirmed when job status is {current_status}",
+                    status_code=409,
+                )
+
+            upload_info = self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"]))
+            catalog_entry = self._upsert_catalog_entry_from_setup(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                requested_by=normalized_requested_by,
+                setup_seed=setup_seed,
+                upload_info=upload_info,
+            )
+            self._set_job_status(
+                conn=conn,
+                job_id=normalized_job_id,
+                status="planning",
+                business_type_guess=setup_seed.business_type,
+                agent_session_id=normalized_conversation_id,
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="setup_confirmed",
+                payload={
+                    "catalog_entry_id": catalog_entry["id"],
+                    "business_type": catalog_entry["business_type"],
+                    "table_name": catalog_entry["table_name"],
+                },
+            )
+            conn.commit()
+
+        plan_payload = self.build_plan(
+            workspace_id=normalized_workspace_id,
+            job_id=normalized_job_id,
+            requested_by=normalized_requested_by,
+            conversation_id=normalized_conversation_id,
+            message=message,
+        )
+        plan_payload["setup"] = {
+            "status": "confirmed",
+            "catalog_entry": catalog_entry,
+        }
+        return plan_payload
+
     def _run_tool(
         self,
         *,
@@ -362,7 +456,7 @@ class WriteIngestionAgentRuntime:
                 {
                     "question_id": "write_mode",
                     "title": "默认写入方式是什么？",
-                    "options": ["update_existing", "time_partitioned_new_table", "new_table"],
+                    "options": list(SETUP_WRITE_MODES),
                 },
                 {
                     "question_id": "match_columns",
@@ -456,6 +550,181 @@ class WriteIngestionAgentRuntime:
             """,
             (status, business_type_guess, agent_session_id, _utc_now(), job_id),
         )
+
+    def _upsert_catalog_entry_from_setup(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        requested_by: str,
+        setup_seed: IngestionCatalogSetupSeed,
+        upload_info: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._ensure_user_record(conn=conn, user_id=requested_by)
+        now = _utc_now()
+        business_type = setup_seed.business_type
+        table_name = setup_seed.table_name
+        human_label = setup_seed.human_label
+        write_mode = setup_seed.write_mode
+        time_grain = setup_seed.time_grain
+        description = setup_seed.description
+
+        primary_keys = list(setup_seed.primary_keys)
+        match_columns = list(setup_seed.match_columns)
+        if not primary_keys and match_columns:
+            primary_keys = list(match_columns)
+        if not match_columns and primary_keys:
+            match_columns = list(primary_keys)
+
+        if not primary_keys and not match_columns:
+            candidate_columns = [
+                self._normalize_identifier(str(value))
+                for value in upload_info.get("column_summary", {}).get("all_columns", [])
+            ]
+            candidate_columns = [value for value in candidate_columns if value]
+            if candidate_columns:
+                primary_keys = [candidate_columns[0]]
+                match_columns = [candidate_columns[0]]
+
+        if not primary_keys and not match_columns:
+            raise IngestionPlanningError(
+                code="SETUP_MATCH_COLUMNS_REQUIRED",
+                message="At least one primary key or match column is required",
+                status_code=422,
+            )
+
+        if setup_seed.is_active_target:
+            conn.execute(
+                """
+                UPDATE table_catalog
+                SET is_active_target = 0, updated_by = ?, updated_at = ?
+                WHERE workspace_id = ? AND business_type = ?
+                """,
+                (requested_by, now, workspace_id, business_type),
+            )
+
+        existing = conn.execute(
+            """
+            SELECT id, created_by, created_at
+            FROM table_catalog
+            WHERE workspace_id = ? AND business_type = ? AND table_name = ?
+            """,
+            (workspace_id, business_type, table_name),
+        ).fetchone()
+        if existing is None:
+            catalog_id = uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO table_catalog (
+                    id,
+                    workspace_id,
+                    table_name,
+                    human_label,
+                    business_type,
+                    write_mode,
+                    time_grain,
+                    primary_keys,
+                    match_columns,
+                    is_active_target,
+                    description,
+                    created_by,
+                    updated_by,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    catalog_id,
+                    workspace_id,
+                    table_name,
+                    human_label,
+                    business_type,
+                    write_mode,
+                    time_grain,
+                    json.dumps(primary_keys, ensure_ascii=False),
+                    json.dumps(match_columns, ensure_ascii=False),
+                    int(bool(setup_seed.is_active_target)),
+                    description,
+                    requested_by,
+                    requested_by,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            catalog_id = str(existing["id"])
+            conn.execute(
+                """
+                UPDATE table_catalog
+                SET
+                    human_label = ?,
+                    write_mode = ?,
+                    time_grain = ?,
+                    primary_keys = ?,
+                    match_columns = ?,
+                    is_active_target = ?,
+                    description = ?,
+                    updated_by = ?,
+                    updated_at = ?
+                WHERE id = ? AND workspace_id = ?
+                """,
+                (
+                    human_label,
+                    write_mode,
+                    time_grain,
+                    json.dumps(primary_keys, ensure_ascii=False),
+                    json.dumps(match_columns, ensure_ascii=False),
+                    int(bool(setup_seed.is_active_target)),
+                    description,
+                    requested_by,
+                    now,
+                    catalog_id,
+                    workspace_id,
+                ),
+            )
+
+        row = conn.execute(
+            "SELECT * FROM table_catalog WHERE id = ? AND workspace_id = ?",
+            (catalog_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="CATALOG_ENTRY_NOT_FOUND",
+                message="Catalog entry not found after setup confirmation",
+                status_code=500,
+            )
+        return self._serialize_catalog_entry(row)
+
+    def _ensure_user_record(self, *, conn: sqlite3.Connection, user_id: str) -> None:
+        normalized_user = user_id.strip()
+        if not normalized_user:
+            raise IngestionPlanningError(
+                code="AUTH_REQUIRED",
+                message="user_id is required",
+                status_code=401,
+            )
+
+        now = _utc_now()
+        safe_local_part = re.sub(r"[^a-z0-9._-]+", "-", normalized_user.lower()).strip("-._") or "user"
+        fallback_email = f"{safe_local_part}@local.invalid"
+        conn.execute(
+            """
+            INSERT INTO users (id, email, display_name, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                updated_at = excluded.updated_at
+            """,
+            (normalized_user, fallback_email, normalized_user, now, now),
+        )
+
+    @staticmethod
+    def _normalize_identifier(raw: str) -> str:
+        normalized = re.sub(r"[^A-Za-z0-9_]+", "_", raw.strip().lower()).strip("_")
+        if not normalized:
+            return ""
+        if normalized[0].isdigit():
+            normalized = f"c_{normalized}"
+        return normalized
 
     def _tool_get_workspace_catalog(
         self,

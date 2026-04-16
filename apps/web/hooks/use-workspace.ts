@@ -3,6 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
+import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
 import * as api from "@/lib/mock/mock-api";
 
 export function useWorkspaceList() {
@@ -41,6 +42,18 @@ export function useWorkspaceCatalog(workspaceId: string | null) {
       return api.fetchWorkspaceCatalog(workspaceId);
     },
     enabled: !!workspaceId,
+  });
+}
+
+export function useCreateWorkspaceCatalogFromSetup() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ workspaceId, seed }: { workspaceId: string; seed: IngestionCatalogSetupSeed }) =>
+      api.createWorkspaceCatalogFromSetup(workspaceId, seed),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-catalog", variables.workspaceId] });
+    },
   });
 }
 

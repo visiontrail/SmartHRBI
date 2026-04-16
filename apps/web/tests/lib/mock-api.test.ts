@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createSession, deleteSession, fetchMessages, fetchSessions } from "../../lib/mock/mock-api";
+import {
+  createSession,
+  createWorkspace,
+  createWorkspaceCatalogFromSetup,
+  deleteSession,
+  fetchMessages,
+  fetchSessions,
+  fetchWorkspaceCatalog,
+} from "../../lib/mock/mock-api";
 import { CHAT_STORAGE_KEY } from "../../lib/chat/session-storage";
 
 describe("mock chat API persistence", () => {
@@ -53,6 +61,36 @@ describe("mock chat API persistence", () => {
 
     await expect(fetchMessages("session-1")).resolves.toEqual([
       expect.objectContaining({ id: "message-1", content: "restored" })
+    ]);
+  });
+});
+
+describe("mock workspace setup catalog", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("creates setup catalog entry and marks it active", async () => {
+    const workspace = await createWorkspace("Setup Workspace");
+    const entry = await createWorkspaceCatalogFromSetup(workspace.id, {
+      businessType: "roster",
+      tableName: "employee_roster",
+      humanLabel: "Employee Roster",
+      writeMode: "update_existing",
+      timeGrain: "none",
+      primaryKeys: ["employee_id"],
+      matchColumns: ["employee_id"],
+      isActiveTarget: true,
+      description: "seed",
+    });
+
+    expect(entry.isActiveTarget).toBe(true);
+    await expect(fetchWorkspaceCatalog(workspace.id)).resolves.toEqual([
+      expect.objectContaining({
+        tableName: "employee_roster",
+        businessType: "roster",
+        isActiveTarget: true,
+      }),
     ]);
   });
 });

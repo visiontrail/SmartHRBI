@@ -51,7 +51,7 @@ def test_ingestion_healthz_respects_agentic_flag(monkeypatch, tmp_path: Path) ->
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["stage"] == "M4"
+    assert payload["stage"] == "M5"
 
 
 @pytest.mark.parametrize(
