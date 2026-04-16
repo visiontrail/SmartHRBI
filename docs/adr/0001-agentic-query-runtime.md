@@ -41,7 +41,7 @@ We introduce an Agentic Query runtime with these decisions:
    - sensitive column filtering
    - response redaction
    - structured audit logging
-8. SSE now emits agent-native events:
+8. SSE(Server-Sent Events) now emits agent-native events:
    - `planning`
    - `tool_use`
    - `tool_result`
@@ -62,28 +62,24 @@ SmartHRBI-specific chart normalization and persistence.
 
 At a high level, one chat turn is executed as:
 
-1. `ChatStreamService` receives `POST /chat/stream` and builds an
-   `AgentRequest`.
-2. `AgentRuntime.run_turn()` loads or creates the session for
-   `conversation_id`.
+1. `ChatStreamService` receives `POST /chat/stream` and builds an `AgentRequest`.
+2. `AgentRuntime.run_turn()` loads or creates the session for `conversation_id`.
 3. `AgentGuardrails` validates the user message before starting the SDK client.
 4. `AgentRuntime` composes the SDK system prompt from:
    - the static BI analyst prompt,
    - active dataset and available table hints,
    - user role and RLS context,
    - the previous structured result when available.
-5. `AgentRuntime` creates a Claude Agent SDK in-process MCP server with
-   `create_sdk_mcp_server()` and `@tool` handlers for the SmartHRBI BI tools.
+5. `AgentRuntime` creates a Claude Agent SDK in-process MCP server with `create_sdk_mcp_server()` and `@tool` handlers for the SmartHRBI BI tools.
 6. `ClaudeSDKClient` is started with:
-   - `tools=[]` so Claude Code built-in filesystem/shell/browser tools are not
-     part of the base tool surface;
+   - `tools=[]` so Claude Code built-in filesystem/shell/browser tools are not part of the base tool surface;
    - `mcp_servers={"smarthrbi": sdk_server}`;
    - `can_use_tool` for SDK permission decisions;
-   - `PreToolUse` / `PostToolUse` / `PostToolUseFailure` hooks for deterministic
-     validation, audit, and SSE tracing;
+   - `PreToolUse` / `PostToolUse` / `PostToolUseFailure` hooks for deterministic validation, audit, and SSE tracing;
    - `max_turns=AGENT_MAX_TOOL_STEPS`;
-   - `output_format={"type": "json_schema", ...}` for the final structured
-     answer.
+   - Anthropic-compatible SDK environment overrides derived from SmartHRBI settings (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` 
+      / `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and `API_TIMEOUT_MS`);
+   - `output_format={"type": "json_schema", ...}` for the final structured answer.
 7. Claude Agent SDK owns tool selection, the agent loop, tool result appending,
    and final structured-output completion.
 8. Each MCP tool handler executes the existing BI data path through
@@ -147,10 +143,18 @@ For every SDK MCP tool call:
    role, department, clearance, dataset table, and an idempotency key;
 4. `PostToolUse` emits `tool_result` plus legacy `tool` mirror events and writes
    an `agent_post_tool_use` audit entry;
-5. Claude Agent SDK appends the MCP tool result back into the model context.
+5. `PostToolUseFailure` records SDK-level execution failures as `tool_result`
+   error events;
+6. Claude Agent SDK appends the MCP tool result back into the model context.
 
 This keeps tool execution deterministic and auditable even though the model
 chooses the tool sequence and the SDK owns the loop.
+
+Expected BI/data failures are intentionally returned as model-visible JSON
+observations with `is_error=false` at the MCP boundary. Examples include missing
+datasets, SQL execution failures, and guardrail-denied BI requests. This lets the
+model produce a useful final summary for the user instead of terminating the SDK
+loop before a structured final answer can be emitted.
 
 ### Guardrails
 
@@ -180,10 +184,29 @@ into the frontend visualization spec:
 - ECharts for advanced chart types such as `heatmap`, `gauge`, `sankey`,
   `sunburst`, `boxplot`, `graph`, and `map`.
 
-If the SDK run does not return a usable structured answer but has successful
-grounding tool observations, the runtime attempts a conservative recovery from
-the latest tool result. If no successful grounding observation exists, it
-returns an empty spec instead of producing an ungrounded answer.
+`map` is used for China province/city/region choropleth data and is emitted as
+an ECharts `map: "china"` option. Multi-series line charts are also routed to
+ECharts because they require richer series configuration than the basic Recharts
+path.
+
+The current runtime separates "any tool observation" from "successful grounding
+observation":
+
+- If a final structured answer exists and the current turn or a prior turn has a
+  successful grounding observation, the runtime can render it.
+- If the current turn produced only failed/error observations, the runtime keeps
+  the model's summary but forces `rows=[]`, preventing failed observations from
+  rendering fabricated data.
+- If the SDK run fails or returns no usable final answer after successful
+  grounding, the runtime attempts conservative recovery from tool traces.
+  Recovery prefers non-empty results and uses this priority:
+  `execute_readonly_sql`, `run_semantic_query`, `get_distinct_values`,
+  `sample_rows`, `describe_table`, `list_tables`.
+- If only failed observations exist, the runtime composes an empty table-style
+  answer from the last tool error so the user sees the failure reason.
+- If no BI tool observation exists and there is no prior grounding context, the
+  runtime returns an empty spec with `anomalies="no_tool_observation"` instead
+  of producing an ungrounded answer.
 
 ## Claude Agent SDK Positioning
 
@@ -229,8 +252,11 @@ The SDK capabilities used directly are:
 
    - pre-tool: validate the tool call, enforce budgets, emit `tool_use`, and
      audit `agent_pre_tool_use`;
-   - post-tool: emit `tool_result` and audit `agent_post_tool_use`; the SDK
-     owns appending the tool result back into the agent message stream.
+   - post-tool: emit `tool_result` and audit `agent_post_tool_use`;
+   - post-tool-failure: emit an error-shaped `tool_result` and audit the failed
+     tool attempt.
+
+   The SDK owns appending the tool result back into the agent message stream.
 
    These hooks are SDK hook callbacks, not a hand-rolled hook simulation.
 
@@ -257,6 +283,29 @@ The SDK capabilities used directly are:
 The `claude-agent-sdk` dependency and `CLAUDE_AGENT_SDK_ENABLED=true` setting
 therefore mark the production agent architecture and integration boundary.
 
+## Configuration and Provider Boundary
+
+The Agent runtime is configured through the same API settings object as the rest
+of the backend. Current required and relevant settings are:
+
+- `CLAUDE_AGENT_SDK_ENABLED=true`; setting this to false is invalid because the
+  Agent runtime is now the only supported chat engine.
+- `AI_MODEL`, currently defaulting to `deepseek-chat`.
+- `AI_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for provider authentication.
+- `ANTHROPIC_BASE_URL`, currently defaulting to the DeepSeek
+  Anthropic-compatible endpoint.
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL`, used to align the SDK's auxiliary model with
+  the configured provider/model when needed.
+- `API_TIMEOUT_MS`, passed into the SDK environment.
+- `AGENT_MAX_TOOL_STEPS`, `AGENT_MAX_SQL_ROWS`, and
+  `AGENT_MAX_SQL_SCAN_ROWS`, which bound the SDK loop and SQL result/scan
+  budgets.
+
+The runtime uses Claude Agent SDK as the orchestration substrate, but the model
+provider is not hard-coded to Anthropic's hosted endpoint. Provider routing is
+handled by Anthropic-compatible SDK environment variables, so DeepSeek or another
+compatible gateway can be selected without changing the BI runtime code.
+
 ## Alternatives Considered
 
 ### 1. Keep extending `IntentParser`
@@ -271,12 +320,14 @@ Rejected. That would weaken safety and discard existing semantic definitions tha
 
 Rejected. It would complicate frontend integration and split observability between two chat surfaces.
 
-## Migration Plan
+## Migration State
 
-1. Add `AgentRuntime`, persisted agent sessions, and BI-only tools.
-2. Add guardrails and audit hooks around every tool invocation.
-3. Upgrade SSE to expose planning and tool traces.
-4. Keep the Agent runtime as the only supported chat path.
+1. `AgentRuntime`, persisted agent sessions, and BI-only SDK MCP tools are in
+   place.
+2. Guardrails and audit hooks wrap SDK tool permission and execution flow.
+3. SSE exposes planning, tool traces, specs, final events, and legacy mirrors.
+4. The Agent runtime is the only supported chat path; the old `CHAT_ENGINE`
+   runtime switch has been removed.
 
 ## Reused Modules
 
@@ -299,10 +350,13 @@ Positive:
 
 - Long-tail BI questions can inspect schema and sample rows before querying.
 - Session continuity works across turns and service restarts.
-- The system keeps a one-step rollback switch.
+- Failed tool observations can be summarized without rendering fabricated data.
+- Provider routing can target an Anthropic-compatible gateway without changing
+  runtime code.
 
 Tradeoffs:
 
 - Agent runtime has higher latency than the retired fixed tool-routing path.
 - Tool traces and session state increase storage and audit volume.
+- The Agent runtime no longer has a public runtime-mode rollback switch.
 - SQL planning heuristics still need evaluation and incremental hardening.
