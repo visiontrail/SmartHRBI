@@ -8,12 +8,18 @@ import { ChatEmptyState } from "./chat-empty-state";
 import { PanelLeftOpen, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function ChatPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const chatSidebarOpen = useUIStore((s) => s.chatSidebarOpen);
   const setChatSidebarOpen = useUIStore((s) => s.setChatSidebarOpen);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const activeWorkspaceTitle = useWorkspaceStore((s) => {
+    const workspace = s.workspaces.find((item) => item.id === s.activeWorkspaceId);
+    return workspace?.title ?? null;
+  });
   const createSession = useCreateSession();
 
   const { isLoading } = useChatMessages(activeSessionId);
@@ -34,6 +40,9 @@ export function ChatPanel() {
             </h2>
             <p className="text-label text-stone-gray">
               Ask questions about your HR & project data
+            </p>
+            <p className="text-label text-stone-gray/90">
+              Workspace: {activeWorkspaceTitle ?? (activeWorkspaceId ? activeWorkspaceId : "Unselected")}
             </p>
           </div>
         </div>

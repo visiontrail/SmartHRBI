@@ -33,6 +33,17 @@ export function useWorkspaceSnapshot(workspaceId: string | null) {
   });
 }
 
+export function useWorkspaceCatalog(workspaceId: string | null) {
+  return useQuery({
+    queryKey: ["workspace-catalog", workspaceId],
+    queryFn: async () => {
+      if (!workspaceId) return [];
+      return api.fetchWorkspaceCatalog(workspaceId);
+    },
+    enabled: !!workspaceId,
+  });
+}
+
 export function useCreateWorkspace() {
   const queryClient = useQueryClient();
   const addWorkspace = useWorkspaceStore((s) => s.addWorkspace);

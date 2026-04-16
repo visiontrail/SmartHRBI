@@ -1,7 +1,8 @@
 import type { ChatSession, ChatMessage } from "@/types/chat";
 import type { ChartAsset } from "@/types/chart";
-import type { Workspace, WorkspaceSnapshot } from "@/types/workspace";
+import type { TableCatalogEntry, Workspace, WorkspaceSnapshot } from "@/types/workspace";
 import {
+  MOCK_TABLE_CATALOG,
   MOCK_WORKSPACES,
   MOCK_WORKSPACE_SNAPSHOTS,
   generateMockResponse,
@@ -21,6 +22,7 @@ type StoredWorkspaceState = {
   version: 1;
   workspaces: Workspace[];
   snapshots: Record<string, WorkspaceSnapshot>;
+  tableCatalogByWorkspace: Record<string, TableCatalogEntry[]>;
 };
 
 type StoredChatState = {
@@ -43,6 +45,7 @@ let messages: Record<string, ChatMessage[]> = {};
 let assets: ChartAsset[] = [];
 let workspaces = clone(MOCK_WORKSPACES);
 let snapshots: Record<string, WorkspaceSnapshot> = clone(MOCK_WORKSPACE_SNAPSHOTS);
+let tableCatalogByWorkspace: Record<string, TableCatalogEntry[]> = clone(MOCK_TABLE_CATALOG);
 let hasLoadedPersistedWorkspaces = false;
 
 function getWorkspaceStorage(): Storage | null {
@@ -128,6 +131,9 @@ function loadPersistedWorkspaceState() {
 
     workspaces = parsed.workspaces;
     snapshots = parsed.snapshots as Record<string, WorkspaceSnapshot>;
+    if (typeof parsed.tableCatalogByWorkspace === "object" && parsed.tableCatalogByWorkspace) {
+      tableCatalogByWorkspace = parsed.tableCatalogByWorkspace as Record<string, TableCatalogEntry[]>;
+    }
   } catch {
     storage.removeItem(WORKSPACE_STORAGE_KEY);
   }
@@ -141,6 +147,7 @@ function persistWorkspaceState() {
     version: 1,
     workspaces,
     snapshots,
+    tableCatalogByWorkspace,
   };
 
   try {
@@ -291,6 +298,7 @@ export async function createWorkspace(title?: string, description?: string): Pro
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
   };
+  tableCatalogByWorkspace[ws.id] = [];
   persistWorkspaceState();
   return ws;
 }
@@ -300,6 +308,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   loadPersistedWorkspaceState();
   workspaces = workspaces.filter((w) => w.id !== workspaceId);
   delete snapshots[workspaceId];
+  delete tableCatalogByWorkspace[workspaceId];
   persistWorkspaceState();
 }
 
@@ -330,4 +339,10 @@ export async function updateWorkspaceTitle(workspaceId: string, title: string): 
     ws.updatedAt = new Date().toISOString();
     persistWorkspaceState();
   }
+}
+
+export async function fetchWorkspaceCatalog(workspaceId: string): Promise<TableCatalogEntry[]> {
+  await delay(250);
+  loadPersistedWorkspaceState();
+  return clone(tableCatalogByWorkspace[workspaceId] ?? []);
 }

@@ -33,6 +33,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "views:rollback",
         "audit:read",
         "auth:manage",
+        "workspaces:read",
+        "workspaces:write",
+        "workspaces:manage",
     },
     "hr": {
         "datasets:upload",
@@ -45,6 +48,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "views:read",
         "views:share",
         "audit:read",
+        "workspaces:read",
+        "workspaces:write",
+        "workspaces:manage",
     },
     "pm": {
         "datasets:upload",
@@ -56,6 +62,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "views:write",
         "views:read",
         "views:share",
+        "workspaces:read",
+        "workspaces:write",
+        "workspaces:manage",
     },
     "viewer": {
         "datasets:read",
@@ -65,6 +74,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "chat:stream",
         "views:read",
         "views:share",
+        "workspaces:read",
+        "workspaces:write",
     },
 }
 

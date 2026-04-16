@@ -2,21 +2,34 @@
 
 import { useEffect } from "react";
 import { GlobalSidebar } from "./global-sidebar";
+import { WorkspaceOnboardingGate } from "./workspace-onboarding-gate";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { WorkspacePanel } from "@/components/workspace/workspace-panel";
 import { useUIStore } from "@/stores/ui-store";
 import { useChatSessions } from "@/hooks/use-chat";
-import { useWorkspaceList } from "@/hooks/use-workspace";
+import { useCreateWorkspace, useWorkspaceList } from "@/hooks/use-workspace";
 import { useChartAssets } from "@/hooks/use-chart-assets";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { cn } from "@/lib/utils";
 
 export function AppShell() {
   const activePanel = useUIStore((s) => s.activePanel);
   const chatSidebarOpen = useUIStore((s) => s.chatSidebarOpen);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
 
   useChatSessions();
-  useWorkspaceList();
+  const workspaceListQuery = useWorkspaceList();
+  const createWorkspace = useCreateWorkspace();
   useChartAssets();
+
+  useEffect(() => {
+    if (activeWorkspaceId || workspaces.length === 0) {
+      return;
+    }
+    setActiveWorkspace(workspaces[0].id);
+  }, [activeWorkspaceId, setActiveWorkspace, workspaces]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -39,6 +52,23 @@ export function AppShell() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  if (workspaceListQuery.isLoading && workspaces.length === 0) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-parchment">
+        <p className="text-body text-stone-gray">Loading workspaces...</p>
+      </div>
+    );
+  }
+
+  if (workspaceListQuery.isSuccess && workspaces.length === 0) {
+    return (
+      <WorkspaceOnboardingGate
+        isSubmitting={createWorkspace.isPending}
+        onCreate={(name) => createWorkspace.mutate({ title: name })}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-parchment">

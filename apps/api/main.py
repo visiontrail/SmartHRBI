@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+from .agentic_ingestion import router as ingestion_router
+from .agentic_ingestion.feature_flags import ensure_legacy_dataset_upload_enabled
 from .audit import get_audit_logger
 from .auth import (
     AuthIdentity,
@@ -41,6 +43,7 @@ from .semantic import (
     get_metric_compiler,
     get_semantic_registry,
 )
+from .table_catalog import router as table_catalog_router
 from .tool_calling import ToolCallRequest, get_tool_calling_service
 from .views import (
     RollbackInput,
@@ -48,8 +51,12 @@ from .views import (
     ViewStorageError,
     get_view_storage_service,
 )
+from .workspaces import WorkspaceError, get_workspace_service, router as workspaces_router
 
 app = FastAPI(title="SmartHRBI API", version="0.1.0")
+app.include_router(ingestion_router)
+app.include_router(workspaces_router)
+app.include_router(table_catalog_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
@@ -140,6 +147,11 @@ async def on_startup() -> None:
         settings.agent_max_tool_steps,
         settings.agent_max_sql_rows,
         settings.agent_timeout_seconds,
+    )
+    logger.info(
+        "ingestion_feature_flags agentic_ingestion_enabled=%s legacy_dataset_upload_enabled=%s",
+        settings.agentic_ingestion_enabled,
+        settings.legacy_dataset_upload_enabled,
     )
 
 
@@ -241,6 +253,7 @@ async def upload_datasets(
 ) -> dict[str, object]:
     ensure_scope(identity, user_id=user_id, project_id=project_id)
     settings = get_settings()
+    ensure_legacy_dataset_upload_enabled(settings.legacy_dataset_upload_enabled)
     service = get_dataset_service(
         settings.upload_dir,
         ai_api_key=settings.ai_api_key,
@@ -460,11 +473,22 @@ async def chat_stream(
     identity: AuthIdentity = Depends(require_permission("chat:stream")),
 ) -> StreamingResponse:
     ensure_scope(identity, user_id=request.user_id, project_id=request.project_id)
+    workspace_id = (request.workspace_id or "").strip() or None
+    if workspace_id is not None:
+        try:
+            get_workspace_service().assert_workspace_access(
+                workspace_id=workspace_id,
+                user_id=identity.user_id,
+                minimum_role="viewer",
+            )
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
     enforced_request = request.model_copy(
         update={
             "user_id": identity.user_id,
             "project_id": identity.project_id,
+            "workspace_id": workspace_id,
             "role": identity.role,
             "department": identity.department,
             "clearance": identity.clearance,
@@ -479,6 +503,7 @@ async def chat_stream(
         project_id=identity.project_id,
         detail={
             "conversation_id": enforced_request.conversation_id,
+            "workspace_id": enforced_request.workspace_id,
         },
     )
 

@@ -20,6 +20,7 @@ logger = logging.getLogger("smarthrbi.chat")
 class ChatStreamRequest(BaseModel):
     user_id: str
     project_id: str
+    workspace_id: str | None = None
     dataset_table: str
     message: str | None = None
     conversation_id: str | None = None

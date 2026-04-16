@@ -1,6 +1,6 @@
 import type { ChatSession, ChatMessage, AssistantResponse } from "@/types/chat";
 import type { ChartAsset, ChartSpec } from "@/types/chart";
-import type { Workspace, WorkspaceSnapshot } from "@/types/workspace";
+import type { TableCatalogEntry, Workspace, WorkspaceSnapshot } from "@/types/workspace";
 
 // ─── Chart Specs ────────────────────────────────────────────────────────────
 
@@ -450,6 +450,58 @@ export const MOCK_WORKSPACE_SNAPSHOTS: Record<string, WorkspaceSnapshot> = {
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
   },
+};
+
+export const MOCK_TABLE_CATALOG: Record<string, TableCatalogEntry[]> = {
+  "ws-1": [
+    {
+      id: "catalog-1",
+      workspaceId: "ws-1",
+      tableName: "employees_roster",
+      humanLabel: "Employees Roster",
+      businessType: "roster",
+      writeMode: "update_existing",
+      timeGrain: "none",
+      isActiveTarget: true,
+      primaryKeys: ["employee_id"],
+      matchColumns: ["employee_id", "email"],
+      description: "Primary workspace roster table",
+      createdAt: "2026-04-10T08:10:00Z",
+      updatedAt: "2026-04-13T09:20:00Z",
+    },
+    {
+      id: "catalog-2",
+      workspaceId: "ws-1",
+      tableName: "project_progress_monthly",
+      humanLabel: "Project Progress Monthly",
+      businessType: "project_progress",
+      writeMode: "append_only",
+      timeGrain: "month",
+      isActiveTarget: true,
+      primaryKeys: ["project_id", "month_key"],
+      matchColumns: ["project_id"],
+      description: "Monthly progress feed",
+      createdAt: "2026-04-10T08:15:00Z",
+      updatedAt: "2026-04-12T14:05:00Z",
+    },
+  ],
+  "ws-2": [
+    {
+      id: "catalog-3",
+      workspaceId: "ws-2",
+      tableName: "recruitment_pipeline",
+      humanLabel: "Recruitment Pipeline",
+      businessType: "other",
+      writeMode: "append_only",
+      timeGrain: "month",
+      isActiveTarget: true,
+      primaryKeys: ["candidate_id", "month_key"],
+      matchColumns: ["candidate_id"],
+      description: "Recruitment funnel snapshots",
+      createdAt: "2026-04-08T11:20:00Z",
+      updatedAt: "2026-04-12T15:10:00Z",
+    },
+  ],
 };
 
 // ─── Mock AI Response Generator ─────────────────────────────────────────────

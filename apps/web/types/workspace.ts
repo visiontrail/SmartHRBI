@@ -49,6 +49,30 @@ export type WorkspaceSnapshot = {
   viewport: { x: number; y: number; zoom: number };
 };
 
+export type TableCatalogBusinessType = "roster" | "project_progress" | "attendance" | "other";
+export type TableCatalogWriteMode =
+  | "update_existing"
+  | "time_partitioned_new_table"
+  | "new_table"
+  | "append_only";
+export type TableCatalogTimeGrain = "none" | "month" | "quarter" | "year";
+
+export type TableCatalogEntry = {
+  id: string;
+  workspaceId: string;
+  tableName: string;
+  humanLabel: string;
+  businessType: TableCatalogBusinessType;
+  writeMode: TableCatalogWriteMode;
+  timeGrain: TableCatalogTimeGrain;
+  isActiveTarget: boolean;
+  primaryKeys: string[];
+  matchColumns: string[];
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type SavedReportPage = {
   id: string;
   workspaceId: string;

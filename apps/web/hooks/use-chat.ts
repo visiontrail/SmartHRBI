@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useChatStore } from "@/stores/chat-store";
 import { useAssetStore } from "@/stores/asset-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { parseSSEStream } from "@/lib/chat/sse";
 import { getAuthorizationHeader } from "@/lib/auth/session";
 import { generateId, isRecord } from "@/lib/utils";
@@ -81,7 +82,11 @@ export function useSendMessage() {
   return useMutation({
     mutationFn: async ({ sessionId, content }: { sessionId: string; content: string }) => {
       setIsSending(true);
-      return streamAssistantResponse({ sessionId, content });
+      const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
+      if (!workspaceId) {
+        throw new Error("No workspace selected. Create or select a workspace first.");
+      }
+      return streamAssistantResponse({ sessionId, content, workspaceId });
     },
     onMutate: ({ sessionId, content }) => {
       const userMessage = createUserMessage(sessionId, content);
@@ -194,9 +199,11 @@ const FALLBACK_OPTION_TYPES = new Set<KnownChartType>([
 async function streamAssistantResponse({
   sessionId,
   content,
+  workspaceId,
 }: {
   sessionId: string;
   content: string;
+  workspaceId: string;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
   const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -208,6 +215,7 @@ async function streamAssistantResponse({
     body: JSON.stringify({
       user_id: DEFAULT_AUTH_CONTEXT.userId,
       project_id: DEFAULT_AUTH_CONTEXT.projectId,
+      workspace_id: workspaceId,
       role: DEFAULT_AUTH_CONTEXT.role,
       department: DEFAULT_AUTH_CONTEXT.department,
       clearance: DEFAULT_AUTH_CONTEXT.clearance,
