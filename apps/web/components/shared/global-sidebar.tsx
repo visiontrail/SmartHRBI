@@ -111,8 +111,10 @@ export function GlobalSidebar() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
+                    aria-label="New conversation"
                     onClick={handleNewChat}
                     disabled={createSession.isPending}
+                    className="h-6 w-6 rounded-subtle border border-ring-warm bg-ivory text-near-black shadow-ring-warm hover:bg-warm-sand hover:text-near-black"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </Button>
@@ -136,6 +138,7 @@ export function GlobalSidebar() {
                     subtitle={formatRelativeTime(new Date(session.updatedAt))}
                     onClick={() => handleSelectSession(session.id)}
                     onDelete={() => deleteSession.mutate(session.id)}
+                    deleteAriaLabel={`Delete conversation: ${session.title}`}
                   />
                 ))
               )}
@@ -155,8 +158,10 @@ export function GlobalSidebar() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
+                    aria-label="New workspace"
                     onClick={handleNewWorkspace}
                     disabled={createWorkspace.isPending}
+                    className="h-6 w-6 rounded-subtle border border-ring-warm bg-ivory text-near-black shadow-ring-warm hover:bg-warm-sand hover:text-near-black"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </Button>
@@ -180,6 +185,7 @@ export function GlobalSidebar() {
                     subtitle={`${ws.nodeCount} items`}
                     onClick={() => handleSelectWorkspace(ws.id)}
                     onDelete={() => deleteWorkspace.mutate(ws.id)}
+                    deleteAriaLabel={`Delete workspace: ${ws.title}`}
                   />
                 ))
               )}
@@ -236,6 +242,7 @@ function SidebarItem({
   subtitle,
   onClick,
   onDelete,
+  deleteAriaLabel,
 }: {
   active: boolean;
   icon: React.ReactNode;
@@ -243,6 +250,7 @@ function SidebarItem({
   subtitle: string;
   onClick: () => void;
   onDelete: () => void;
+  deleteAriaLabel: string;
 }) {
   return (
     <div
@@ -267,12 +275,13 @@ function SidebarItem({
         <p className="text-label text-stone-gray truncate">{subtitle}</p>
       </div>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onDelete();
         }}
-        className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-subtle hover:bg-error-crimson/10 hover:text-error-crimson transition-all"
-        aria-label="Delete"
+        className="shrink-0 opacity-100 p-1 rounded-subtle text-stone-gray hover:bg-error-crimson/10 hover:text-error-crimson focus-visible:text-error-crimson transition-colors"
+        aria-label={deleteAriaLabel}
       >
         <Trash2 className="w-3.5 h-3.5" />
       </button>
