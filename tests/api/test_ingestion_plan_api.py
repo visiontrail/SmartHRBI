@@ -9,6 +9,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.agentic_ingestion.uploads import clear_ingestion_upload_service_cache
+from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
 from apps.api.chat import clear_chat_stream_service_cache
@@ -29,8 +30,9 @@ def _set_minimal_env(
     *,
     ingestion_enabled: bool,
     model_provider_url: str = "http://localhost:11434",
-    ai_api_key: str = "",
+    ai_api_key: str = "test-ai-key",
     ai_timeout_seconds: str = "20",
+    mock_llm_success: bool = True,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'workspace-state.db'}")
     monkeypatch.setenv("MODEL_PROVIDER_URL", model_provider_url)
@@ -41,6 +43,32 @@ def _set_minimal_env(
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "true" if ingestion_enabled else "false")
+    if mock_llm_success:
+        def _mock_infer_business_type_with_llm(
+            self,
+            *,
+            file_name: str,
+            columns: list[str],
+            sheet_names: list[str],
+            sample_preview: list[object],
+            model: str,
+            base_url: str,
+            api_key: str,
+            timeout_seconds: float,
+        ) -> dict[str, object]:
+            _ = (self, file_name, columns, sheet_names, sample_preview, model, base_url, api_key, timeout_seconds)
+            return {
+                "business_type": "roster",
+                "confidence": 0.91,
+                "reasoning": "mocked llm classification",
+            }
+
+        monkeypatch.setattr(
+            WriteIngestionAgentRuntime,
+            "_infer_business_type_with_llm",
+            _mock_infer_business_type_with_llm,
+        )
+
     get_settings.cache_clear()
     clear_auth_cache()
     clear_audit_logger_cache()
@@ -240,7 +268,7 @@ def test_ingestion_plan_persists_proposal(monkeypatch, tmp_path: Path) -> None:
         assert "proposal_generated" in event_types
 
 
-def test_ingestion_plan_reports_rules_inference_audit(monkeypatch, tmp_path: Path) -> None:
+def test_ingestion_plan_reports_ai_inference_audit(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
 
     with TestClient(app) as client:
@@ -261,18 +289,18 @@ def test_ingestion_plan_reports_rules_inference_audit(monkeypatch, tmp_path: Pat
     assert plan_response.status_code == 200
     payload = plan_response.json()
     audit = payload["analysis_audit"]["business_type_inference"]
-    assert audit["engine"] == "rules_keywords_v1"
-    assert audit["ai_configured"] is False
-    assert audit["ai_attempted"] is False
-    assert audit["ai_succeeded"] is False
-    assert audit["fallback_reason"] == "ai_not_configured"
+    assert audit["engine"] == "llm_classifier_v1"
+    assert audit["ai_configured"] is True
+    assert audit["ai_attempted"] is True
+    assert audit["ai_succeeded"] is True
+    assert audit["fallback_reason"] == ""
 
     infer_trace = next(
         item for item in payload["tool_trace"] if item.get("tool_name") == "infer_business_type"
     )
     infer_result = infer_trace["result"]
-    assert infer_result["inference_engine"] == "rules_keywords_v1"
-    assert infer_result["ai_attempted"] is False
+    assert infer_result["inference_engine"] == "llm_classifier_v1"
+    assert infer_result["ai_attempted"] is True
 
     db_path = tmp_path / "workspace-state.db"
     with sqlite3.connect(db_path) as conn:
@@ -289,22 +317,21 @@ def test_ingestion_plan_reports_rules_inference_audit(monkeypatch, tmp_path: Pat
         ).fetchone()
         assert row is not None
         payload_json = json.loads(str(row["payload"]))
-        assert payload_json["analysis_audit"]["engine"] == "rules_keywords_v1"
+        assert payload_json["analysis_audit"]["engine"] == "llm_classifier_v1"
 
 
-def test_ingestion_plan_falls_back_when_llm_classifier_fails(monkeypatch, tmp_path: Path) -> None:
+def test_ingestion_plan_fails_when_ai_not_configured(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(
         monkeypatch,
         tmp_path,
         ingestion_enabled=True,
-        model_provider_url="http://127.0.0.1:9",
-        ai_api_key="demo-key",
-        ai_timeout_seconds="0.2",
+        ai_api_key="",
+        mock_llm_success=False,
     )
 
     with TestClient(app) as client:
         owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
-        workspace_id = _create_workspace(client, owner_headers, name="Plan Audit Fallback Workspace")
+        workspace_id = _create_workspace(client, owner_headers, name="Plan AI Missing Workspace")
         upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
         plan_response = client.post(
             "/ingestion/plan",
@@ -317,13 +344,36 @@ def test_ingestion_plan_falls_back_when_llm_classifier_fails(monkeypatch, tmp_pa
             headers=owner_headers,
         )
 
-    assert plan_response.status_code == 200
-    payload = plan_response.json()
-    audit = payload["analysis_audit"]["business_type_inference"]
-    assert audit["ai_configured"] is True
-    assert audit["ai_attempted"] is True
-    assert audit["ai_succeeded"] is False
-    assert str(audit["fallback_reason"]).startswith("llm_error:")
+    expect_error_code(plan_response, "INGESTION_AI_NOT_CONFIGURED", status_code=503)
+
+
+def test_ingestion_plan_fails_when_ai_service_unavailable(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(
+        monkeypatch,
+        tmp_path,
+        ingestion_enabled=True,
+        model_provider_url="http://127.0.0.1:9",
+        ai_api_key="demo-key",
+        ai_timeout_seconds="0.2",
+        mock_llm_success=False,
+    )
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Plan AI Unavailable Workspace")
+        upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
+        plan_response = client.post(
+            "/ingestion/plan",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "conversation_id": "conv-ai-down",
+                "message": "请帮我分析导入类型",
+            },
+            headers=owner_headers,
+        )
+
+    expect_error_code(plan_response, "INGESTION_AI_UNAVAILABLE", status_code=503)
 
 def test_ingestion_plan_workspace_role_guard(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)

@@ -1894,8 +1894,6 @@ class WriteIngestionAgentRuntime:
             for item in upload_info["sheet_summary"].get("sheets", [])
             if str(item.get("sheet_name", "")).strip()
         ]
-        text_blob = " ".join([*columns, *sheet_names, str(upload_info["file_name"]).lower()])
-        keyword_guess = self._infer_business_type_with_keywords(text_blob)
 
         settings = get_settings()
         ai_configured = bool(
@@ -1904,16 +1902,11 @@ class WriteIngestionAgentRuntime:
             and settings.model_provider_url.strip()
         )
         if not ai_configured:
-            keyword_guess.update(
-                {
-                    "inference_engine": "rules_keywords_v1",
-                    "ai_configured": False,
-                    "ai_attempted": False,
-                    "ai_succeeded": False,
-                    "fallback_reason": "ai_not_configured",
-                }
+            raise IngestionPlanningError(
+                code="INGESTION_AI_NOT_CONFIGURED",
+                message="AI service is not configured for ingestion classification",
+                status_code=503,
             )
-            return keyword_guess
 
         try:
             llm_guess = self._infer_business_type_with_llm(
@@ -1926,60 +1919,31 @@ class WriteIngestionAgentRuntime:
                 api_key=settings.ai_api_key,
                 timeout_seconds=settings.ai_timeout_seconds,
             )
-            llm_guess.update(
-                {
-                    "inference_engine": "llm_classifier_v1",
-                    "ai_configured": True,
-                    "ai_attempted": True,
-                    "ai_succeeded": True,
-                    "fallback_reason": "",
-                    "keyword_fallback": keyword_guess,
-                }
-            )
-            return llm_guess
+        except IngestionPlanningError:
+            raise
         except Exception as exc:
             logger.warning(
-                "ingestion_business_type_llm_fallback file_name=%s error_type=%s error=%s",
+                "ingestion_business_type_llm_failed file_name=%s error_type=%s error=%s",
                 str(upload_info.get("file_name", "")),
                 type(exc).__name__,
                 str(exc),
             )
-            keyword_guess.update(
-                {
-                    "inference_engine": "rules_keywords_v1",
-                    "ai_configured": True,
-                    "ai_attempted": True,
-                    "ai_succeeded": False,
-                    "fallback_reason": f"llm_error:{type(exc).__name__}",
-                }
-            )
-            return keyword_guess
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message="AI service is unavailable for ingestion classification",
+                status_code=503,
+            ) from exc
 
-    @staticmethod
-    def _infer_business_type_with_keywords(text_blob: str) -> dict[str, Any]:
-        business_type = "other"
-        confidence = 0.55
-        reason = "No strong business-type keyword match was found."
-        keyword_groups = [
-            ("roster", ("employee", "员工", "花名册", "department", "部门", "hire", "入职")),
-            ("project_progress", ("project", "milestone", "progress", "项目", "进度", "里程碑")),
-            ("attendance", ("attendance", "考勤", "打卡", "absence", "出勤", "迟到")),
-        ]
-        matched_keywords: list[str] = []
-        for candidate, keywords in keyword_groups:
-            matched_keywords = [keyword for keyword in keywords if keyword in text_blob]
-            if matched_keywords:
-                business_type = candidate
-                confidence = min(0.95, 0.62 + len(matched_keywords) * 0.1)
-                reason = f"Matched keywords for {candidate}: {len(matched_keywords)}"
-                break
-
-        return {
-            "business_type": business_type,
-            "confidence": round(confidence, 2),
-            "reasoning": reason,
-            "matched_keywords": matched_keywords,
-        }
+        llm_guess.update(
+            {
+                "inference_engine": "llm_classifier_v1",
+                "ai_configured": True,
+                "ai_attempted": True,
+                "ai_succeeded": True,
+                "fallback_reason": "",
+            }
+        )
+        return llm_guess
 
     def _infer_business_type_with_llm(
         self,
@@ -2066,7 +2030,7 @@ class WriteIngestionAgentRuntime:
     @staticmethod
     def _business_type_inference_audit(business_guess: dict[str, Any]) -> dict[str, Any]:
         return {
-            "engine": str(business_guess.get("inference_engine", "rules_keywords_v1")),
+            "engine": str(business_guess.get("inference_engine", "llm_classifier_v1")),
             "ai_configured": bool(business_guess.get("ai_configured", False)),
             "ai_attempted": bool(business_guess.get("ai_attempted", False)),
             "ai_succeeded": bool(business_guess.get("ai_succeeded", False)),

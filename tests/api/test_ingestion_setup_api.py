@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 from apps.api.agentic_ingestion.uploads import clear_ingestion_upload_service_cache
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
@@ -25,13 +26,39 @@ from tests.auth_utils import auth_headers, expect_error_code
 def _set_minimal_env(monkeypatch, tmp_path: Path, *, ingestion_enabled: bool) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'workspace-state.db'}")
     monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
-    monkeypatch.setenv("AI_API_KEY", "")
+    monkeypatch.setenv("AI_API_KEY", "test-ai-key")
     monkeypatch.setenv("AI_MODEL", "deepseek-chat")
     monkeypatch.setenv("AI_TIMEOUT_SECONDS", "20")
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "true" if ingestion_enabled else "false")
+
+    def _mock_infer_business_type_with_llm(
+        self,
+        *,
+        file_name: str,
+        columns: list[str],
+        sheet_names: list[str],
+        sample_preview: list[object],
+        model: str,
+        base_url: str,
+        api_key: str,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        _ = (self, file_name, columns, sheet_names, sample_preview, model, base_url, api_key, timeout_seconds)
+        return {
+            "business_type": "roster",
+            "confidence": 0.9,
+            "reasoning": "mocked llm classification",
+        }
+
+    monkeypatch.setattr(
+        WriteIngestionAgentRuntime,
+        "_infer_business_type_with_llm",
+        _mock_infer_business_type_with_llm,
+    )
+
     get_settings.cache_clear()
     clear_auth_cache()
     clear_audit_logger_cache()
