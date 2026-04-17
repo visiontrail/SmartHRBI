@@ -11,6 +11,7 @@ import { useAssetStore } from "@/stores/asset-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
 import { generateId } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
 import type { ChartNodeData } from "@/types/workspace";
 
@@ -21,6 +22,7 @@ type ChartMessageCardProps = {
 };
 
 export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCardProps) {
+  const { t } = useI18n();
   const getAsset = useAssetStore((s) => s.getAsset);
   const addNode = useWorkspaceStore((s) => s.addNode);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -31,12 +33,12 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
 
   const handleAddToCanvas = useCallback(() => {
     if (!asset) {
-      toast.error("Chart asset not found");
+      toast.error(t("chat.toast.chartAssetNotFound"));
       return;
     }
 
     if (!activeWorkspaceId) {
-      toast.error("No workspace selected. Create or select a workspace first.");
+      toast.error(t("chat.toast.noWorkspace"));
       return;
     }
 
@@ -61,8 +63,8 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
     });
 
     setActivePanel("both");
-    toast.success(`"${asset.title}" added to workspace`);
-  }, [asset, activeWorkspaceId, nodes.length, addNode, setActivePanel]);
+    toast.success(t("chat.toast.addedToWorkspace", { title: asset.title }));
+  }, [asset, activeWorkspaceId, nodes.length, addNode, setActivePanel, t]);
 
   return (
     <Card className="w-full max-w-lg overflow-hidden animate-fade-in">
@@ -80,7 +82,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
           </div>
         ) : (
           <div className="h-[220px] rounded-comfortable bg-warm-sand flex items-center justify-center">
-            <p className="text-caption text-stone-gray">Chart preview unavailable</p>
+            <p className="text-caption text-stone-gray">{t("chat.chartPreviewUnavailable")}</p>
           </div>
         )}
 
@@ -90,10 +92,10 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
             <TooltipTrigger asChild>
               <Button variant="default" size="sm" onClick={handleAddToCanvas}>
                 <LayoutDashboard className="w-3.5 h-3.5" />
-                Add to Canvas
+                {t("chat.addToCanvas")}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Insert this chart into your workspace</TooltipContent>
+            <TooltipContent>{t("chat.addToCanvasTooltip")}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -102,7 +104,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
                 <Copy className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Duplicate</TooltipContent>
+            <TooltipContent>{t("chat.duplicate")}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -111,7 +113,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
                 <RefreshCw className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Regenerate</TooltipContent>
+            <TooltipContent>{t("chat.regenerate")}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -120,7 +122,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
                 <Maximize2 className="w-3.5 h-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Full screen</TooltipContent>
+            <TooltipContent>{t("chat.fullScreen")}</TooltipContent>
           </Tooltip>
         </div>
       </CardContent>

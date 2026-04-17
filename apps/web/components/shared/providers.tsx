@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { I18nProvider } from "@/lib/i18n/context";
 import { Toaster } from "sonner";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -21,20 +22,22 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={300}>
-        {children}
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: "#faf9f5",
-              border: "1px solid #f0eee6",
-              color: "#141413",
-              fontFamily: "Inter, system-ui, sans-serif",
-            },
-          }}
-        />
-      </TooltipProvider>
+      <I18nProvider>
+        <TooltipProvider delayDuration={300}>
+          {children}
+          <Toaster
+            position="bottom-right"
+            toastOptions={{
+              style: {
+                background: "#faf9f5",
+                border: "1px solid #f0eee6",
+                color: "#141413",
+                fontFamily: "Inter, system-ui, sans-serif",
+              },
+            }}
+          />
+        </TooltipProvider>
+      </I18nProvider>
     </QueryClientProvider>
   );
 }

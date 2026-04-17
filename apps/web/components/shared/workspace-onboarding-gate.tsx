@@ -5,21 +5,22 @@ import { Building2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n/context";
 
 type WorkspaceOnboardingGateProps = {
   onCreate: (name: string) => void;
   isSubmitting: boolean;
 };
 
-const DEFAULT_WORKSPACE_NAME = "My Workspace";
-
 export function WorkspaceOnboardingGate({ onCreate, isSubmitting }: WorkspaceOnboardingGateProps) {
+  const { t } = useI18n();
   const [workspaceName, setWorkspaceName] = useState("");
+  const defaultWorkspaceName = t("workspace.onboarding.defaultName");
 
   const normalizedName = useMemo(() => workspaceName.trim(), [workspaceName]);
 
   const handleCreate = () => {
-    onCreate(normalizedName || DEFAULT_WORKSPACE_NAME);
+    onCreate(normalizedName || defaultWorkspaceName);
   };
 
   return (
@@ -30,32 +31,32 @@ export function WorkspaceOnboardingGate({ onCreate, isSubmitting }: WorkspaceOnb
             <Building2 className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="font-serif text-heading text-near-black">Create Your First Workspace</h1>
+            <h1 className="font-serif text-heading text-near-black">{t("workspace.onboarding.title")}</h1>
             <p className="text-body-sm text-olive-gray">
-              A workspace is required before chatting and running analysis.
+              {t("workspace.onboarding.description")}
             </p>
           </div>
         </div>
 
         <div className="space-y-3">
           <label htmlFor="workspace-name" className="text-label text-stone-gray">
-            Workspace Name
+            {t("workspace.onboarding.nameLabel")}
           </label>
           <Input
             id="workspace-name"
             value={workspaceName}
             onChange={(event) => setWorkspaceName(event.target.value)}
-            placeholder={DEFAULT_WORKSPACE_NAME}
+            placeholder={defaultWorkspaceName}
             autoFocus
           />
           <p className="text-caption text-stone-gray">
-            You can rename this workspace later from the canvas toolbar.
+            {t("workspace.onboarding.renameHint")}
           </p>
         </div>
 
         <div className="mt-6 flex items-center justify-end">
           <Button onClick={handleCreate} disabled={isSubmitting}>
-            Create Workspace
+            {t("workspace.create")}
           </Button>
         </div>
       </section>

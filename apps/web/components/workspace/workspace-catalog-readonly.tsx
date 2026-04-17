@@ -6,8 +6,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
 import { useCreateWorkspaceCatalogFromSetup, useWorkspaceCatalog } from "@/hooks/use-workspace";
 import { IngestionSetupCard } from "./ingestion-setup-card";
+import { useI18n } from "@/lib/i18n/context";
 
 export function WorkspaceCatalogReadonly({ workspaceId }: { workspaceId: string }) {
+  const { t } = useI18n();
   const catalogQuery = useWorkspaceCatalog(workspaceId);
   const createSetupMutation = useCreateWorkspaceCatalogFromSetup();
 
@@ -16,8 +18,8 @@ export function WorkspaceCatalogReadonly({ workspaceId }: { workspaceId: string 
       <div className="px-3 pt-3 pb-2" data-testid="workspace-catalog-loading">
         <Card>
           <CardHeader>
-            <CardTitle>Workspace Table Catalog</CardTitle>
-            <CardDescription>Loading table targets for this workspace...</CardDescription>
+            <CardTitle>{t("workspace.catalog.title")}</CardTitle>
+            <CardDescription>{t("workspace.catalog.loadingDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             <Skeleton className="h-10 w-full" />
@@ -34,15 +36,15 @@ export function WorkspaceCatalogReadonly({ workspaceId }: { workspaceId: string 
     <div className="px-3 pt-3 pb-2" data-testid="workspace-catalog-readonly">
       <Card>
         <CardHeader>
-          <CardTitle>Workspace Table Catalog</CardTitle>
+          <CardTitle>{t("workspace.catalog.title")}</CardTitle>
           <CardDescription>
-            Current writable targets used by ingestion planning ({entries.length})
+            {t("workspace.catalog.description", { count: entries.length })}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {entries.length === 0 ? (
             <div className="space-y-3">
-              <p className="text-caption text-stone-gray">No catalog entries yet. Complete setup to add one.</p>
+              <p className="text-caption text-stone-gray">{t("workspace.catalog.empty")}</p>
               <IngestionSetupCard
                 initialSeed={buildDefaultSetupSeed()}
                 isSubmitting={createSetupMutation.isPending}
@@ -60,7 +62,7 @@ export function WorkspaceCatalogReadonly({ workspaceId }: { workspaceId: string 
                 >
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-body-sm font-medium text-near-black">{entry.humanLabel}</p>
-                    {entry.isActiveTarget ? <Badge variant="default">Active</Badge> : null}
+                    {entry.isActiveTarget ? <Badge variant="default">{t("workspace.catalog.active")}</Badge> : null}
                   </div>
                   <p className="text-label text-stone-gray">
                     {entry.tableName} · {entry.businessType} · {entry.writeMode}

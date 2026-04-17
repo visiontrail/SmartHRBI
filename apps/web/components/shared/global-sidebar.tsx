@@ -14,13 +14,16 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useChatStore } from "@/stores/chat-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import { useUIStore, type ActivePanel } from "@/stores/ui-store";
+import { useUIStore } from "@/stores/ui-store";
 import { useCreateSession, useDeleteSession } from "@/hooks/use-chat";
 import { useCreateWorkspace, useDeleteWorkspace } from "@/hooks/use-workspace";
+import { useI18n } from "@/lib/i18n/context";
+import type { Locale } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 import { truncate, formatRelativeTime } from "@/lib/utils";
 
 export function GlobalSidebar() {
+  const { t, locale, setLocale } = useI18n();
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const setActiveSession = useChatStore((s) => s.setActiveSession);
@@ -44,7 +47,7 @@ export function GlobalSidebar() {
   };
 
   const handleNewWorkspace = () => {
-    createWorkspace.mutate({});
+    createWorkspace.mutate({ title: t("workspace.defaultUntitled") });
     if (activePanel === "chat") setActivePanel("both");
   };
 
@@ -72,30 +75,8 @@ export function GlobalSidebar() {
               <PanelLeftClose className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Hide sidebar (⌘B)</TooltipContent>
+          <TooltipContent>{t("sidebar.hideSidebar")}</TooltipContent>
         </Tooltip>
-      </div>
-
-      {/* Panel Switcher */}
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-border-cream">
-        <PanelButton
-          active={activePanel === "chat" || activePanel === "both"}
-          onClick={() => setActivePanel(activePanel === "chat" ? "both" : "chat")}
-          label="Chat"
-          shortcut="⌘1"
-        />
-        <PanelButton
-          active={activePanel === "workspace" || activePanel === "both"}
-          onClick={() => setActivePanel(activePanel === "workspace" ? "both" : "workspace")}
-          label="Canvas"
-          shortcut="⌘2"
-        />
-        <PanelButton
-          active={activePanel === "both"}
-          onClick={() => setActivePanel("both")}
-          label="Split"
-          shortcut="⌘3"
-        />
       </div>
 
       <ScrollArea className="flex-1">
@@ -104,14 +85,14 @@ export function GlobalSidebar() {
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-label text-stone-gray uppercase tracking-wider font-medium">
-                Conversations
+                {t("sidebar.section.conversations")}
               </span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="New conversation"
+                    aria-label={t("sidebar.action.newConversation")}
                     onClick={handleNewChat}
                     disabled={createSession.isPending}
                     className="h-6 w-6 rounded-subtle border border-ring-warm bg-ivory text-near-black shadow-ring-warm hover:bg-warm-sand hover:text-near-black"
@@ -119,14 +100,14 @@ export function GlobalSidebar() {
                     <Plus className="w-3.5 h-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>New conversation</TooltipContent>
+                <TooltipContent>{t("sidebar.action.newConversation")}</TooltipContent>
               </Tooltip>
             </div>
 
             <div className="space-y-0.5">
               {sessions.length === 0 ? (
                 <p className="text-caption text-stone-gray px-2 py-3">
-                  No conversations yet. Start a new one.
+                  {t("sidebar.emptyConversations")}
                 </p>
               ) : (
                 sessions.map((session) => (
@@ -135,10 +116,10 @@ export function GlobalSidebar() {
                     active={session.id === activeSessionId}
                     icon={<MessageSquare className="w-4 h-4" />}
                     title={truncate(session.title, 28)}
-                    subtitle={formatRelativeTime(new Date(session.updatedAt))}
+                    subtitle={formatRelativeTime(new Date(session.updatedAt), locale)}
                     onClick={() => handleSelectSession(session.id)}
                     onDelete={() => deleteSession.mutate(session.id)}
-                    deleteAriaLabel={`Delete conversation: ${session.title}`}
+                    deleteAriaLabel={t("sidebar.deleteConversation", { title: session.title })}
                   />
                 ))
               )}
@@ -151,14 +132,14 @@ export function GlobalSidebar() {
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-label text-stone-gray uppercase tracking-wider font-medium">
-                Workspaces
+                {t("sidebar.section.workspaces")}
               </span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="New workspace"
+                    aria-label={t("sidebar.action.newWorkspace")}
                     onClick={handleNewWorkspace}
                     disabled={createWorkspace.isPending}
                     className="h-6 w-6 rounded-subtle border border-ring-warm bg-ivory text-near-black shadow-ring-warm hover:bg-warm-sand hover:text-near-black"
@@ -166,14 +147,14 @@ export function GlobalSidebar() {
                     <Plus className="w-3.5 h-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>New workspace</TooltipContent>
+                <TooltipContent>{t("sidebar.action.newWorkspace")}</TooltipContent>
               </Tooltip>
             </div>
 
             <div className="space-y-0.5">
               {workspaces.length === 0 ? (
                 <p className="text-caption text-stone-gray px-2 py-3">
-                  No workspaces yet. Create one to compose reports.
+                  {t("sidebar.emptyWorkspaces")}
                 </p>
               ) : (
                 workspaces.map((ws) => (
@@ -182,10 +163,10 @@ export function GlobalSidebar() {
                     active={ws.id === activeWorkspaceId}
                     icon={<LayoutDashboard className="w-4 h-4" />}
                     title={truncate(ws.title, 28)}
-                    subtitle={`${ws.nodeCount} items`}
+                    subtitle={t("sidebar.itemCount", { count: ws.nodeCount })}
                     onClick={() => handleSelectWorkspace(ws.id)}
                     onDelete={() => deleteWorkspace.mutate(ws.id)}
-                    deleteAriaLabel={`Delete workspace: ${ws.title}`}
+                    deleteAriaLabel={t("sidebar.deleteWorkspace", { title: ws.title })}
                   />
                 ))
               )}
@@ -196,42 +177,51 @@ export function GlobalSidebar() {
 
       {/* Footer */}
       <div className="border-t border-border-cream px-4 py-3">
-        <p className="text-label text-stone-gray">
-          AI Native HR BI Platform
-        </p>
+        <p className="text-label text-stone-gray">{t("sidebar.footerTagline")}</p>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-label text-stone-gray">{t("language.label")}</span>
+          <div className="inline-flex items-center gap-1 rounded-subtle border border-border-cream bg-parchment p-1">
+            <LanguageButton
+              locale="en-US"
+              active={locale === "en-US"}
+              onClick={setLocale}
+              label={t("language.en")}
+            />
+            <LanguageButton
+              locale="zh-CN"
+              active={locale === "zh-CN"}
+              onClick={setLocale}
+              label={t("language.zh")}
+            />
+          </div>
+        </div>
       </div>
     </aside>
   );
 }
 
-function PanelButton({
+function LanguageButton({
+  locale,
   active,
   onClick,
   label,
-  shortcut,
 }: {
+  locale: Locale;
   active: boolean;
-  onClick: () => void;
+  onClick: (locale: Locale) => void;
   label: string;
-  shortcut: string;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          onClick={onClick}
-          className={cn(
-            "flex-1 text-center text-caption font-medium py-1 rounded-subtle transition-colors",
-            active
-              ? "bg-warm-sand text-near-black shadow-ring-warm"
-              : "text-stone-gray hover:text-olive-gray hover:bg-border-cream"
-          )}
-        >
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{shortcut}</TooltipContent>
-    </Tooltip>
+    <button
+      type="button"
+      onClick={() => onClick(locale)}
+      className={cn(
+        "rounded-subtle px-2 py-1 text-label font-medium transition-colors",
+        active ? "bg-warm-sand text-near-black" : "text-stone-gray hover:bg-border-cream"
+      )}
+    >
+      {label}
+    </button>
   );
 }
 

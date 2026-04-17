@@ -52,6 +52,18 @@ class CreateWorkspaceRequest(BaseModel):
         return normalized
 
 
+class UpdateWorkspaceRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Workspace name cannot be empty")
+        return normalized
+
+
 class AddWorkspaceMemberRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
     role: str = Field(default="viewer")
@@ -156,7 +168,7 @@ class WorkspaceService:
                 FROM workspaces AS w
                 JOIN workspace_members AS wm
                   ON wm.workspace_id = w.id
-                WHERE wm.user_id = ?
+                WHERE wm.user_id = ? AND w.status = 'active'
                 ORDER BY w.updated_at DESC
                 """,
                 (normalized_user,),
@@ -188,7 +200,7 @@ class WorkspaceService:
                 FROM workspaces AS w
                 JOIN workspace_members AS wm
                   ON wm.workspace_id = w.id
-                WHERE w.id = ? AND wm.user_id = ?
+                WHERE w.id = ? AND wm.user_id = ? AND w.status = 'active'
                 """,
                 (normalized_workspace_id, normalized_user),
             ).fetchone()
@@ -238,6 +250,122 @@ class WorkspaceService:
             )
 
         return member.role
+
+    def rename_workspace(
+        self,
+        *,
+        workspace_id: str,
+        actor_user_id: str,
+        name: str,
+    ) -> dict[str, str]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_actor = actor_user_id.strip()
+        normalized_name = name.strip()
+
+        if not normalized_name:
+            raise WorkspaceError(
+                code="WORKSPACE_NAME_REQUIRED",
+                message="Workspace name is required",
+                status_code=422,
+            )
+
+        with self._lock, self._connect() as conn:
+            actor_member = self._get_member(
+                conn,
+                workspace_id=normalized_workspace_id,
+                user_id=normalized_actor,
+            )
+            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["editor"]:
+                raise WorkspaceError(
+                    code="WORKSPACE_FORBIDDEN",
+                    message="You do not have permission to access this workspace",
+                    status_code=403,
+                )
+
+            workspace_row = conn.execute(
+                """
+                SELECT id, slug, status, created_at, updated_at
+                FROM workspaces
+                WHERE id = ?
+                """,
+                (normalized_workspace_id,),
+            ).fetchone()
+            if workspace_row is None or str(workspace_row["status"]) != "active":
+                raise WorkspaceError(
+                    code="WORKSPACE_NOT_FOUND",
+                    message="Workspace not found",
+                    status_code=404,
+                )
+
+            now = _utc_now()
+            conn.execute(
+                """
+                UPDATE workspaces
+                SET name = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_name, now, normalized_workspace_id),
+            )
+            conn.commit()
+
+            return {
+                "workspace_id": normalized_workspace_id,
+                "name": normalized_name,
+                "slug": str(workspace_row["slug"]),
+                "status": "active",
+                "role": actor_member.role,
+                "created_at": str(workspace_row["created_at"]),
+                "updated_at": now,
+            }
+
+    def deactivate_workspace(self, *, workspace_id: str, actor_user_id: str) -> dict[str, str]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_actor = actor_user_id.strip()
+        updated_at = _utc_now()
+
+        with self._lock, self._connect() as conn:
+            actor_member = self._get_member(
+                conn,
+                workspace_id=normalized_workspace_id,
+                user_id=normalized_actor,
+            )
+            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["admin"]:
+                raise WorkspaceError(
+                    code="WORKSPACE_FORBIDDEN",
+                    message="You do not have permission to access this workspace",
+                    status_code=403,
+                )
+
+            workspace_row = conn.execute(
+                """
+                SELECT id, status
+                FROM workspaces
+                WHERE id = ?
+                """,
+                (normalized_workspace_id,),
+            ).fetchone()
+            if workspace_row is None or str(workspace_row["status"]) != "active":
+                raise WorkspaceError(
+                    code="WORKSPACE_NOT_FOUND",
+                    message="Workspace not found",
+                    status_code=404,
+                )
+
+            conn.execute(
+                """
+                UPDATE workspaces
+                SET status = 'inactive', updated_at = ?
+                WHERE id = ?
+                """,
+                (updated_at, normalized_workspace_id),
+            )
+            conn.commit()
+
+        return {
+            "workspace_id": normalized_workspace_id,
+            "status": "inactive",
+            "updated_at": updated_at,
+        }
 
     def add_member(
         self,
@@ -511,6 +639,38 @@ async def get_workspace(
     service = get_workspace_service()
     try:
         return service.get_workspace_for_user(workspace_id=workspace_id, user_id=identity.user_id)
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.patch("/{workspace_id}")
+async def rename_workspace(
+    workspace_id: str,
+    request: UpdateWorkspaceRequest,
+    identity: AuthIdentity = Depends(require_permission("workspaces:write")),
+) -> dict[str, str]:
+    service = get_workspace_service()
+    try:
+        return service.rename_workspace(
+            workspace_id=workspace_id,
+            actor_user_id=identity.user_id,
+            name=request.name,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.delete("/{workspace_id}")
+async def delete_workspace(
+    workspace_id: str,
+    identity: AuthIdentity = Depends(require_permission("workspaces:manage")),
+) -> dict[str, str]:
+    service = get_workspace_service()
+    try:
+        return service.deactivate_workspace(
+            workspace_id=workspace_id,
+            actor_user_id=identity.user_id,
+        )
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 

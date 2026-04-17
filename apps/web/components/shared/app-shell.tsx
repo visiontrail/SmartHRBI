@@ -11,8 +11,10 @@ import { useCreateWorkspace, useWorkspaceList } from "@/hooks/use-workspace";
 import { useChartAssets } from "@/hooks/use-chart-assets";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n/context";
 
 export function AppShell() {
+  const { t } = useI18n();
   const activePanel = useUIStore((s) => s.activePanel);
   const chatSidebarOpen = useUIStore((s) => s.chatSidebarOpen);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -56,7 +58,7 @@ export function AppShell() {
   if (workspaceListQuery.isLoading && workspaces.length === 0) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-parchment">
-        <p className="text-body text-stone-gray">Loading workspaces...</p>
+        <p className="text-body text-stone-gray">{t("app.loadingWorkspaces")}</p>
       </div>
     );
   }

@@ -6,10 +6,12 @@ import { MessageItem } from "./message-item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUIStore } from "@/stores/ui-store";
 import { Loader2 } from "lucide-react";
+import { useI18n } from "@/lib/i18n/context";
 
 const EMPTY_MESSAGES: ReturnType<typeof useChatStore.getState>["messagesBySession"][string] = [];
 
 export function MessageList({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n();
   const messages = useChatStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
   const isSending = useUIStore((s) => s.isSending);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -24,7 +26,7 @@ export function MessageList({ sessionId }: { sessionId: string }) {
         {messages.length === 0 && !isSending ? (
           <div className="text-center py-12">
             <p className="text-body text-stone-gray">
-              Send a message to start the analysis.
+              {t("chat.messagesEmpty")}
             </p>
           </div>
         ) : (

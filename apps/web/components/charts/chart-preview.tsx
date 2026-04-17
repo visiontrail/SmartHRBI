@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import type { ChartSpec } from "@/types/chart";
 import { validateChartSpec } from "@/types/chart";
 import { ensureChinaMap, normaliseProvinceName } from "@/lib/genui/geo-loader";
+import { useI18n } from "@/lib/i18n/context";
 import { isRecord } from "@/lib/utils";
 
 type ChartPreviewProps = {
@@ -19,6 +20,7 @@ const WARM_THEME = {
 };
 
 export function ChartPreview({ spec, height = 320, className }: ChartPreviewProps) {
+  const { t } = useI18n();
   const chartRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<echarts.ECharts | null>(null);
   const [geoReady, setGeoReady] = useState(true);
@@ -57,7 +59,7 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
         return;
       }
       if (!ok) {
-        setGeoError("无法加载中国地图 GeoJSON 数据，请检查网络连接。");
+        setGeoError(t("chart.mapLoadFailed"));
         return;
       }
       setGeoReady(true);
@@ -66,7 +68,7 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
     return () => {
       cancelled = true;
     };
-  }, [requiresChinaMap]);
+  }, [requiresChinaMap, t]);
 
   useEffect(() => {
     if (!chartRef.current || !option || !geoReady) return;
@@ -101,9 +103,9 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
         style={{ height }}
       >
         <div className="text-center px-4">
-          <p className="text-body-sm text-error-crimson font-medium">Chart rendering failed</p>
+          <p className="text-body-sm text-error-crimson font-medium">{t("chart.renderFailed")}</p>
           <p className="text-caption text-stone-gray mt-1">
-            {geoError ?? validation.errors[0] ?? "Invalid chart configuration"}
+            {geoError ?? validation.errors[0] ?? t("chart.invalidConfig")}
           </p>
         </div>
       </div>
@@ -116,7 +118,7 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
         className="flex items-center justify-center bg-warm-sand rounded-comfortable"
         style={{ height }}
       >
-        <p className="text-caption text-stone-gray">地图数据加载中...</p>
+        <p className="text-caption text-stone-gray">{t("chart.mapLoading")}</p>
       </div>
     );
   }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useI18n } from "@/lib/i18n/context";
 import type {
   IngestionBusinessType,
   IngestionCatalogSetupSeed,
@@ -25,6 +26,23 @@ type IngestionSetupCardProps = {
 const FALLBACK_BUSINESS_TYPES: IngestionBusinessType[] = ["roster", "project_progress", "attendance", "other"];
 const FALLBACK_WRITE_MODES: IngestionWriteMode[] = ["update_existing", "time_partitioned_new_table", "new_table"];
 const FALLBACK_TIME_GRAINS: IngestionTimeGrain[] = ["none", "month", "quarter", "year"];
+const BUSINESS_TYPE_LABEL_KEYS: Record<IngestionBusinessType, string> = {
+  roster: "ingestion.setup.option.businessType.roster",
+  project_progress: "ingestion.setup.option.businessType.projectProgress",
+  attendance: "ingestion.setup.option.businessType.attendance",
+  other: "ingestion.setup.option.businessType.other",
+};
+const WRITE_MODE_LABEL_KEYS: Record<IngestionWriteMode, string> = {
+  update_existing: "ingestion.setup.option.writeMode.updateExisting",
+  time_partitioned_new_table: "ingestion.setup.option.writeMode.timePartitionedNewTable",
+  new_table: "ingestion.setup.option.writeMode.newTable",
+};
+const TIME_GRAIN_LABEL_KEYS: Record<IngestionTimeGrain, string> = {
+  none: "ingestion.setup.option.timeGrain.none",
+  month: "ingestion.setup.option.timeGrain.month",
+  quarter: "ingestion.setup.option.timeGrain.quarter",
+  year: "ingestion.setup.option.timeGrain.year",
+};
 
 export function IngestionSetupCard({
   initialSeed,
@@ -33,6 +51,7 @@ export function IngestionSetupCard({
   onConfirm,
   onCancel,
 }: IngestionSetupCardProps) {
+  const { t } = useI18n();
   const [seed, setSeed] = useState<IngestionCatalogSetupSeed>(initialSeed);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -47,6 +66,14 @@ export function IngestionSetupCard({
     const resolved = configured.filter(Boolean) as IngestionWriteMode[];
     return resolved.length > 0 ? resolved : FALLBACK_WRITE_MODES;
   }, [setupQuestions]);
+
+  function resolveOptionLabel(
+    option: string,
+    labelKeyMap: Partial<Record<string, string>>
+  ): string {
+    const key = labelKeyMap[option];
+    return key ? t(key) : option;
+  }
 
   function parseColumns(raw: string): string[] {
     return Array.from(
@@ -67,15 +94,15 @@ export function IngestionSetupCard({
     const matchColumns = parseColumns(seed.matchColumns.join(","));
 
     if (!tableName) {
-      setValidationError("Table name is required.");
+      setValidationError(t("ingestion.setup.validation.tableNameRequired"));
       return;
     }
     if (!humanLabel) {
-      setValidationError("Human label is required.");
+      setValidationError(t("ingestion.setup.validation.humanLabelRequired"));
       return;
     }
     if (primaryKeys.length === 0 && matchColumns.length === 0) {
-      setValidationError("At least one primary key or match column is required.");
+      setValidationError(t("ingestion.setup.validation.keyRequired"));
       return;
     }
 
@@ -93,15 +120,15 @@ export function IngestionSetupCard({
   return (
     <Card data-testid="ingestion-setup-card">
       <CardHeader>
-        <CardTitle>Catalog Setup</CardTitle>
+        <CardTitle>{t("ingestion.setup.title")}</CardTitle>
         <CardDescription>
-          Configure the first writable table target for this workspace before ingestion planning.
+          {t("ingestion.setup.description")}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="space-y-3" onSubmit={handleSubmit}>
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Business Type</span>
+            <span>{t("ingestion.setup.businessType")}</span>
             <select
               className="h-9 w-full rounded-comfortable border border-border-cream bg-ivory px-2 text-body-sm text-near-black"
               value={seed.businessType}
@@ -114,14 +141,14 @@ export function IngestionSetupCard({
             >
               {businessTypeOptions.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {resolveOptionLabel(option, BUSINESS_TYPE_LABEL_KEYS)}
                 </option>
               ))}
             </select>
           </label>
 
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Table Name</span>
+            <span>{t("ingestion.setup.tableName")}</span>
             <Input
               value={seed.tableName}
               onChange={(event) => setSeed((previous) => ({ ...previous, tableName: event.target.value }))}
@@ -130,7 +157,7 @@ export function IngestionSetupCard({
           </label>
 
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Human Label</span>
+            <span>{t("ingestion.setup.humanLabel")}</span>
             <Input
               value={seed.humanLabel}
               onChange={(event) => setSeed((previous) => ({ ...previous, humanLabel: event.target.value }))}
@@ -140,7 +167,7 @@ export function IngestionSetupCard({
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block space-y-1 text-label text-stone-gray">
-              <span>Write Mode</span>
+              <span>{t("ingestion.setup.writeMode")}</span>
               <select
                 className="h-9 w-full rounded-comfortable border border-border-cream bg-ivory px-2 text-body-sm text-near-black"
                 value={seed.writeMode}
@@ -153,14 +180,14 @@ export function IngestionSetupCard({
               >
                 {writeModeOptions.map((option) => (
                   <option key={option} value={option}>
-                    {option}
+                    {resolveOptionLabel(option, WRITE_MODE_LABEL_KEYS)}
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="block space-y-1 text-label text-stone-gray">
-              <span>Time Grain</span>
+              <span>{t("ingestion.setup.timeGrain")}</span>
               <select
                 className="h-9 w-full rounded-comfortable border border-border-cream bg-ivory px-2 text-body-sm text-near-black"
                 value={seed.timeGrain}
@@ -173,7 +200,7 @@ export function IngestionSetupCard({
               >
                 {FALLBACK_TIME_GRAINS.map((option) => (
                   <option key={option} value={option}>
-                    {option}
+                    {resolveOptionLabel(option, TIME_GRAIN_LABEL_KEYS)}
                   </option>
                 ))}
               </select>
@@ -181,7 +208,7 @@ export function IngestionSetupCard({
           </div>
 
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Primary Keys (comma separated)</span>
+            <span>{t("ingestion.setup.primaryKeys")}</span>
             <Input
               value={seed.primaryKeys.join(", ")}
               onChange={(event) =>
@@ -195,7 +222,7 @@ export function IngestionSetupCard({
           </label>
 
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Match Columns (comma separated)</span>
+            <span>{t("ingestion.setup.matchColumns")}</span>
             <Input
               value={seed.matchColumns.join(", ")}
               onChange={(event) =>
@@ -209,12 +236,12 @@ export function IngestionSetupCard({
           </label>
 
           <label className="block space-y-1 text-label text-stone-gray">
-            <span>Description</span>
+            <span>{t("ingestion.setup.descriptionField")}</span>
             <Textarea
               value={seed.description}
               onChange={(event) => setSeed((previous) => ({ ...previous, description: event.target.value }))}
               rows={3}
-              placeholder="Optional setup note"
+              placeholder={t("ingestion.setup.optionalNote")}
             />
           </label>
 
@@ -226,11 +253,11 @@ export function IngestionSetupCard({
 
           <div className="flex items-center gap-2">
             <Button type="submit" size="sm" disabled={isSubmitting}>
-              {isSubmitting ? "Applying..." : "Apply Setup"}
+              {isSubmitting ? t("ingestion.setup.applying") : t("ingestion.setup.apply")}
             </Button>
             {onCancel ? (
               <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={isSubmitting}>
-                Cancel
+                {t("ingestion.setup.cancel")}
               </Button>
             ) : null}
           </div>

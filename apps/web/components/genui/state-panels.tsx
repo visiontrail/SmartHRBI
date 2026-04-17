@@ -1,4 +1,7 @@
+"use client";
+
 import type { ReactNode } from "react";
+import { useI18n } from "@/lib/i18n/context";
 
 type PanelProps = {
   title: string;
@@ -33,22 +36,27 @@ export function SkeletonPanel() {
   );
 }
 
-export function EmptyPanel({ title = "No Data" }: { title?: string }) {
+export function EmptyPanel({ title }: { title?: string }) {
+  const { t } = useI18n();
+  const resolvedTitle = title ?? t("panel.noData");
   return (
     <BasePanel
-      title={title}
-      description="No visualization data available for this query. Try adjusting your question."
+      title={resolvedTitle}
+      description={t("panel.noVisualization")}
       testId="chart-empty"
     />
   );
 }
 
 export function ErrorPanel({
-  title = "Render Failed",
-  description = "The chart specification is invalid or rendering failed.",
+  title,
+  description,
 }: {
   title?: string;
   description?: string;
 }) {
-  return <BasePanel title={title} description={description} testId="chart-error" />;
+  const { t } = useI18n();
+  const resolvedTitle = title ?? t("panel.renderFailed");
+  const resolvedDescription = description ?? t("panel.renderFailedDescription");
+  return <BasePanel title={resolvedTitle} description={resolvedDescription} testId="chart-error" />;
 }

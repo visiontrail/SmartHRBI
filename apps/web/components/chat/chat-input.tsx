@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { useChatStore } from "@/stores/chat-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useSendMessage } from "@/hooks/use-chat";
+import { useI18n } from "@/lib/i18n/context";
 
 export function ChatInput({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n();
   const composerText = useChatStore((s) => s.composerText);
   const setComposerText = useChatStore((s) => s.setComposerText);
   const isSending = useUIStore((s) => s.isSending);
@@ -45,7 +47,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             value={composerText}
             onChange={(e) => setComposerText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about headcount, turnover, salary distribution, project progress…"
+            placeholder={t("chat.inputPlaceholder")}
             rows={1}
             disabled={isSending}
             className="w-full resize-none rounded-generous border border-border-cream bg-parchment px-4 py-3 pr-12 text-body-sm text-near-black placeholder:text-stone-gray focus:outline-none focus:ring-2 focus:ring-focus-blue focus:border-focus-blue transition-colors disabled:opacity-50 min-h-[44px] max-h-[160px] scrollbar-thin"
@@ -77,7 +79,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
       </div>
 
       <p className="text-label text-stone-gray text-center mt-2">
-        Press Enter to send, Shift+Enter for new line
+        {t("chat.inputHint")}
       </p>
     </div>
   );

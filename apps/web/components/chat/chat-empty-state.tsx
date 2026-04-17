@@ -3,16 +3,17 @@
 import { BarChart3, MessageSquare, Layout, Sparkles } from "lucide-react";
 import { useCreateSession } from "@/hooks/use-chat";
 import { Button } from "@/components/ui/button";
-
-const SUGGESTED_PROMPTS = [
-  { icon: BarChart3, text: "Show headcount breakdown by department" },
-  { icon: MessageSquare, text: "What's the monthly turnover trend?" },
-  { icon: Layout, text: "Analyze project milestone progress" },
-  { icon: Sparkles, text: "Show team performance scores over time" },
-];
+import { useI18n } from "@/lib/i18n/context";
 
 export function ChatEmptyState() {
+  const { t } = useI18n();
   const createSession = useCreateSession();
+  const suggestedPrompts = [
+    { icon: BarChart3, text: t("chat.emptyPrompt1") },
+    { icon: MessageSquare, text: t("chat.emptyPrompt2") },
+    { icon: Layout, text: t("chat.emptyPrompt3") },
+    { icon: Sparkles, text: t("chat.emptyPrompt4") },
+  ];
 
   return (
     <div className="flex flex-col items-center justify-center h-full px-8 py-12">
@@ -21,15 +22,14 @@ export function ChatEmptyState() {
       </div>
 
       <h2 className="font-serif text-heading text-near-black mb-2 text-center">
-        Start a Conversation
+        {t("chat.emptyStartTitle")}
       </h2>
       <p className="text-body text-olive-gray text-center max-w-md mb-8 leading-relaxed">
-        Ask questions about your HR and project data. The AI will analyze your data 
-        and generate interactive visualizations you can add to your report workspace.
+        {t("chat.emptyDescription")}
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-        {SUGGESTED_PROMPTS.map((prompt) => (
+        {suggestedPrompts.map((prompt) => (
           <button
             key={prompt.text}
             onClick={() => createSession.mutate(prompt.text.slice(0, 30))}
@@ -50,7 +50,7 @@ export function ChatEmptyState() {
         disabled={createSession.isPending}
       >
         <MessageSquare className="w-4 h-4" />
-        Start New Conversation
+        {t("chat.startNewConversation")}
       </Button>
     </div>
   );

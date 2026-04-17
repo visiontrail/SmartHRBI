@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel, SkeletonPanel } from "../genui/state-panels";
 import { getAuthorizationHeader } from "../../lib/auth/session";
+import { useI18n } from "@/lib/i18n/context";
 
 type ShareViewProps = {
   apiBaseUrl: string;
@@ -27,6 +28,7 @@ type SharePayload = {
 };
 
 export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
+  const { t } = useI18n();
   const [payload, setPayload] = useState<SharePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +118,8 @@ export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
     return (
       <main className="share-page">
         <header className="share-page__header">
-          <h1>Shared View</h1>
-          <p>Loading shared state...</p>
+          <h1>{t("share.title")}</h1>
+          <p>{t("share.loading")}</p>
         </header>
         <SkeletonPanel />
       </main>
@@ -128,7 +130,7 @@ export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
     return (
       <main className="share-page">
         <header className="share-page__header">
-          <h1>Shared View</h1>
+          <h1>{t("share.title")}</h1>
         </header>
         <ErrorPanel description={error} />
       </main>
@@ -139,9 +141,9 @@ export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
     return (
       <main className="share-page">
         <header className="share-page__header">
-          <h1>Shared View</h1>
+          <h1>{t("share.title")}</h1>
         </header>
-        <EmptyPanel title="Shared view not found" />
+        <EmptyPanel title={t("share.notFound")} />
       </main>
     );
   }
@@ -151,30 +153,30 @@ export function ShareView({ apiBaseUrl, viewId }: ShareViewProps) {
       <header className="share-page__header">
         <h1>{payload.title}</h1>
         <p>
-          View ID: {payload.view_id} · Version: {payload.current_version}
+          {t("share.viewMeta", { viewId: payload.view_id, version: payload.current_version })}
         </p>
       </header>
 
       <section className="share-page__meta">
-        <strong>Owner:</strong> {payload.owner_user_id}
+        <strong>{t("share.owner")}</strong> {payload.owner_user_id}
         <br />
-        <strong>Updated:</strong> {payload.updated_at}
+        <strong>{t("share.updated")}</strong> {payload.updated_at}
       </section>
 
-      {activeSpec ? <GenUIRegistry rawSpec={activeSpec} /> : <EmptyPanel title="No saved chart spec" />}
+      {activeSpec ? <GenUIRegistry rawSpec={activeSpec} /> : <EmptyPanel title={t("share.noSpec")} />}
 
       <section className="share-page__messages">
-        <h2>Saved Conversation</h2>
+        <h2>{t("share.savedConversation")}</h2>
         {messages.length ? (
           <ul>
             {messages.map((message) => (
               <li key={message.id}>
-                <strong>{message.role === "user" ? "You" : "AI"}:</strong> {message.text}
+                <strong>{message.role === "user" ? t("share.you") : t("share.ai")}:</strong> {message.text}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="muted">No messages were stored for this view.</p>
+          <p className="muted">{t("share.noMessages")}</p>
         )}
       </section>
     </main>

@@ -7,10 +7,10 @@ import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { parseSSEStream } from "@/lib/chat/sse";
 import { getAuthorizationHeader } from "@/lib/auth/session";
+import { useI18n } from "@/lib/i18n/context";
 import { generateId, isRecord } from "@/lib/utils";
 import type { ChartAsset, ChartSpec, ChartType, KnownChartType } from "@/types/chart";
-import type { ChatMessage } from "@/types/chat";
-import * as api from "@/lib/mock/mock-api";
+import type { ChatMessage, ChatSession } from "@/types/chat";
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
@@ -20,7 +20,7 @@ export function useChatSessions() {
   return useQuery({
     queryKey: ["chat-sessions"],
     queryFn: async () => {
-      const sessions = await api.fetchSessions();
+      const sessions = useChatStore.getState().sessions;
       setSessions(sessions);
       return sessions;
     },
@@ -36,7 +36,7 @@ export function useChatMessages(sessionId: string | null) {
       if (!sessionId) {
         return EMPTY_MESSAGES;
       }
-      const messages = await api.fetchMessages(sessionId);
+      const messages = useChatStore.getState().messagesBySession[sessionId] ?? EMPTY_MESSAGES;
       setMessages(sessionId, messages);
       return messages;
     },
@@ -51,7 +51,7 @@ export function useCreateSession() {
   const setActiveSession = useChatStore((s) => s.setActiveSession);
 
   return useMutation({
-    mutationFn: (title?: string) => api.createSession(title),
+    mutationFn: async (title?: string) => createLocalSession(title),
     onSuccess: (session) => {
       addSession(session);
       setActiveSession(session.id);
@@ -65,7 +65,7 @@ export function useDeleteSession() {
   const removeSession = useChatStore((s) => s.removeSession);
 
   return useMutation({
-    mutationFn: (sessionId: string) => api.deleteSession(sessionId),
+    mutationFn: async (_sessionId: string) => undefined,
     onSuccess: (_, sessionId) => {
       removeSession(sessionId);
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
@@ -74,6 +74,7 @@ export function useDeleteSession() {
 }
 
 export function useSendMessage() {
+  const { t } = useI18n();
   const appendMessage = useChatStore((s) => s.appendMessage);
   const touchSession = useChatStore((s) => s.touchSession);
   const addAsset = useAssetStore((s) => s.addAsset);
@@ -84,9 +85,9 @@ export function useSendMessage() {
       setIsSending(true);
       const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
       if (!workspaceId) {
-        throw new Error("No workspace selected. Create or select a workspace first.");
+        throw new Error(t("chat.toast.noWorkspace"));
       }
-      return streamAssistantResponse({ sessionId, content, workspaceId });
+      return streamAssistantResponse({ sessionId, content, workspaceId, t });
     },
     onMutate: ({ sessionId, content }) => {
       const userMessage = createUserMessage(sessionId, content);
@@ -113,7 +114,7 @@ export function useSendMessage() {
         id: `msg-${generateId()}`,
         sessionId,
         role: "assistant",
-        content: error instanceof Error ? error.message : "请求失败，请稍后重试。",
+        content: error instanceof Error ? error.message : t("chat.requestFailed"),
         timestamp: new Date().toISOString(),
       };
       appendMessage(sessionId, errorMessage);
@@ -200,10 +201,12 @@ async function streamAssistantResponse({
   sessionId,
   content,
   workspaceId,
+  t,
 }: {
   sessionId: string;
   content: string;
   workspaceId: string;
+  t: (key: string, params?: Record<string, string | number | null | undefined>) => string;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
   const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -243,7 +246,7 @@ async function streamAssistantResponse({
       continue;
     }
     if (streamEvent.event === "error" && !finalText) {
-      finalText = String(payload.message ?? "请求失败，请稍后重试。");
+      finalText = String(payload.message ?? t("chat.requestFailed"));
     }
   }
 
@@ -251,7 +254,9 @@ async function streamAssistantResponse({
     sessionId,
     prompt: content,
   });
-  const fallbackText = chartAsset ? `已生成图表：${chartAsset.title}` : "已完成。";
+  const fallbackText = chartAsset
+    ? t("chat.generatedChart", { title: chartAsset.title })
+    : t("chat.completed");
   const assistantMessage: ChatMessage = {
     id: `msg-${generateId()}`,
     sessionId,
@@ -267,6 +272,17 @@ async function streamAssistantResponse({
     timestamp: new Date().toISOString(),
   };
   return { assistantMessage, chartAsset: chartAsset ?? undefined };
+}
+
+function createLocalSession(title?: string): ChatSession {
+  const now = new Date().toISOString();
+  return {
+    id: `session-${generateId()}`,
+    title: title?.trim() || "New Conversation",
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 0,
+  };
 }
 
 function createUserMessage(sessionId: string, content: string): ChatMessage {

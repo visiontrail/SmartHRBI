@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Pencil, Save, Type, X } from "lucide-react";
+import { Check, Loader2, MessageSquare, Pencil, Save, Type, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -10,20 +10,25 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRenameWorkspace, useSaveWorkspace } from "@/hooks/use-workspace";
 import { generateId } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
 import type { TextNodeData } from "@/types/workspace";
 
 export function WorkspaceToolbar() {
+  const { t } = useI18n();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const addNode = useWorkspaceStore((s) => s.addNode);
   const hasUnsavedChanges = useWorkspaceStore((s) => s.hasUnsavedChanges);
   const nodes = useWorkspaceStore((s) => s.nodes);
+  const activePanel = useUIStore((s) => s.activePanel);
   const isSaving = useUIStore((s) => s.isSaving);
+  const setActivePanel = useUIStore((s) => s.setActivePanel);
   const saveWorkspace = useSaveWorkspace();
   const renameWorkspace = useRenameWorkspace();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const isChatVisible = activePanel === "both";
 
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
@@ -34,8 +39,8 @@ export function WorkspaceToolbar() {
 
   const handleSave = () => {
     saveWorkspace.mutate(undefined, {
-      onSuccess: () => toast.success("Workspace saved"),
-      onError: () => toast.error("Failed to save workspace"),
+      onSuccess: () => toast.success(t("workspace.toast.saved")),
+      onError: () => toast.error(t("workspace.toast.saveFailed")),
     });
   };
 
@@ -44,7 +49,7 @@ export function WorkspaceToolbar() {
 
     const trimmedTitle = titleDraft.trim();
     if (!trimmedTitle) {
-      toast.error("Workspace name cannot be empty");
+      toast.error(t("workspace.toast.nameEmpty"));
       return;
     }
 
@@ -58,9 +63,9 @@ export function WorkspaceToolbar() {
       {
         onSuccess: () => {
           setIsEditingTitle(false);
-          toast.success("Workspace renamed");
+          toast.success(t("workspace.toast.renamed"));
         },
-        onError: () => toast.error("Failed to rename workspace"),
+        onError: () => toast.error(t("workspace.toast.renameFailed")),
       }
     );
   };
@@ -73,7 +78,7 @@ export function WorkspaceToolbar() {
   const handleAddTextNode = () => {
     const nodeData: TextNodeData = {
       type: "text",
-      content: "Add your annotation here…",
+      content: t("workspace.defaultTextContent"),
       width: 400,
       height: 80,
     };
@@ -99,7 +104,7 @@ export function WorkspaceToolbar() {
               }}
             >
               <Input
-                aria-label="Workspace name"
+                aria-label={t("workspace.aria.workspaceName")}
                 value={titleDraft}
                 onChange={(event) => setTitleDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -113,7 +118,7 @@ export function WorkspaceToolbar() {
                 type="submit"
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Save workspace name"
+                aria-label={t("workspace.aria.saveWorkspaceName")}
                 disabled={renameWorkspace.isPending}
               >
                 {renameWorkspace.isPending ? (
@@ -126,7 +131,7 @@ export function WorkspaceToolbar() {
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Cancel workspace rename"
+                aria-label={t("workspace.aria.cancelWorkspaceRename")}
                 onClick={handleCancelRename}
                 disabled={renameWorkspace.isPending}
               >
@@ -136,7 +141,7 @@ export function WorkspaceToolbar() {
           ) : (
             <div className="flex items-center gap-1">
               <h2 className="font-serif text-feature text-near-black">
-                {workspace?.title ?? "Workspace"}
+                {workspace?.title ?? t("workspace.fallbackTitle")}
               </h2>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -144,32 +149,43 @@ export function WorkspaceToolbar() {
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => setIsEditingTitle(true)}
-                    aria-label="Rename workspace"
+                    aria-label={t("workspace.rename")}
                   >
                     <Pencil className="w-3.5 h-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Rename workspace</TooltipContent>
+                <TooltipContent>{t("workspace.rename")}</TooltipContent>
               </Tooltip>
             </div>
           )}
           <p className="text-label text-stone-gray">
-            {nodes.length} items
+            {t("sidebar.itemCount", { count: nodes.length })}
             {hasUnsavedChanges && (
-              <span className="text-terracotta ml-1">• Unsaved changes</span>
+              <span className="text-terracotta ml-1">• {t("workspace.unsavedChanges")}</span>
             )}
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setActivePanel(isChatVisible ? "workspace" : "both")}
+        >
+          <MessageSquare className="w-4 h-4" />
+          {isChatVisible ? t("workspace.hideChat") : t("workspace.showChat")}
+        </Button>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon-sm" onClick={handleAddTextNode}>
               <Type className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Add text block</TooltipContent>
+          <TooltipContent>{t("workspace.addTextBlock")}</TooltipContent>
         </Tooltip>
 
         <Separator orientation="vertical" className="h-6 mx-1" />
@@ -187,10 +203,10 @@ export function WorkspaceToolbar() {
               ) : (
                 <Save className="w-4 h-4" />
               )}
-              Save
+              {t("workspace.save")}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Save workspace (⌘S)</TooltipContent>
+          <TooltipContent>{t("workspace.saveShortcut")}</TooltipContent>
         </Tooltip>
       </div>
     </header>

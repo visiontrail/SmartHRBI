@@ -3,8 +3,10 @@
 import { LayoutDashboard, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCreateWorkspace } from "@/hooks/use-workspace";
+import { useI18n } from "@/lib/i18n/context";
 
 export function WorkspaceEmptyState() {
+  const { t } = useI18n();
   const createWorkspace = useCreateWorkspace();
 
   return (
@@ -14,20 +16,19 @@ export function WorkspaceEmptyState() {
       </div>
 
       <h2 className="font-serif text-heading text-near-black mb-2 text-center">
-        Report Workspace
+        {t("workspace.emptyTitle")}
       </h2>
       <p className="text-body text-olive-gray text-center max-w-md mb-8 leading-relaxed">
-        Create a workspace to compose AI-generated charts into a visual report. 
-        Drag charts from your conversations and arrange them freely.
+        {t("workspace.emptyDescription")}
       </p>
 
       <Button
         variant="default"
-        onClick={() => createWorkspace.mutate({})}
+        onClick={() => createWorkspace.mutate({ title: t("workspace.defaultUntitled") })}
         disabled={createWorkspace.isPending}
       >
         <Plus className="w-4 h-4" />
-        Create Workspace
+        {t("workspace.create")}
       </Button>
     </div>
   );

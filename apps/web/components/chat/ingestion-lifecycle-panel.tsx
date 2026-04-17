@@ -26,6 +26,7 @@ import {
   IngestionApiError,
 } from "@/lib/ingestion/api";
 import { IngestionSetupCard } from "@/components/workspace/ingestion-setup-card";
+import { useI18n } from "@/lib/i18n/context";
 
 type IngestionLifecyclePanelProps = {
   workspaceId: string;
@@ -39,21 +40,22 @@ type IngestionErrorState = {
 };
 
 type ProposalActionButton = {
-  label: string;
+  labelKey: string;
   approvedAction: IngestionProposalAction;
   timeGrain?: IngestionTimeGrain;
 };
 
 const PROPOSAL_ACTION_BUTTONS: ProposalActionButton[] = [
-  { label: "更新现有表", approvedAction: "update_existing" },
-  { label: "按月新建", approvedAction: "time_partitioned_new_table", timeGrain: "month" },
-  { label: "按季度新建", approvedAction: "time_partitioned_new_table", timeGrain: "quarter" },
-  { label: "按年新建", approvedAction: "time_partitioned_new_table", timeGrain: "year" },
-  { label: "创建独立新表", approvedAction: "new_table" },
-  { label: "取消", approvedAction: "cancel" },
+  { labelKey: "ingestion.lifecycle.action.updateExisting", approvedAction: "update_existing" },
+  { labelKey: "ingestion.lifecycle.action.newMonthly", approvedAction: "time_partitioned_new_table", timeGrain: "month" },
+  { labelKey: "ingestion.lifecycle.action.newQuarterly", approvedAction: "time_partitioned_new_table", timeGrain: "quarter" },
+  { labelKey: "ingestion.lifecycle.action.newYearly", approvedAction: "time_partitioned_new_table", timeGrain: "year" },
+  { labelKey: "ingestion.lifecycle.action.newTable", approvedAction: "new_table" },
+  { labelKey: "ingestion.lifecycle.action.cancel", approvedAction: "cancel" },
 ];
 
 export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: IngestionLifecyclePanelProps) {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<IngestionLifecyclePhase>("idle");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadResult, setUploadResult] = useState<IngestionUploadResult | null>(null);
@@ -69,33 +71,33 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
   const phaseLabel = useMemo(() => {
     switch (phase) {
       case "uploading":
-        return "Uploading";
+        return t("ingestion.lifecycle.phase.uploading");
       case "planning":
-        return "Planning";
+        return t("ingestion.lifecycle.phase.planning");
       case "awaiting_catalog_setup":
-        return "Setup Required";
+        return t("ingestion.lifecycle.phase.awaiting_catalog_setup");
       case "awaiting_user_approval":
-        return "Awaiting Approval";
+        return t("ingestion.lifecycle.phase.awaiting_user_approval");
       case "approving":
-        return "Approving";
+        return t("ingestion.lifecycle.phase.approving");
       case "approved":
-        return "Approved";
+        return t("ingestion.lifecycle.phase.approved");
       case "executing":
-        return "Executing";
+        return t("ingestion.lifecycle.phase.executing");
       case "succeeded":
-        return "Succeeded";
+        return t("ingestion.lifecycle.phase.succeeded");
       case "cancelled":
-        return "Cancelled";
+        return t("ingestion.lifecycle.phase.cancelled");
       case "failed":
-        return "Failed";
+        return t("ingestion.lifecycle.phase.failed");
       default:
-        return "Ready";
+        return t("ingestion.lifecycle.phase.idle");
     }
-  }, [phase]);
+  }, [phase, t]);
 
   async function handleUploadAndPlan() {
     if (!selectedFile) {
-      setErrorState({ stage: "upload", message: "Please choose one .xlsx file first." });
+      setErrorState({ stage: "upload", message: t("ingestion.lifecycle.error.chooseFile") });
       setPhase("failed");
       return;
     }
@@ -125,7 +127,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
 
   async function handleSetupConfirm(seed: IngestionCatalogSetupSeed) {
     if (!uploadResult) {
-      handleFailure("setup", new Error("Upload context is missing. Please upload again."));
+      handleFailure("setup", new Error(t("ingestion.lifecycle.error.uploadContextMissing")));
       return;
     }
 
@@ -145,7 +147,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
 
   async function handleProposalAction(button: ProposalActionButton) {
     if (!uploadResult || !approvalPayload) {
-      handleFailure("approval", new Error("Proposal context is missing. Please re-run planning."));
+      handleFailure("approval", new Error(t("ingestion.lifecycle.error.proposalContextMissing")));
       return;
     }
 
@@ -176,7 +178,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
 
   async function handleExecute() {
     if (!uploadResult || !approvalPayload) {
-      handleFailure("execute", new Error("Execution context is missing. Please approve proposal again."));
+      handleFailure("execute", new Error(t("ingestion.lifecycle.error.executeContextMissing")));
       return;
     }
 
@@ -223,7 +225,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
     } else if (error instanceof Error) {
       setErrorState({ stage, message: error.message });
     } else {
-      setErrorState({ stage, message: "Unexpected ingestion error" });
+      setErrorState({ stage, message: t("ingestion.lifecycle.error.unexpected") });
     }
     setPhase("failed");
   }
@@ -247,22 +249,22 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-base">Agentic Ingestion</CardTitle>
+              <CardTitle className="text-base">{t("ingestion.lifecycle.title")}</CardTitle>
               <CardDescription>
-                Workspace-bound upload lifecycle: upload, setup, proposal approval, and execution receipt.
+                {t("ingestion.lifecycle.description")}
               </CardDescription>
             </div>
             <Badge variant={phase === "failed" ? "secondary" : "outline"}>{phaseLabel}</Badge>
           </div>
           <p className="text-label text-stone-gray">
-            Bound workspace: <strong>{workspaceTitle ?? workspaceId}</strong>
+            {t("ingestion.lifecycle.boundWorkspace", { workspace: workspaceTitle ?? workspaceId })}
           </p>
         </CardHeader>
 
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-2 md:flex-row md:items-center">
             <label className="text-label text-stone-gray" htmlFor="ingestion-upload-input">
-              Upload `.xlsx`
+              {t("ingestion.lifecycle.uploadXlsx")}
             </label>
             <input
               id="ingestion-upload-input"
@@ -281,28 +283,31 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             />
             <Button onClick={handleUploadAndPlan} disabled={!selectedFile || isBusy} size="sm" type="button">
               {isBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />}
-              {isBusy ? "Processing..." : "Upload & Plan"}
+              {isBusy ? t("ingestion.lifecycle.processing") : t("ingestion.lifecycle.uploadAndPlan")}
             </Button>
             {(phase === "succeeded" || phase === "cancelled" || phase === "failed") && (
               <Button variant="ghost" size="sm" onClick={resetLifecycle} type="button" disabled={isBusy}>
-                Start New Upload
+                {t("ingestion.lifecycle.startNewUpload")}
               </Button>
             )}
           </div>
 
           {selectedFile ? (
             <p className="text-caption text-stone-gray" data-testid="ingestion-selected-file">
-              Selected file: {selectedFile.name}
+              {t("ingestion.lifecycle.selectedFile", { fileName: selectedFile.name })}
             </p>
           ) : null}
 
           {uploadResult ? (
             <div className="rounded-comfortable border border-border-cream bg-ivory/70 px-3 py-2">
               <p className="text-body-sm text-near-black">
-                Job: <strong>{uploadResult.jobId}</strong>
+                {t("ingestion.lifecycle.job", { jobId: uploadResult.jobId })}
               </p>
               <p className="text-caption text-stone-gray">
-                File hash: {uploadResult.fileSummary.fileHash.slice(0, 12)}... · {uploadResult.fileSummary.sizeBytes} bytes
+                {t("ingestion.lifecycle.fileHash", {
+                  hash: uploadResult.fileSummary.fileHash.slice(0, 12),
+                  size: uploadResult.fileSummary.sizeBytes,
+                })}
               </p>
             </div>
           ) : null}
@@ -310,7 +315,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
           {setupPayload ? (
             <div className="space-y-2" data-testid="ingestion-setup-flow">
               <div className="rounded-comfortable border border-border-cream bg-amber-50 px-3 py-2 text-body-sm text-near-black">
-                Catalog setup is required before planning can continue.
+                {t("ingestion.lifecycle.setupRequired")}
               </div>
               <IngestionSetupCard
                 initialSeed={setupPayload.suggestedCatalogSeed}
@@ -329,13 +334,22 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             <div className="space-y-3" data-testid="ingestion-proposal-card">
               <div className="rounded-comfortable border border-border-cream bg-ivory/70 px-3 py-3">
                 <p className="text-body-sm font-medium text-near-black">
-                  Recommended action: {approvalPayload.proposal.recommendedAction}
+                  {t("ingestion.lifecycle.recommendedAction", {
+                    action: approvalPayload.proposal.recommendedAction,
+                  })}
                 </p>
                 <p className="text-caption text-stone-gray">
-                  Target table: {approvalPayload.proposal.targetTable ?? "(not set)"} · Business type: {approvalPayload.proposal.businessType}
+                  {t("ingestion.lifecycle.targetTableBusinessType", {
+                    table: approvalPayload.proposal.targetTable ?? t("ingestion.lifecycle.targetNotSet"),
+                    businessType: approvalPayload.proposal.businessType,
+                  })}
                 </p>
                 <p className="text-caption text-stone-gray">
-                  Inserts {approvalPayload.proposal.diffPreview.predictedInsertCount}, Updates {approvalPayload.proposal.diffPreview.predictedUpdateCount}, Conflicts {approvalPayload.proposal.diffPreview.predictedConflictCount}
+                  {t("ingestion.lifecycle.previewCounts", {
+                    insertCount: approvalPayload.proposal.diffPreview.predictedInsertCount,
+                    updateCount: approvalPayload.proposal.diffPreview.predictedUpdateCount,
+                    conflictCount: approvalPayload.proposal.diffPreview.predictedConflictCount,
+                  })}
                 </p>
                 {approvalPayload.proposal.risks.length > 0 ? (
                   <ul className="list-disc space-y-1 pl-5 pt-1 text-caption text-stone-gray">
@@ -359,7 +373,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
                       onClick={() => handleProposalAction(button)}
                       type="button"
                     >
-                      {button.label}
+                      {t(button.labelKey)}
                     </Button>
                   );
                 })}
@@ -371,15 +385,18 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             <div className="rounded-comfortable border border-border-cream bg-green-50 px-3 py-3" data-testid="ingestion-approved-card">
               <p className="flex items-center gap-2 text-body-sm font-medium text-near-black">
                 <CheckCircle2 className="h-4 w-4 text-green-700" />
-                Proposal approved: {approvedResult.approvedAction}
+                {t("ingestion.lifecycle.proposalApproved", { action: approvedResult.approvedAction })}
               </p>
               <p className="text-caption text-stone-gray">
-                Dry-run affected rows: {approvedResult.dryRunSummary.predictedAffectedRows} · target: {approvedResult.targetTable}
+                {t("ingestion.lifecycle.dryRunSummary", {
+                  rows: approvedResult.dryRunSummary.predictedAffectedRows,
+                  target: approvedResult.targetTable,
+                })}
               </p>
               <div className="pt-2">
                 <Button size="sm" onClick={handleExecute} type="button" disabled={isBusy}>
                   {phase === "executing" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-                  Execute Write
+                  {t("ingestion.lifecycle.executeWrite")}
                 </Button>
               </div>
             </div>
@@ -389,13 +406,20 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             <div className="rounded-comfortable border border-border-cream bg-emerald-50 px-3 py-3" data-testid="ingestion-receipt-card">
               <p className="flex items-center gap-2 text-body-sm font-medium text-near-black">
                 <CheckCircle2 className="h-4 w-4 text-emerald-700" />
-                Execution receipt generated
+                {t("ingestion.lifecycle.receiptGenerated")}
               </p>
               <p className="text-caption text-stone-gray">
-                Target: {executeResult.receipt.targetTable} · Inserted {executeResult.receipt.insertedRows} · Updated {executeResult.receipt.updatedRows}
+                {t("ingestion.lifecycle.receiptTarget", {
+                  target: executeResult.receipt.targetTable,
+                  insertedRows: executeResult.receipt.insertedRows,
+                  updatedRows: executeResult.receipt.updatedRows,
+                })}
               </p>
               <p className="text-caption text-stone-gray">
-                Affected rows: {executeResult.receipt.affectedRows} · Rows after: {executeResult.receipt.rowsAfter}
+                {t("ingestion.lifecycle.receiptAffected", {
+                  affectedRows: executeResult.receipt.affectedRows,
+                  rowsAfter: executeResult.receipt.rowsAfter,
+                })}
               </p>
             </div>
           ) : null}
@@ -404,7 +428,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             <div className="rounded-comfortable border border-border-cream bg-stone-100 px-3 py-3 text-body-sm text-near-black" data-testid="ingestion-cancelled-card">
               <p className="flex items-center gap-2">
                 <XCircle className="h-4 w-4 text-stone-700" />
-                Ingestion proposal was cancelled.
+                {t("ingestion.lifecycle.cancelled")}
               </p>
             </div>
           ) : null}
@@ -413,7 +437,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
             <div className="rounded-comfortable border border-red-200 bg-red-50 px-3 py-3" role="alert" data-testid="ingestion-error-card">
               <p className="flex items-center gap-2 text-body-sm font-medium text-red-700">
                 <AlertTriangle className="h-4 w-4" />
-                Ingestion failed at {errorState.stage}
+                {t("ingestion.lifecycle.failedAt", { stage: errorState.stage })}
               </p>
               <p className="text-caption text-red-700">
                 {errorState.code ? `[${errorState.code}] ` : ""}

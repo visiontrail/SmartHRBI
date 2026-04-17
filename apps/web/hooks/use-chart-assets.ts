@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useAssetStore } from "@/stores/asset-store";
-import * as api from "@/lib/mock/mock-api";
 
 export function useChartAssets() {
   const setAssets = useAssetStore((s) => s.setAssets);
@@ -10,7 +9,7 @@ export function useChartAssets() {
   return useQuery({
     queryKey: ["chart-assets"],
     queryFn: async () => {
-      const assets = await api.fetchChartAssets();
+      const assets = useAssetStore.getState().assets;
       setAssets(assets);
       return assets;
     },
@@ -20,7 +19,12 @@ export function useChartAssets() {
 export function useChartAsset(assetId: string | null) {
   return useQuery({
     queryKey: ["chart-asset", assetId],
-    queryFn: () => (assetId ? api.fetchChartAsset(assetId) : null),
+    queryFn: () => {
+      if (!assetId) {
+        return null;
+      }
+      return useAssetStore.getState().getAsset(assetId) ?? null;
+    },
     enabled: !!assetId,
   });
 }

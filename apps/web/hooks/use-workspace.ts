@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
 import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
-import * as api from "@/lib/mock/mock-api";
+import * as api from "@/lib/workspace/api";
 
 export function useWorkspaceList() {
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);

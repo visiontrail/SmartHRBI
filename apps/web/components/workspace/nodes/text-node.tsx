@@ -5,9 +5,11 @@ import { type NodeProps } from "@xyflow/react";
 import { GripVertical, Trash2, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useI18n } from "@/lib/i18n/context";
 import type { TextNodeData } from "@/types/workspace";
 
 function TextNodeComponent({ id, data, selected }: NodeProps) {
+  const { t } = useI18n();
   const nodeData = data as unknown as TextNodeData;
   const updateNode = useWorkspaceStore((s) => s.updateNode);
   const removeNode = useWorkspaceStore((s) => s.removeNode);
@@ -33,7 +35,7 @@ function TextNodeComponent({ id, data, selected }: NodeProps) {
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border-cream bg-ivory cursor-grab">
         <GripVertical className="w-3.5 h-3.5 text-stone-gray shrink-0" />
-        <span className="text-label text-stone-gray flex-1">Text Block</span>
+        <span className="text-label text-stone-gray flex-1">{t("workspace.textBlock")}</span>
 
         <div className="flex items-center gap-0.5 shrink-0">
           {isEditing ? (
