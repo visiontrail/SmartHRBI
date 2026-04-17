@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import socket
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import duckdb
 import pandas as pd
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
+from ..config import get_settings
 from .models import (
     IngestionApprovalOverrides,
     IngestionCatalogSetupSeed,
@@ -22,6 +28,8 @@ from .models import (
     SETUP_WRITE_MODES,
 )
 from .routing import RouteDecision, select_agent_route
+
+logger = logging.getLogger("smarthrbi.ingestion")
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 FORBIDDEN_WRITE_EXPRESSIONS: tuple[type[exp.Expression], ...] = (
@@ -43,6 +51,20 @@ WRITE_MODE_TO_ACTION: dict[str, str] = {
     "new_table": "new_table",
     "append_only": "update_existing",
 }
+BUSINESS_TYPE_VALUES = {"roster", "project_progress", "attendance", "other"}
+_BUSINESS_TYPE_SYSTEM_PROMPT = """\
+You are an ingestion classifier.
+Classify the uploaded workbook into exactly one business type:
+- roster
+- project_progress
+- attendance
+- other
+
+Return only one JSON object with keys:
+- business_type: one of roster|project_progress|attendance|other
+- confidence: number between 0 and 1
+- reasoning: short sentence (<= 120 chars)
+"""
 
 
 class IngestionPlanningError(Exception):
@@ -230,6 +252,15 @@ class WriteIngestionAgentRuntime:
                 has_files=True,
                 ingestion_job_status=str(job["status"]),
             )
+            logger.info(
+                "ingestion_plan_started workspace_id=%s job_id=%s requested_by=%s conversation_id=%s current_status=%s route=%s",
+                normalized_workspace_id,
+                normalized_job_id,
+                normalized_requested_by,
+                normalized_conversation_id or "",
+                str(job["status"]),
+                route.route,
+            )
             self._set_job_status(
                 conn=conn,
                 job_id=normalized_job_id,
@@ -283,6 +314,30 @@ class WriteIngestionAgentRuntime:
                 arguments={"upload_id": str(job["upload_id"])},
                 handler=lambda: self._tool_infer_business_type(upload_info=upload_info),
             )
+            analysis_audit = {"business_type_inference": self._business_type_inference_audit(business_guess)}
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="business_type_inferred",
+                payload={
+                    "business_type": business_guess.get("business_type"),
+                    "confidence": business_guess.get("confidence"),
+                    "reasoning": business_guess.get("reasoning", ""),
+                    "analysis_audit": analysis_audit["business_type_inference"],
+                },
+            )
+            logger.info(
+                "ingestion_business_type_inferred workspace_id=%s job_id=%s business_type=%s confidence=%s engine=%s ai_configured=%s ai_attempted=%s ai_succeeded=%s fallback_reason=%s",
+                normalized_workspace_id,
+                normalized_job_id,
+                business_guess.get("business_type", "other"),
+                business_guess.get("confidence", 0.0),
+                analysis_audit["business_type_inference"]["engine"],
+                analysis_audit["business_type_inference"]["ai_configured"],
+                analysis_audit["business_type_inference"]["ai_attempted"],
+                analysis_audit["business_type_inference"]["ai_succeeded"],
+                analysis_audit["business_type_inference"]["fallback_reason"],
+            )
 
             catalog_entries = list(catalog_payload.get("entries", []))
             candidate_catalog_entries = [
@@ -296,6 +351,7 @@ class WriteIngestionAgentRuntime:
                     business_guess=business_guess,
                     route=route,
                     trace=tool_trace,
+                    analysis_audit=analysis_audit,
                 )
                 self._set_job_status(
                     conn=conn,
@@ -311,9 +367,15 @@ class WriteIngestionAgentRuntime:
                     payload={
                         "business_type": business_guess["business_type"],
                         "confidence": business_guess["confidence"],
+                        "analysis_audit": analysis_audit["business_type_inference"],
                     },
                 )
                 conn.commit()
+                logger.info(
+                    "ingestion_plan_completed workspace_id=%s job_id=%s status=awaiting_catalog_setup",
+                    normalized_workspace_id,
+                    normalized_job_id,
+                )
                 return setup_payload
 
             target_catalog = self._pick_target_catalog(candidate_catalog_entries)
@@ -417,6 +479,14 @@ class WriteIngestionAgentRuntime:
                 },
             )
             conn.commit()
+            logger.info(
+                "ingestion_plan_completed workspace_id=%s job_id=%s status=awaiting_user_approval proposal_id=%s target_table=%s recommended_action=%s",
+                normalized_workspace_id,
+                normalized_job_id,
+                proposal_id,
+                proposal.target_table or "",
+                proposal.recommended_action,
+            )
 
         return {
             "status": "awaiting_user_approval",
@@ -427,6 +497,7 @@ class WriteIngestionAgentRuntime:
             "route": route.to_payload(),
             "existing_tables": existing_tables,
             "tool_trace": tool_trace,
+            "analysis_audit": analysis_audit,
         }
 
     def confirm_setup(
@@ -904,20 +975,62 @@ class WriteIngestionAgentRuntime:
         arguments: dict[str, Any],
         handler: Any,
     ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         self._insert_event(
             conn=conn,
             job_id=job_id,
             event_type="tool_use",
             payload={"tool_name": name, "arguments": arguments},
         )
-        result = handler()
+        logger.info("ingestion_tool_use job_id=%s tool_name=%s arguments=%s", job_id, name, _compact_json(arguments))
+        try:
+            result = handler()
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            error_payload = {
+                "tool_name": name,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "elapsed_ms": elapsed_ms,
+            }
+            self._insert_event(
+                conn=conn,
+                job_id=job_id,
+                event_type="tool_error",
+                payload=error_payload,
+            )
+            trace.append({"tool_name": name, "arguments": arguments, "error": error_payload})
+            logger.warning(
+                "ingestion_tool_error job_id=%s tool_name=%s elapsed_ms=%s error_type=%s error=%s",
+                job_id,
+                name,
+                elapsed_ms,
+                type(exc).__name__,
+                str(exc),
+            )
+            raise
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
         self._insert_event(
             conn=conn,
             job_id=job_id,
             event_type="tool_result",
-            payload={"tool_name": name, "result": result},
+            payload={"tool_name": name, "result": result, "elapsed_ms": elapsed_ms},
         )
-        trace.append({"tool_name": name, "arguments": arguments, "result": result})
+        trace.append(
+            {
+                "tool_name": name,
+                "arguments": arguments,
+                "result": result,
+                "elapsed_ms": elapsed_ms,
+            }
+        )
+        logger.info(
+            "ingestion_tool_result job_id=%s tool_name=%s elapsed_ms=%s",
+            job_id,
+            name,
+            elapsed_ms,
+        )
         return result
 
     @staticmethod
@@ -936,6 +1049,7 @@ class WriteIngestionAgentRuntime:
         business_guess: dict[str, Any],
         route: RouteDecision,
         trace: list[dict[str, Any]],
+        analysis_audit: dict[str, Any],
     ) -> dict[str, Any]:
         first_columns = list(upload_info["column_summary"].get("all_columns", []))[:3]
         suggested_match = [first_columns[0]] if first_columns else []
@@ -984,6 +1098,7 @@ class WriteIngestionAgentRuntime:
             },
             "route": route.to_payload(),
             "tool_trace": trace,
+            "analysis_audit": analysis_audit,
         }
 
     def _load_job_for_approval(
@@ -1780,7 +1895,68 @@ class WriteIngestionAgentRuntime:
             if str(item.get("sheet_name", "")).strip()
         ]
         text_blob = " ".join([*columns, *sheet_names, str(upload_info["file_name"]).lower()])
+        keyword_guess = self._infer_business_type_with_keywords(text_blob)
 
+        settings = get_settings()
+        ai_configured = bool(
+            settings.ai_api_key.strip()
+            and settings.ai_model.strip()
+            and settings.model_provider_url.strip()
+        )
+        if not ai_configured:
+            keyword_guess.update(
+                {
+                    "inference_engine": "rules_keywords_v1",
+                    "ai_configured": False,
+                    "ai_attempted": False,
+                    "ai_succeeded": False,
+                    "fallback_reason": "ai_not_configured",
+                }
+            )
+            return keyword_guess
+
+        try:
+            llm_guess = self._infer_business_type_with_llm(
+                file_name=str(upload_info.get("file_name", "")),
+                columns=columns,
+                sheet_names=sheet_names,
+                sample_preview=upload_info.get("sample_preview", []),
+                model=settings.ai_model,
+                base_url=settings.model_provider_url,
+                api_key=settings.ai_api_key,
+                timeout_seconds=settings.ai_timeout_seconds,
+            )
+            llm_guess.update(
+                {
+                    "inference_engine": "llm_classifier_v1",
+                    "ai_configured": True,
+                    "ai_attempted": True,
+                    "ai_succeeded": True,
+                    "fallback_reason": "",
+                    "keyword_fallback": keyword_guess,
+                }
+            )
+            return llm_guess
+        except Exception as exc:
+            logger.warning(
+                "ingestion_business_type_llm_fallback file_name=%s error_type=%s error=%s",
+                str(upload_info.get("file_name", "")),
+                type(exc).__name__,
+                str(exc),
+            )
+            keyword_guess.update(
+                {
+                    "inference_engine": "rules_keywords_v1",
+                    "ai_configured": True,
+                    "ai_attempted": True,
+                    "ai_succeeded": False,
+                    "fallback_reason": f"llm_error:{type(exc).__name__}",
+                }
+            )
+            return keyword_guess
+
+    @staticmethod
+    def _infer_business_type_with_keywords(text_blob: str) -> dict[str, Any]:
         business_type = "other"
         confidence = 0.55
         reason = "No strong business-type keyword match was found."
@@ -1789,18 +1965,112 @@ class WriteIngestionAgentRuntime:
             ("project_progress", ("project", "milestone", "progress", "项目", "进度", "里程碑")),
             ("attendance", ("attendance", "考勤", "打卡", "absence", "出勤", "迟到")),
         ]
+        matched_keywords: list[str] = []
         for candidate, keywords in keyword_groups:
-            score = sum(1 for keyword in keywords if keyword in text_blob)
-            if score > 0:
+            matched_keywords = [keyword for keyword in keywords if keyword in text_blob]
+            if matched_keywords:
                 business_type = candidate
-                confidence = min(0.95, 0.62 + score * 0.1)
-                reason = f"Matched keywords for {candidate}: {score}"
+                confidence = min(0.95, 0.62 + len(matched_keywords) * 0.1)
+                reason = f"Matched keywords for {candidate}: {len(matched_keywords)}"
                 break
 
         return {
             "business_type": business_type,
             "confidence": round(confidence, 2),
             "reasoning": reason,
+            "matched_keywords": matched_keywords,
+        }
+
+    def _infer_business_type_with_llm(
+        self,
+        *,
+        file_name: str,
+        columns: list[str],
+        sheet_names: list[str],
+        sample_preview: list[Any],
+        model: str,
+        base_url: str,
+        api_key: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        endpoint = _chat_completions_endpoint(base_url)
+        payload = {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": _BUSINESS_TYPE_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "file_name": file_name,
+                            "columns": columns[:80],
+                            "sheet_names": sheet_names[:20],
+                            "sample_preview": sample_preview[:2],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key.strip()}",
+        }
+        request = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
+
+        started_at = time.perf_counter()
+        try:
+            with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+        except TimeoutError as exc:
+            raise RuntimeError("timeout") from exc
+        except socket.timeout as exc:
+            raise RuntimeError("timeout") from exc
+        except urllib_error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+            raise RuntimeError(f"http_{exc.code}:{details or exc.reason}") from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"url_error:{exc.reason}") from exc
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.info(
+            "ingestion_business_type_llm_response file_name=%s endpoint=%s model=%s elapsed_ms=%s",
+            file_name,
+            endpoint,
+            model,
+            elapsed_ms,
+        )
+        data = _decode_json_dict(raw)
+        choices = data.get("choices", [])
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("empty_choices")
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message") if isinstance(first, dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        text_content = _content_to_text(content)
+        parsed = _json_from_text(text_content)
+
+        business_type = str(parsed.get("business_type", "")).strip()
+        if business_type not in BUSINESS_TYPE_VALUES:
+            raise RuntimeError(f"invalid_business_type:{business_type or 'empty'}")
+        confidence = _clamp_confidence(parsed.get("confidence"))
+        reasoning = str(parsed.get("reasoning", "")).strip() or "LLM classification result."
+        return {
+            "business_type": business_type,
+            "confidence": confidence,
+            "reasoning": reasoning,
+        }
+
+    @staticmethod
+    def _business_type_inference_audit(business_guess: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "engine": str(business_guess.get("inference_engine", "rules_keywords_v1")),
+            "ai_configured": bool(business_guess.get("ai_configured", False)),
+            "ai_attempted": bool(business_guess.get("ai_attempted", False)),
+            "ai_succeeded": bool(business_guess.get("ai_succeeded", False)),
+            "fallback_reason": str(business_guess.get("fallback_reason", "")),
         }
 
     def _tool_describe_table_schema(self, *, target_catalog: dict[str, Any]) -> dict[str, Any]:
@@ -2061,6 +2331,70 @@ def _decode_json_dict(raw: Any) -> dict[str, Any]:
     if isinstance(decoded, dict):
         return decoded
     return {}
+
+
+def _chat_completions_endpoint(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+        return "\n".join(chunks).strip()
+    return ""
+
+
+def _json_from_text(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    stripped = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", stripped)
+    stripped = re.sub(r"\n?```$", "", stripped)
+    if not stripped:
+        raise RuntimeError("empty_content")
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+    if not match:
+        raise RuntimeError("missing_json_object")
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("invalid_json_object") from exc
+    if isinstance(parsed, dict):
+        return parsed
+    raise RuntimeError("json_not_object")
+
+
+def _clamp_confidence(raw: Any) -> float:
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return round(max(0.0, min(parsed, 1.0)), 2)
+
+
+def _compact_json(payload: Any) -> str:
+    try:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(payload)
 
 
 def _utc_now() -> str:

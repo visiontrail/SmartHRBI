@@ -25,6 +25,9 @@ from tests.auth_utils import auth_headers, expect_error_code
 def _set_minimal_env(monkeypatch, tmp_path: Path, *, ingestion_enabled: bool) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'workspace-state.db'}")
     monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.setenv("AI_API_KEY", "")
+    monkeypatch.setenv("AI_MODEL", "deepseek-chat")
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", "20")
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))

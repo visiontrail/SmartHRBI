@@ -23,9 +23,20 @@ from apps.api.workspaces import clear_workspace_service_cache
 from tests.auth_utils import auth_headers, expect_error_code
 
 
-def _set_minimal_env(monkeypatch, tmp_path: Path, *, ingestion_enabled: bool) -> None:
+def _set_minimal_env(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    ingestion_enabled: bool,
+    model_provider_url: str = "http://localhost:11434",
+    ai_api_key: str = "",
+    ai_timeout_seconds: str = "20",
+) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'workspace-state.db'}")
-    monkeypatch.setenv("MODEL_PROVIDER_URL", "http://localhost:11434")
+    monkeypatch.setenv("MODEL_PROVIDER_URL", model_provider_url)
+    monkeypatch.setenv("AI_API_KEY", ai_api_key)
+    monkeypatch.setenv("AI_MODEL", "deepseek-chat")
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", ai_timeout_seconds)
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
@@ -225,8 +236,94 @@ def test_ingestion_plan_persists_proposal(monkeypatch, tmp_path: Path) -> None:
         event_types = {str(item["event_type"]) for item in event_rows}
         assert "tool_use" in event_types
         assert "tool_result" in event_types
+        assert "business_type_inferred" in event_types
         assert "proposal_generated" in event_types
 
+
+def test_ingestion_plan_reports_rules_inference_audit(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Plan Audit Rules Workspace")
+        upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
+        plan_response = client.post(
+            "/ingestion/plan",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "conversation_id": "conv-audit-rules",
+                "message": "请帮我分析导入类型",
+            },
+            headers=owner_headers,
+        )
+
+    assert plan_response.status_code == 200
+    payload = plan_response.json()
+    audit = payload["analysis_audit"]["business_type_inference"]
+    assert audit["engine"] == "rules_keywords_v1"
+    assert audit["ai_configured"] is False
+    assert audit["ai_attempted"] is False
+    assert audit["ai_succeeded"] is False
+    assert audit["fallback_reason"] == "ai_not_configured"
+
+    infer_trace = next(
+        item for item in payload["tool_trace"] if item.get("tool_name") == "infer_business_type"
+    )
+    infer_result = infer_trace["result"]
+    assert infer_result["inference_engine"] == "rules_keywords_v1"
+    assert infer_result["ai_attempted"] is False
+
+    db_path = tmp_path / "workspace-state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT payload
+            FROM ingestion_events
+            WHERE job_id = ? AND event_type = 'business_type_inferred'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (upload_payload["job_id"],),
+        ).fetchone()
+        assert row is not None
+        payload_json = json.loads(str(row["payload"]))
+        assert payload_json["analysis_audit"]["engine"] == "rules_keywords_v1"
+
+
+def test_ingestion_plan_falls_back_when_llm_classifier_fails(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(
+        monkeypatch,
+        tmp_path,
+        ingestion_enabled=True,
+        model_provider_url="http://127.0.0.1:9",
+        ai_api_key="demo-key",
+        ai_timeout_seconds="0.2",
+    )
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Plan Audit Fallback Workspace")
+        upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
+        plan_response = client.post(
+            "/ingestion/plan",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "conversation_id": "conv-audit-fallback",
+                "message": "请帮我分析导入类型",
+            },
+            headers=owner_headers,
+        )
+
+    assert plan_response.status_code == 200
+    payload = plan_response.json()
+    audit = payload["analysis_audit"]["business_type_inference"]
+    assert audit["ai_configured"] is True
+    assert audit["ai_attempted"] is True
+    assert audit["ai_succeeded"] is False
+    assert str(audit["fallback_reason"]).startswith("llm_error:")
 
 def test_ingestion_plan_workspace_role_guard(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
