@@ -8,9 +8,23 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { parseSSEStream } from "@/lib/chat/sse";
 import { getAuthorizationHeader } from "@/lib/auth/session";
 import { useI18n } from "@/lib/i18n/context";
+import {
+  approveIngestionProposal,
+  confirmIngestionSetup,
+  createIngestionPlan,
+  createIngestionUpload,
+  executeIngestionProposal,
+} from "@/lib/ingestion/api";
 import { generateId, isRecord } from "@/lib/utils";
 import type { ChartAsset, ChartSpec, ChartType, KnownChartType } from "@/types/chart";
 import type { ChatMessage, ChatSession } from "@/types/chat";
+import type {
+  IngestionApprovalResult,
+  IngestionExecuteResult,
+  IngestionPlanAwaitingApproval,
+  IngestionPlanResult,
+  IngestionUploadResult,
+} from "@/types/ingestion";
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
@@ -81,21 +95,44 @@ export function useSendMessage() {
   const setIsSending = useUIStore((s) => s.setIsSending);
 
   return useMutation({
-    mutationFn: async ({ sessionId, content }: { sessionId: string; content: string }) => {
+    mutationFn: async ({
+      sessionId,
+      content,
+      attachment,
+    }: {
+      sessionId: string;
+      content: string;
+      attachment?: File;
+    }) => {
       setIsSending(true);
       const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
       if (!workspaceId) {
         throw new Error(t("chat.toast.noWorkspace"));
       }
-      return streamAssistantResponse({ sessionId, content, workspaceId, t });
+      const trimmedContent = content.trim();
+      if (attachment) {
+        return runIngestionConversationResponse({
+          sessionId,
+          workspaceId,
+          content: trimmedContent || t("chat.ingestion.defaultRequirement"),
+          attachment,
+          t,
+        });
+      }
+      return streamAssistantResponse({ sessionId, content: trimmedContent, workspaceId, t });
     },
-    onMutate: ({ sessionId, content }) => {
-      const userMessage = createUserMessage(sessionId, content);
+    onMutate: ({ sessionId, content, attachment }) => {
+      const normalizedContent = formatUserMessageContent({
+        content,
+        attachmentName: attachment?.name,
+        t,
+      });
+      const userMessage = createUserMessage(sessionId, normalizedContent);
       appendMessage(sessionId, userMessage);
       touchSession(sessionId, {
         lastMessage: userMessage.content,
         messageDelta: 1,
-        title: suggestSessionTitle(sessionId, content),
+        title: suggestSessionTitle(sessionId, normalizedContent),
       });
       return { sessionId };
     },
@@ -196,6 +233,7 @@ const FALLBACK_OPTION_TYPES = new Set<KnownChartType>([
   "single_value",
   "gauge",
 ]);
+type TranslateFn = (key: string, params?: Record<string, string | number | null | undefined>) => string;
 
 async function streamAssistantResponse({
   sessionId,
@@ -206,7 +244,7 @@ async function streamAssistantResponse({
   sessionId: string;
   content: string;
   workspaceId: string;
-  t: (key: string, params?: Record<string, string | number | null | undefined>) => string;
+  t: TranslateFn;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
   const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -274,6 +312,87 @@ async function streamAssistantResponse({
   return { assistantMessage, chartAsset: chartAsset ?? undefined };
 }
 
+async function runIngestionConversationResponse({
+  sessionId,
+  workspaceId,
+  content,
+  attachment,
+  t,
+}: {
+  sessionId: string;
+  workspaceId: string;
+  content: string;
+  attachment: File;
+  t: TranslateFn;
+}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+  const upload = await createIngestionUpload({
+    workspaceId,
+    file: attachment,
+  });
+  let plan = await createIngestionPlan({
+    workspaceId,
+    jobId: upload.jobId,
+    conversationId: sessionId,
+    message: content,
+  });
+  let autoSetupApplied = false;
+  let setupTableName: string | null = null;
+
+  if (plan.status === "awaiting_catalog_setup") {
+    autoSetupApplied = true;
+    setupTableName = plan.suggestedCatalogSeed.tableName;
+    plan = await confirmIngestionSetup({
+      workspaceId,
+      jobId: upload.jobId,
+      conversationId: sessionId,
+      message: content,
+      setup: plan.suggestedCatalogSeed,
+    });
+  }
+
+  let approvalResult: IngestionApprovalResult | null = null;
+  let executionResult: IngestionExecuteResult | null = null;
+  if (plan.status === "awaiting_user_approval") {
+    const approvedAction = plan.proposal.recommendedAction;
+    approvalResult = await approveIngestionProposal({
+      workspaceId,
+      jobId: upload.jobId,
+      proposalId: plan.proposalId,
+      approvedAction,
+      userOverrides:
+        approvedAction === "time_partitioned_new_table"
+          ? {
+              timeGrain: plan.proposal.timeGrain,
+            }
+          : undefined,
+    });
+    if (approvalResult.status === "approved") {
+      executionResult = await executeIngestionProposal({
+        workspaceId,
+        jobId: upload.jobId,
+        proposalId: plan.proposalId,
+      });
+    }
+  }
+
+  const assistantMessage: ChatMessage = {
+    id: `msg-${generateId()}`,
+    sessionId,
+    role: "assistant",
+    content: buildIngestionSummaryMessage({
+      upload,
+      plan,
+      autoSetupApplied,
+      setupTableName,
+      approvalResult,
+      executionResult,
+      t,
+    }),
+    timestamp: new Date().toISOString(),
+  };
+  return { assistantMessage };
+}
+
 function createLocalSession(title?: string): ChatSession {
   const now = new Date().toISOString();
   return {
@@ -293,6 +412,195 @@ function createUserMessage(sessionId: string, content: string): ChatMessage {
     content,
     timestamp: new Date().toISOString(),
   };
+}
+
+function formatUserMessageContent({
+  content,
+  attachmentName,
+  t,
+}: {
+  content: string;
+  attachmentName?: string;
+  t: TranslateFn;
+}): string {
+  const trimmed = content.trim();
+  if (!attachmentName) {
+    return trimmed;
+  }
+  if (!trimmed) {
+    return t("chat.userAttachedFileOnly", { fileName: attachmentName });
+  }
+  return t("chat.userAttachedFileWithPrompt", {
+    fileName: attachmentName,
+    prompt: trimmed,
+  });
+}
+
+function buildIngestionSummaryMessage({
+  upload,
+  plan,
+  autoSetupApplied,
+  setupTableName,
+  approvalResult,
+  executionResult,
+  t,
+}: {
+  upload: IngestionUploadResult;
+  plan: IngestionPlanResult;
+  autoSetupApplied: boolean;
+  setupTableName: string | null;
+  approvalResult: IngestionApprovalResult | null;
+  executionResult: IngestionExecuteResult | null;
+  t: TranslateFn;
+}): string {
+  const parseStats = extractUploadStats(upload);
+  const lines: string[] = [
+    t("chat.ingestion.summaryTitle"),
+    t("chat.ingestion.parsedFile", {
+      fileName: upload.fileSummary.fileName,
+      sheetCount: parseStats.sheetCount,
+      rowCount: parseStats.totalRows,
+    }),
+    t("chat.ingestion.jobId", { jobId: upload.jobId }),
+  ];
+
+  if (plan.status === "awaiting_catalog_setup") {
+    if (autoSetupApplied) {
+      lines.push(
+        t("chat.ingestion.autoSetupApplied", {
+          tableName: setupTableName ?? t("ingestion.lifecycle.targetNotSet"),
+        })
+      );
+    }
+    lines.push(
+      t("chat.ingestion.setupStillRequired", {
+        businessType: plan.agentGuess.businessType,
+      })
+    );
+    return lines.join("\n");
+  }
+
+  if (autoSetupApplied) {
+    lines.push(
+      t("chat.ingestion.autoSetupApplied", {
+        tableName: setupTableName ?? t("ingestion.lifecycle.targetNotSet"),
+      })
+    );
+  }
+  lines.push(...buildAwaitingApprovalSummary(plan, approvalResult, executionResult, t));
+  return lines.join("\n");
+}
+
+function buildAwaitingApprovalSummary(
+  plan: IngestionPlanAwaitingApproval,
+  approvalResult: IngestionApprovalResult | null,
+  executionResult: IngestionExecuteResult | null,
+  t: TranslateFn
+): string[] {
+  const actionLabel = toProposalActionLabel({
+    action: plan.proposal.recommendedAction,
+    timeGrain: plan.proposal.timeGrain,
+    t,
+  });
+  const lines = [
+    t("chat.ingestion.recommended", {
+      action: actionLabel,
+      table: plan.proposal.targetTable ?? t("ingestion.lifecycle.targetNotSet"),
+    }),
+    t("chat.ingestion.diffPreview", {
+      insertCount: plan.proposal.diffPreview.predictedInsertCount,
+      updateCount: plan.proposal.diffPreview.predictedUpdateCount,
+      conflictCount: plan.proposal.diffPreview.predictedConflictCount,
+    }),
+  ];
+
+  if (plan.proposal.risks.length > 0) {
+    lines.push(
+      `${t("chat.ingestion.risksTitle")}\n${plan.proposal.risks
+        .slice(0, 3)
+        .map((risk, index) => `${index + 1}. ${risk}`)
+        .join("\n")}`
+    );
+  }
+
+  if (approvalResult?.status === "cancelled") {
+    lines.push(t("chat.ingestion.autoDecisionCancelled"));
+    return lines;
+  }
+
+  if (approvalResult?.status === "approved") {
+    lines.push(
+      t("chat.ingestion.autoApproved", {
+        action: toProposalActionLabel({
+          action: approvalResult.approvedAction,
+          timeGrain: approvalResult.timeGrain,
+          t,
+        }),
+      })
+    );
+  }
+  if (executionResult) {
+    lines.push(
+      t("chat.ingestion.executionReceipt", {
+        targetTable: executionResult.receipt.targetTable,
+        insertedRows: executionResult.receipt.insertedRows,
+        updatedRows: executionResult.receipt.updatedRows,
+      })
+    );
+    lines.push(
+      t("chat.ingestion.executionRows", {
+        affectedRows: executionResult.receipt.affectedRows,
+        rowsAfter: executionResult.receipt.rowsAfter,
+      })
+    );
+  }
+  return lines;
+}
+
+function toProposalActionLabel({
+  action,
+  timeGrain,
+  t,
+}: {
+  action: string;
+  timeGrain: string;
+  t: TranslateFn;
+}): string {
+  if (action === "update_existing") {
+    return t("ingestion.lifecycle.action.updateExisting");
+  }
+  if (action === "new_table") {
+    return t("ingestion.lifecycle.action.newTable");
+  }
+  if (action === "time_partitioned_new_table") {
+    if (timeGrain === "month") {
+      return t("ingestion.lifecycle.action.newMonthly");
+    }
+    if (timeGrain === "quarter") {
+      return t("ingestion.lifecycle.action.newQuarterly");
+    }
+    if (timeGrain === "year") {
+      return t("ingestion.lifecycle.action.newYearly");
+    }
+    return t("ingestion.lifecycle.action.newTable");
+  }
+  if (action === "cancel") {
+    return t("ingestion.lifecycle.action.cancel");
+  }
+  return action;
+}
+
+function extractUploadStats(upload: IngestionUploadResult): { sheetCount: number; totalRows: number } {
+  if (!isRecord(upload.sheetSummary)) {
+    return { sheetCount: 0, totalRows: 0 };
+  }
+  const sheets = Array.isArray(upload.sheetSummary.sheets)
+    ? upload.sheetSummary.sheets.filter(isRecord)
+    : [];
+  const normalizedSheetCount = asNumber(upload.sheetSummary.sheet_count);
+  const sheetCount = normalizedSheetCount > 0 ? normalizedSheetCount : sheets.length;
+  const totalRows = sheets.reduce((sum, sheet) => sum + asNumber(sheet.row_count), 0);
+  return { sheetCount, totalRows };
 }
 
 function suggestSessionTitle(sessionId: string, content: string): string | undefined {

@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { Skeleton } from "@/components/ui/skeleton";
-import { IngestionLifecyclePanel } from "./ingestion-lifecycle-panel";
 import { useI18n } from "@/lib/i18n/context";
 
 export function ChatPanel() {
@@ -74,10 +73,6 @@ export function ChatPanel() {
           </Button>
         </div>
       </header>
-
-      {activeWorkspaceId ? (
-        <IngestionLifecyclePanel workspaceId={activeWorkspaceId} workspaceTitle={activeWorkspaceTitle} />
-      ) : null}
 
       {/* Messages */}
       <div className="flex-1 overflow-hidden">

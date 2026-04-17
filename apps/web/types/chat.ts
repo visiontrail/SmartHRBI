@@ -41,6 +41,7 @@ export type SuggestedAction = {
 export type SendMessageRequest = {
   sessionId: string;
   content: string;
+  attachment?: File;
 };
 
 export type SendMessageResponse = {
