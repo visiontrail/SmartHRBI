@@ -5,10 +5,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..auth import AuthIdentity, require_permission
+from ..audit import get_audit_logger
 from ..config import get_settings
 from ..workspaces import WorkspaceError, get_workspace_service
 from .feature_flags import ensure_agentic_ingestion_enabled
-from .models import IngestionHealth, IngestionPlanRequest, IngestionSetupConfirmRequest
+from .models import (
+    IngestionApproveRequest,
+    IngestionExecuteRequest,
+    IngestionHealth,
+    IngestionPlanRequest,
+    IngestionSetupConfirmRequest,
+)
 from .runtime import IngestionPlanningError, WriteIngestionAgentRuntime
 from .uploads import IngestionUploadError, get_ingestion_upload_service
 
@@ -94,6 +101,106 @@ async def confirm_ingestion_setup(
         )
     except IngestionPlanningError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.post("/approve")
+async def approve_ingestion_proposal(
+    request: IngestionApproveRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> dict[str, Any]:
+    settings = get_settings()
+    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
+    _assert_workspace_role(
+        workspace_id=request.workspace_id,
+        identity=identity,
+        minimum_role="editor",
+    )
+
+    try:
+        payload = runtime.approve_plan(
+            workspace_id=request.workspace_id,
+            job_id=request.job_id,
+            proposal_id=request.proposal_id,
+            approved_action=request.approved_action,
+            approved_by=identity.user_id,
+            user_overrides=request.user_overrides,
+        )
+    except IngestionPlanningError as exc:
+        get_audit_logger().log(
+            event_type="ingestion",
+            action="approve",
+            status="failed",
+            severity="WARN",
+            user_id=identity.user_id,
+            project_id=identity.project_id,
+            resource=request.job_id,
+            detail={"code": exc.code, "workspace_id": request.workspace_id},
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    get_audit_logger().log(
+        event_type="ingestion",
+        action="approve",
+        status="success",
+        user_id=identity.user_id,
+        project_id=identity.project_id,
+        resource=request.job_id,
+        detail={
+            "workspace_id": request.workspace_id,
+            "proposal_id": request.proposal_id,
+            "approved_action": request.approved_action,
+        },
+    )
+    return payload
+
+
+@router.post("/execute")
+async def execute_ingestion_plan(
+    request: IngestionExecuteRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> dict[str, Any]:
+    settings = get_settings()
+    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
+    _assert_workspace_role(
+        workspace_id=request.workspace_id,
+        identity=identity,
+        minimum_role="editor",
+    )
+
+    try:
+        payload = runtime.execute_plan(
+            workspace_id=request.workspace_id,
+            job_id=request.job_id,
+            proposal_id=request.proposal_id,
+            executed_by=identity.user_id,
+        )
+    except IngestionPlanningError as exc:
+        get_audit_logger().log(
+            event_type="ingestion",
+            action="execute",
+            status="failed",
+            severity="WARN",
+            user_id=identity.user_id,
+            project_id=identity.project_id,
+            resource=request.job_id,
+            detail={"code": exc.code, "workspace_id": request.workspace_id},
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    get_audit_logger().log(
+        event_type="ingestion",
+        action="execute",
+        status="success",
+        user_id=identity.user_id,
+        project_id=identity.project_id,
+        resource=request.job_id,
+        detail={
+            "workspace_id": request.workspace_id,
+            "proposal_id": request.proposal_id,
+            "execution_id": payload.get("execution_id"),
+        },
+    )
+    return payload
 
 
 def _assert_workspace_role(*, workspace_id: str, identity: AuthIdentity, minimum_role: str) -> str:

@@ -26,7 +26,7 @@ class IngestionJobStatus(str, Enum):
 
 class IngestionHealth(BaseModel):
     status: str = "ok"
-    stage: str = "M5"
+    stage: str = "M6"
     message: str
 
 
@@ -151,3 +151,46 @@ class IngestionProposalPayload(BaseModel):
     sql_draft: str = ""
     requires_catalog_setup: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class IngestionApprovalOverrides(BaseModel):
+    target_table: str | None = Field(default=None, min_length=1, max_length=128)
+    time_grain: Literal["none", "month", "quarter", "year"] | None = None
+
+    @field_validator("target_table")
+    @classmethod
+    def _trim_optional_table(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
+
+
+class IngestionApproveRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    proposal_id: str = Field(min_length=1)
+    approved_action: Literal["update_existing", "time_partitioned_new_table", "new_table", "cancel"]
+    user_overrides: IngestionApprovalOverrides | None = None
+
+    @field_validator("workspace_id", "job_id", "proposal_id")
+    @classmethod
+    def _trim_required(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+
+class IngestionExecuteRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    proposal_id: str = Field(min_length=1)
+
+    @field_validator("workspace_id", "job_id", "proposal_id")
+    @classmethod
+    def _trim_required(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized

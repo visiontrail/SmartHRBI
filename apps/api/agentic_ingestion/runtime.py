@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from .models import IngestionCatalogSetupSeed, IngestionProposalPayload, SETUP_WRITE_MODES
+import duckdb
+import pandas as pd
+from sqlglot import exp, parse
+from sqlglot.errors import ParseError
+
+from .models import (
+    IngestionApprovalOverrides,
+    IngestionCatalogSetupSeed,
+    IngestionProposalPayload,
+    SETUP_WRITE_MODES,
+)
 from .routing import RouteDecision, select_agent_route
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+FORBIDDEN_WRITE_EXPRESSIONS: tuple[type[exp.Expression], ...] = (
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Command,
+    exp.Delete,
+)
 DEFAULT_ACTION_OPTIONS = [
     "update_existing",
     "time_partitioned_new_table",
@@ -44,11 +63,128 @@ class IngestionPlanningError(Exception):
 
 
 @dataclass(slots=True)
+class SQLWriteValidator:
+    target_table: str
+    staging_table: str
+    action_mode: str
+
+    def validate(self, sql: str) -> str:
+        normalized_sql = sql.strip()
+        if not normalized_sql:
+            raise IngestionPlanningError(
+                code="WRITE_SQL_REQUIRED",
+                message="Approved SQL is empty",
+                status_code=422,
+            )
+
+        try:
+            statements = parse(normalized_sql, read="duckdb")
+        except ParseError as exc:
+            raise IngestionPlanningError(
+                code="WRITE_SQL_PARSE_ERROR",
+                message="Approved SQL has invalid syntax",
+                status_code=422,
+            ) from exc
+
+        if len(statements) != 1:
+            raise IngestionPlanningError(
+                code="WRITE_SQL_MULTI_STATEMENT_NOT_ALLOWED",
+                message="Only one write statement is allowed",
+                status_code=422,
+            )
+        statement = statements[0]
+        self._assert_statement_type(statement)
+        self._assert_forbidden_operations(statement)
+        self._assert_target_binding(statement)
+        self._assert_table_scope(statement)
+        return normalized_sql
+
+    def _assert_statement_type(self, statement: exp.Expression) -> None:
+        if self.action_mode == "update_existing":
+            if not isinstance(statement, exp.Merge):
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_ACTION_MISMATCH",
+                    message="update_existing action requires MERGE statement",
+                    status_code=422,
+                )
+            return
+
+        if self.action_mode in {"new_table", "time_partitioned_new_table"}:
+            if not isinstance(statement, exp.Create):
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_ACTION_MISMATCH",
+                    message=f"{self.action_mode} action requires CREATE TABLE AS statement",
+                    status_code=422,
+                )
+            return
+
+        raise IngestionPlanningError(
+            code="WRITE_ACTION_UNSUPPORTED",
+            message=f"Unsupported approved action: {self.action_mode}",
+            status_code=422,
+        )
+
+    def _assert_forbidden_operations(self, statement: exp.Expression) -> None:
+        for node_type in FORBIDDEN_WRITE_EXPRESSIONS:
+            if list(statement.find_all(node_type)):
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_OPERATION_FORBIDDEN",
+                    message="Approved SQL contains forbidden operation",
+                    status_code=422,
+                )
+
+    def _assert_target_binding(self, statement: exp.Expression) -> None:
+        if isinstance(statement, exp.Merge):
+            target = statement.this
+            if not isinstance(target, exp.Table):
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_TARGET_MISSING",
+                    message="MERGE statement must include a target table",
+                    status_code=422,
+                )
+            target_name = target.name.lower()
+            if target_name != self.target_table:
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_TARGET_MISMATCH",
+                    message="Approved SQL target table does not match approved proposal",
+                    status_code=422,
+                )
+            return
+
+        if isinstance(statement, exp.Create):
+            target = statement.this
+            if not isinstance(target, exp.Table):
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_TARGET_MISSING",
+                    message="CREATE statement must include a target table",
+                    status_code=422,
+                )
+            target_name = target.name.lower()
+            if target_name != self.target_table:
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_TARGET_MISMATCH",
+                    message="Approved SQL target table does not match approved proposal",
+                    status_code=422,
+                )
+
+    def _assert_table_scope(self, statement: exp.Expression) -> None:
+        allowed = {self.target_table, self.staging_table}
+        for table in statement.find_all(exp.Table):
+            table_name = table.name.lower()
+            if table_name not in allowed:
+                raise IngestionPlanningError(
+                    code="WRITE_SQL_TABLE_NOT_ALLOWED",
+                    message=f"Approved SQL touches table outside execution scope: {table_name}",
+                    status_code=422,
+                )
+
+
+@dataclass(slots=True)
 class WriteIngestionAgentRuntime:
-    stage: str = "M5"
+    stage: str = "M6"
 
     def health_summary(self) -> str:
-        return "Write ingestion runtime supports setup/planning/proposal lifecycle"
+        return "Write ingestion runtime supports setup/planning/approval/execution lifecycle"
 
     def build_plan(
         self,
@@ -387,6 +523,377 @@ class WriteIngestionAgentRuntime:
         }
         return plan_payload
 
+    def approve_plan(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        proposal_id: str,
+        approved_action: str,
+        approved_by: str,
+        user_overrides: IngestionApprovalOverrides | None = None,
+    ) -> dict[str, Any]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_proposal_id = proposal_id.strip()
+        normalized_approved_by = approved_by.strip()
+        normalized_action = approved_action.strip().lower()
+
+        if not normalized_workspace_id:
+            raise IngestionPlanningError(
+                code="WORKSPACE_ID_REQUIRED",
+                message="workspace_id is required",
+                status_code=422,
+            )
+        if not normalized_job_id:
+            raise IngestionPlanningError(
+                code="JOB_ID_REQUIRED",
+                message="job_id is required",
+                status_code=422,
+            )
+        if not normalized_proposal_id:
+            raise IngestionPlanningError(
+                code="PROPOSAL_ID_REQUIRED",
+                message="proposal_id is required",
+                status_code=422,
+            )
+        if not normalized_approved_by:
+            raise IngestionPlanningError(
+                code="AUTH_REQUIRED",
+                message="user_id is required",
+                status_code=401,
+            )
+        if normalized_action not in DEFAULT_ACTION_OPTIONS:
+            raise IngestionPlanningError(
+                code="APPROVED_ACTION_INVALID",
+                message="approved_action is not supported",
+                status_code=422,
+            )
+
+        with self._connect() as conn:
+            self._ensure_user_record(conn=conn, user_id=normalized_approved_by)
+            job = self._load_job_for_approval(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+            )
+            proposal_row, proposal_payload = self._load_proposal(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+                proposal_id=normalized_proposal_id,
+            )
+            if normalized_action not in proposal_payload.candidate_actions:
+                raise IngestionPlanningError(
+                    code="APPROVED_ACTION_NOT_IN_CANDIDATES",
+                    message="approved_action is not in proposal candidate_actions",
+                    status_code=422,
+                )
+
+            if normalized_action == "cancel":
+                self._set_job_status(
+                    conn=conn,
+                    job_id=normalized_job_id,
+                    status="cancelled",
+                    business_type_guess=proposal_payload.business_type,
+                    agent_session_id=str(job["agent_session_id"]) if job["agent_session_id"] else None,
+                )
+                self._insert_event(
+                    conn=conn,
+                    job_id=normalized_job_id,
+                    event_type="proposal_cancelled",
+                    payload={
+                        "proposal_id": normalized_proposal_id,
+                        "approved_by": normalized_approved_by,
+                    },
+                )
+                conn.commit()
+                return {
+                    "status": "cancelled",
+                    "workspace_id": normalized_workspace_id,
+                    "job_id": normalized_job_id,
+                    "proposal_id": normalized_proposal_id,
+                    "approved_action": "cancel",
+                }
+
+            overrides_payload = (user_overrides.model_dump(mode="json") if user_overrides else {})
+            target_table, time_grain = self._resolve_approved_target(
+                proposal_payload=proposal_payload,
+                approved_action=normalized_action,
+                overrides=user_overrides,
+            )
+            staging_table = self._staging_table_name(normalized_job_id)
+            finalized_sql = self._build_validated_sql(
+                approved_action=normalized_action,
+                target_table=target_table,
+                staging_table=staging_table,
+                proposal_payload=proposal_payload,
+            )
+            validator = SQLWriteValidator(
+                target_table=target_table,
+                staging_table=staging_table,
+                action_mode=normalized_action,
+            )
+            validated_sql = validator.validate(finalized_sql)
+            sql_hash = hashlib.sha256(validated_sql.encode("utf-8")).hexdigest()
+            dry_run_summary = self._build_dry_run_summary(
+                proposal_payload=proposal_payload,
+                approved_action=normalized_action,
+                target_table=target_table,
+                time_grain=time_grain,
+            )
+
+            self._set_job_status(
+                conn=conn,
+                job_id=normalized_job_id,
+                status="approved",
+                business_type_guess=proposal_payload.business_type,
+                agent_session_id=str(job["agent_session_id"]) if job["agent_session_id"] else None,
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="proposal_approved",
+                payload={
+                    "proposal_id": normalized_proposal_id,
+                    "approved_action": normalized_action,
+                    "approved_by": normalized_approved_by,
+                    "target_table": target_table,
+                    "time_grain": time_grain,
+                    "validated_sql": validated_sql,
+                    "validated_sql_hash": sql_hash,
+                    "dry_run_summary": dry_run_summary,
+                    "user_overrides": overrides_payload,
+                    "proposal_version": int(proposal_row["proposal_version"]),
+                },
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="job_status_updated",
+                payload={"status": "approved", "trigger": "ingestion_approve"},
+            )
+            conn.commit()
+
+        return {
+            "status": "approved",
+            "workspace_id": normalized_workspace_id,
+            "job_id": normalized_job_id,
+            "proposal_id": normalized_proposal_id,
+            "approved_action": normalized_action,
+            "target_table": target_table,
+            "time_grain": time_grain,
+            "dry_run_summary": dry_run_summary,
+        }
+
+    def execute_plan(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        proposal_id: str,
+        executed_by: str,
+    ) -> dict[str, Any]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_proposal_id = proposal_id.strip()
+        normalized_executed_by = executed_by.strip()
+
+        if not normalized_workspace_id:
+            raise IngestionPlanningError(
+                code="WORKSPACE_ID_REQUIRED",
+                message="workspace_id is required",
+                status_code=422,
+            )
+        if not normalized_job_id:
+            raise IngestionPlanningError(
+                code="JOB_ID_REQUIRED",
+                message="job_id is required",
+                status_code=422,
+            )
+        if not normalized_proposal_id:
+            raise IngestionPlanningError(
+                code="PROPOSAL_ID_REQUIRED",
+                message="proposal_id is required",
+                status_code=422,
+            )
+        if not normalized_executed_by:
+            raise IngestionPlanningError(
+                code="AUTH_REQUIRED",
+                message="user_id is required",
+                status_code=401,
+            )
+
+        started_at = _utc_now()
+        with self._connect() as conn:
+            self._ensure_user_record(conn=conn, user_id=normalized_executed_by)
+            job = self._load_job_for_execution(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+            )
+            _proposal_row, proposal_payload = self._load_proposal(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+                proposal_id=normalized_proposal_id,
+            )
+            approval_event = self._load_latest_approval_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                proposal_id=normalized_proposal_id,
+            )
+            validated_sql = str(approval_event["validated_sql"])
+            approved_action = str(approval_event["approved_action"])
+            target_table = str(approval_event["target_table"])
+            dry_run_summary = approval_event["dry_run_summary"]
+            validator = SQLWriteValidator(
+                target_table=target_table,
+                staging_table=self._staging_table_name(normalized_job_id),
+                action_mode=approved_action,
+            )
+            validated_sql = validator.validate(validated_sql)
+            expected_sql_hash = str(approval_event["validated_sql_hash"])
+            actual_sql_hash = hashlib.sha256(validated_sql.encode("utf-8")).hexdigest()
+            if expected_sql_hash != actual_sql_hash:
+                raise IngestionPlanningError(
+                    code="APPROVAL_SQL_HASH_MISMATCH",
+                    message="Approved SQL binding is invalid",
+                    status_code=409,
+                )
+
+            upload_info = self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"]))
+            self._set_job_status(
+                conn=conn,
+                job_id=normalized_job_id,
+                status="executing",
+                business_type_guess=proposal_payload.business_type,
+                agent_session_id=str(job["agent_session_id"]) if job["agent_session_id"] else None,
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="job_status_updated",
+                payload={"status": "executing", "trigger": "ingestion_execute"},
+            )
+            conn.commit()
+
+        execution_id = uuid.uuid4().hex
+        execution_mode = approved_action
+        try:
+            receipt = self._run_execution_transaction(
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+                target_table=target_table,
+                approved_action=approved_action,
+                validated_sql=validated_sql,
+                dry_run_summary=dry_run_summary,
+                upload_info=upload_info,
+                proposal_payload=proposal_payload,
+            )
+            execution_status = "succeeded"
+            failure_message = ""
+        except IngestionPlanningError as exc:
+            execution_status = "failed"
+            failure_message = exc.message
+            receipt = {
+                "success": False,
+                "workspace_id": normalized_workspace_id,
+                "job_id": normalized_job_id,
+                "target_table": target_table,
+                "approved_action": approved_action,
+                "error": {"code": exc.code, "message": exc.message},
+            }
+        except Exception as exc:  # pragma: no cover - defensive path
+            execution_status = "failed"
+            failure_message = str(exc)
+            receipt = {
+                "success": False,
+                "workspace_id": normalized_workspace_id,
+                "job_id": normalized_job_id,
+                "target_table": target_table,
+                "approved_action": approved_action,
+                "error": {"code": "INGESTION_EXECUTION_FAILED", "message": str(exc)},
+            }
+
+        finished_at = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ingestion_executions (
+                    id,
+                    job_id,
+                    proposal_id,
+                    workspace_id,
+                    executed_by,
+                    execution_mode,
+                    validated_sql,
+                    dry_run_summary,
+                    execution_receipt,
+                    status,
+                    started_at,
+                    finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    execution_id,
+                    normalized_job_id,
+                    normalized_proposal_id,
+                    normalized_workspace_id,
+                    normalized_executed_by,
+                    execution_mode,
+                    validated_sql,
+                    json.dumps(dry_run_summary, ensure_ascii=False),
+                    json.dumps(receipt, ensure_ascii=False),
+                    execution_status,
+                    started_at,
+                    finished_at,
+                ),
+            )
+            final_job_status = "succeeded" if execution_status == "succeeded" else "failed"
+            self._set_job_status(
+                conn=conn,
+                job_id=normalized_job_id,
+                status=final_job_status,
+                business_type_guess=None,
+                agent_session_id=None,
+            )
+            event_type = "execution_succeeded" if execution_status == "succeeded" else "execution_failed"
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type=event_type,
+                payload={
+                    "execution_id": execution_id,
+                    "proposal_id": normalized_proposal_id,
+                    "status": execution_status,
+                    "receipt": receipt,
+                },
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="job_status_updated",
+                payload={"status": final_job_status, "trigger": "ingestion_execute_finalize"},
+            )
+            conn.commit()
+
+        if execution_status != "succeeded":
+            raise IngestionPlanningError(
+                code="INGESTION_EXECUTION_FAILED",
+                message=f"Execution failed: {failure_message}",
+                status_code=500,
+            )
+
+        return {
+            "status": "succeeded",
+            "workspace_id": normalized_workspace_id,
+            "job_id": normalized_job_id,
+            "proposal_id": normalized_proposal_id,
+            "execution_id": execution_id,
+            "receipt": receipt,
+        }
+
     def _run_tool(
         self,
         *,
@@ -478,6 +985,471 @@ class WriteIngestionAgentRuntime:
             "route": route.to_payload(),
             "tool_trace": trace,
         }
+
+    def _load_job_for_approval(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+    ) -> sqlite3.Row:
+        row = conn.execute(
+            """
+            SELECT id, workspace_id, upload_id, status, agent_session_id
+            FROM ingestion_jobs
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (job_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="INGESTION_JOB_NOT_FOUND",
+                message="Ingestion job not found",
+                status_code=404,
+            )
+        status = str(row["status"])
+        if status != "awaiting_user_approval":
+            raise IngestionPlanningError(
+                code="INGESTION_APPROVAL_NOT_ALLOWED",
+                message=f"Job status does not allow approval: {status}",
+                status_code=409,
+            )
+        return row
+
+    def _load_job_for_execution(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+    ) -> sqlite3.Row:
+        row = conn.execute(
+            """
+            SELECT id, workspace_id, upload_id, status, agent_session_id
+            FROM ingestion_jobs
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (job_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="INGESTION_JOB_NOT_FOUND",
+                message="Ingestion job not found",
+                status_code=404,
+            )
+        status = str(row["status"])
+        if status != "approved":
+            raise IngestionPlanningError(
+                code="INGESTION_EXECUTION_NOT_ALLOWED",
+                message=f"Job status does not allow execution: {status}",
+                status_code=409,
+            )
+        return row
+
+    def _load_proposal(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+        proposal_id: str,
+    ) -> tuple[sqlite3.Row, IngestionProposalPayload]:
+        row = conn.execute(
+            """
+            SELECT id, workspace_id, job_id, proposal_version, proposal_json
+            FROM ingestion_proposals
+            WHERE id = ? AND workspace_id = ? AND job_id = ?
+            """,
+            (proposal_id, workspace_id, job_id),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="INGESTION_PROPOSAL_NOT_FOUND",
+                message="Ingestion proposal not found",
+                status_code=404,
+            )
+
+        payload = _decode_json_dict(row["proposal_json"])
+        try:
+            proposal = IngestionProposalPayload.model_validate(payload)
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="INGESTION_PROPOSAL_INVALID",
+                message="Persisted proposal payload is invalid",
+                status_code=500,
+            ) from exc
+        return row, proposal
+
+    def _load_latest_approval_event(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        proposal_id: str,
+    ) -> dict[str, Any]:
+        row = conn.execute(
+            """
+            SELECT payload
+            FROM ingestion_events
+            WHERE job_id = ? AND event_type = 'proposal_approved'
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="INGESTION_APPROVAL_NOT_FOUND",
+                message="Proposal has not been approved",
+                status_code=409,
+            )
+        payload = _decode_json_dict(row["payload"])
+        if str(payload.get("proposal_id", "")).strip() != proposal_id:
+            raise IngestionPlanningError(
+                code="INGESTION_APPROVAL_MISMATCH",
+                message="Proposal approval context is not bound to this proposal",
+                status_code=409,
+            )
+        required = (
+            "approved_action",
+            "target_table",
+            "validated_sql",
+            "validated_sql_hash",
+            "dry_run_summary",
+        )
+        for key in required:
+            if key not in payload:
+                raise IngestionPlanningError(
+                    code="INGESTION_APPROVAL_INVALID",
+                    message="Approval payload is incomplete",
+                    status_code=500,
+                )
+        return payload
+
+    def _resolve_approved_target(
+        self,
+        *,
+        proposal_payload: IngestionProposalPayload,
+        approved_action: str,
+        overrides: IngestionApprovalOverrides | None,
+    ) -> tuple[str, str]:
+        override_target = (overrides.target_table if overrides else None) or None
+        override_time_grain = (overrides.time_grain if overrides else None) or None
+
+        if approved_action == "update_existing":
+            candidate = (override_target or proposal_payload.target_table or "").strip().lower()
+            if not candidate:
+                raise IngestionPlanningError(
+                    code="TARGET_TABLE_REQUIRED",
+                    message="target_table is required for update_existing",
+                    status_code=422,
+                )
+            if not SAFE_IDENTIFIER_RE.match(candidate):
+                raise IngestionPlanningError(
+                    code="TARGET_TABLE_INVALID",
+                    message="target_table must be a valid SQL identifier",
+                    status_code=422,
+                )
+            return candidate, "none"
+
+        time_grain = override_time_grain or proposal_payload.time_grain
+        base_target = (
+            override_target
+            or proposal_payload.target_table
+            or f"{proposal_payload.business_type}_ingestion"
+        ).strip().lower()
+        if not SAFE_IDENTIFIER_RE.match(base_target):
+            raise IngestionPlanningError(
+                code="TARGET_TABLE_INVALID",
+                message="target_table must be a valid SQL identifier",
+                status_code=422,
+            )
+
+        if approved_action == "new_table":
+            if override_target:
+                return base_target, "none"
+            suffix = datetime.now(timezone.utc).strftime("%Y%m%d")
+            return f"{base_target}_{suffix}", "none"
+
+        if approved_action == "time_partitioned_new_table":
+            if override_target:
+                return base_target, time_grain
+            suffix = self._partition_suffix(time_grain)
+            return f"{base_target}_{suffix}", time_grain
+
+        raise IngestionPlanningError(
+            code="WRITE_ACTION_UNSUPPORTED",
+            message=f"Unsupported approved action: {approved_action}",
+            status_code=422,
+        )
+
+    @staticmethod
+    def _partition_suffix(time_grain: str) -> str:
+        now = datetime.now(timezone.utc)
+        if time_grain == "year":
+            return now.strftime("%Y")
+        if time_grain == "quarter":
+            quarter = ((now.month - 1) // 3) + 1
+            return f"{now.year}q{quarter}"
+        return now.strftime("%Y%m")
+
+    def _build_validated_sql(
+        self,
+        *,
+        approved_action: str,
+        target_table: str,
+        staging_table: str,
+        proposal_payload: IngestionProposalPayload,
+    ) -> str:
+        mapping_values = [
+            str(value).strip().lower()
+            for value in proposal_payload.column_mapping.values()
+            if str(value).strip()
+        ]
+        match_columns = [
+            str(value).strip().lower()
+            for value in proposal_payload.match_columns
+            if str(value).strip()
+        ]
+        ordered_columns = self._dedupe_preserve_order([*mapping_values, *match_columns])
+        safe_columns = [column for column in ordered_columns if SAFE_IDENTIFIER_RE.match(column)]
+        if not safe_columns:
+            safe_columns = self._dedupe_preserve_order(match_columns)
+        if not safe_columns:
+            raise IngestionPlanningError(
+                code="COLUMN_MAPPING_INVALID",
+                message="Cannot build write SQL without valid mapped columns",
+                status_code=422,
+            )
+
+        if approved_action == "update_existing":
+            if not match_columns:
+                raise IngestionPlanningError(
+                    code="MATCH_COLUMNS_REQUIRED",
+                    message="match_columns are required for update_existing",
+                    status_code=422,
+                )
+            safe_match_columns = [value for value in match_columns if SAFE_IDENTIFIER_RE.match(value)]
+            if not safe_match_columns:
+                raise IngestionPlanningError(
+                    code="MATCH_COLUMNS_INVALID",
+                    message="match_columns must be valid SQL identifiers",
+                    status_code=422,
+                )
+            match_expr = " AND ".join([f"t.{value} = s.{value}" for value in safe_match_columns])
+            update_columns = [value for value in safe_columns if value not in set(safe_match_columns)]
+            if not update_columns:
+                update_columns = list(safe_columns)
+            update_expr = ", ".join([f"{value} = s.{value}" for value in update_columns])
+            insert_cols = ", ".join(safe_columns)
+            insert_vals = ", ".join([f"s.{value}" for value in safe_columns])
+            return (
+                f"MERGE INTO {target_table} AS t\n"
+                f"USING {staging_table} AS s\n"
+                f"ON {match_expr}\n"
+                f"WHEN MATCHED THEN UPDATE SET {update_expr}\n"
+                f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"
+            )
+
+        select_cols = ", ".join(safe_columns)
+        return (
+            f"CREATE TABLE {target_table} AS\n"
+            f"SELECT {select_cols} FROM {staging_table}"
+        )
+
+    def _build_dry_run_summary(
+        self,
+        *,
+        proposal_payload: IngestionProposalPayload,
+        approved_action: str,
+        target_table: str,
+        time_grain: str,
+    ) -> dict[str, Any]:
+        preview = proposal_payload.diff_preview.model_dump(mode="json")
+        predicted_insert = int(preview.get("predicted_insert_count", 0))
+        predicted_update = int(preview.get("predicted_update_count", 0))
+        predicted_conflict = int(preview.get("predicted_conflict_count", 0))
+        affected = predicted_insert + predicted_update
+        schema_warnings = [
+            f"match_column_missing:{column}"
+            for column in proposal_payload.match_columns
+            if column not in set(proposal_payload.column_mapping.values())
+        ]
+        return {
+            "approved_action": approved_action,
+            "target_table": target_table,
+            "time_grain": time_grain,
+            "predicted_insert_count": max(predicted_insert, 0),
+            "predicted_update_count": max(predicted_update, 0),
+            "predicted_conflict_count": max(predicted_conflict, 0),
+            "predicted_affected_rows": max(affected, 0),
+            "schema_warnings": schema_warnings,
+            "risks": list(proposal_payload.risks),
+        }
+
+    def _run_execution_transaction(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        target_table: str,
+        approved_action: str,
+        validated_sql: str,
+        dry_run_summary: dict[str, Any],
+        upload_info: dict[str, Any],
+        proposal_payload: IngestionProposalPayload,
+    ) -> dict[str, Any]:
+        upload_path = Path(str(upload_info["storage_path"])).resolve()
+        if not upload_path.exists():
+            raise IngestionPlanningError(
+                code="UPLOAD_FILE_MISSING",
+                message="Uploaded file no longer exists on disk",
+                status_code=500,
+            )
+
+        dataframe = self._load_execution_dataframe(
+            upload_path=upload_path,
+            proposal_payload=proposal_payload,
+        )
+        staging_table = self._staging_table_name(job_id)
+        db_path = self._workspace_duckdb_path(workspace_id=workspace_id)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            conn = duckdb.connect(str(db_path))
+        except Exception as exc:  # pragma: no cover - defensive
+            raise IngestionPlanningError(
+                code="DUCKDB_CONNECT_FAILED",
+                message=f"Unable to open workspace DuckDB: {exc}",
+                status_code=500,
+            ) from exc
+
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            conn.register("ingestion_upload_df", dataframe)
+            conn.execute(f"CREATE OR REPLACE TEMP TABLE {staging_table} AS SELECT * FROM ingestion_upload_df")
+            conn.unregister("ingestion_upload_df")
+
+            if approved_action == "update_existing":
+                conn.execute(
+                    f"CREATE TABLE IF NOT EXISTS {target_table} AS SELECT * FROM {staging_table} WHERE 1 = 0"
+                )
+
+            conn.execute(validated_sql)
+            rows_after = int(conn.execute(f"SELECT COUNT(*) FROM {target_table}").fetchone()[0])
+            conn.execute("COMMIT")
+        except Exception as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:  # pragma: no cover - defensive
+                pass
+            raise IngestionPlanningError(
+                code="INGESTION_EXECUTION_FAILED",
+                message=f"DuckDB execution failed: {exc}",
+                status_code=500,
+            ) from exc
+        finally:
+            conn.close()
+
+        predicted_insert = int(dry_run_summary.get("predicted_insert_count", 0))
+        predicted_update = int(dry_run_summary.get("predicted_update_count", 0))
+        return {
+            "success": True,
+            "workspace_id": workspace_id,
+            "job_id": job_id,
+            "target_table": target_table,
+            "execution_mode": approved_action,
+            "inserted_rows": max(predicted_insert, 0),
+            "updated_rows": max(predicted_update, 0),
+            "affected_rows": max(predicted_insert, 0) + max(predicted_update, 0),
+            "rows_after": rows_after,
+            "duckdb_path": str(db_path),
+            "finished_at": _utc_now(),
+        }
+
+    def _workspace_duckdb_path(self, *, workspace_id: str) -> Path:
+        from ..config import get_settings
+
+        root = get_settings().upload_dir / "agentic_ingestion" / "duckdb"
+        safe_workspace = re.sub(r"[^A-Za-z0-9_-]+", "_", workspace_id).strip("_") or "workspace"
+        return (root / f"{safe_workspace}.duckdb").resolve()
+
+    def _load_execution_dataframe(
+        self,
+        *,
+        upload_path: Path,
+        proposal_payload: IngestionProposalPayload,
+    ) -> pd.DataFrame:
+        try:
+            sheets = pd.read_excel(upload_path, sheet_name=None, dtype=object, engine="openpyxl")
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="UPLOAD_READ_FAILED",
+                message=f"Unable to read uploaded workbook: {exc}",
+                status_code=500,
+            ) from exc
+        if not sheets:
+            raise IngestionPlanningError(
+                code="UPLOAD_READ_FAILED",
+                message="Uploaded workbook has no readable sheets",
+                status_code=500,
+            )
+
+        alias_map = {
+            str(key): str(value).strip().lower()
+            for key, value in proposal_payload.column_mapping.items()
+            if str(key).strip() and str(value).strip()
+        }
+        merged_frames: list[pd.DataFrame] = []
+        for frame in sheets.values():
+            renamed = self._normalize_frame_columns(frame=frame, alias_map=alias_map)
+            merged_frames.append(renamed)
+
+        merged = pd.concat(merged_frames, ignore_index=True, sort=False)
+        merged = merged.where(pd.notna(merged), None)
+        if merged.empty:
+            merged = pd.DataFrame(columns=list({*merged.columns}))
+        return merged
+
+    def _normalize_frame_columns(
+        self,
+        *,
+        frame: pd.DataFrame,
+        alias_map: dict[str, str],
+    ) -> pd.DataFrame:
+        rename_map: dict[str, str] = {}
+        seen: set[str] = set()
+        for index, column in enumerate(frame.columns):
+            raw = str(column).strip()
+            candidate = alias_map.get(raw) or self._normalize_identifier(raw)
+            if not candidate:
+                candidate = f"c_{index + 1}"
+            if not SAFE_IDENTIFIER_RE.match(candidate):
+                candidate = f"c_{index + 1}"
+            base = candidate
+            seq = 2
+            while candidate in seen:
+                candidate = f"{base}_{seq}"
+                seq += 1
+            seen.add(candidate)
+            rename_map[column] = candidate
+        return frame.rename(columns=rename_map)
+
+    @staticmethod
+    def _staging_table_name(job_id: str) -> str:
+        return f"staging_{job_id[:12].lower()}"
+
+    @staticmethod
+    def _dedupe_preserve_order(values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            lowered = value.strip().lower()
+            if not lowered:
+                continue
+            if lowered in result:
+                continue
+            result.append(lowered)
+        return result
 
     def _persist_proposal(
         self,
@@ -768,6 +1740,7 @@ class WriteIngestionAgentRuntime:
             SELECT
                 id,
                 file_name,
+                storage_path,
                 size_bytes,
                 file_hash,
                 sheet_summary,
@@ -787,6 +1760,7 @@ class WriteIngestionAgentRuntime:
         return {
             "upload_id": str(row["id"]),
             "file_name": str(row["file_name"]),
+            "storage_path": str(row["storage_path"]),
             "size_bytes": int(row["size_bytes"]),
             "file_hash": str(row["file_hash"]),
             "sheet_summary": _decode_json_dict(row["sheet_summary"]),

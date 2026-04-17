@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IngestionLifecyclePanel } from "./ingestion-lifecycle-panel";
 
 export function ChatPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -56,6 +57,10 @@ export function ChatPanel() {
           New Chat
         </Button>
       </header>
+
+      {activeWorkspaceId ? (
+        <IngestionLifecyclePanel workspaceId={activeWorkspaceId} workspaceTitle={activeWorkspaceTitle} />
+      ) : null}
 
       {/* Messages */}
       <div className="flex-1 overflow-hidden">
