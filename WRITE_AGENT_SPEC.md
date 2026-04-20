@@ -58,20 +58,6 @@ Claude Agent SDK 官方支持 **自定义工具、MCP、hooks、structured outpu
 
 ---
 
-## 3. 非目标
-
-以下内容不属于本次 Feature 范围：
-
-1. 不实现完整企业级 IAM / SSO / 组织架构系统。
-2. 不实现复杂的“逻辑数据集 + 多版本管理平台”。
-3. 不实现行级自然语言增删改。
-4. 不实现跨 Workspace 的表共享治理。
-5. 不强求一次性替换掉 legacy `/datasets/upload`。
-6. 不将业务审批建立在 Claude SDK 的 `AskUserQuestion` 机制上。
-7. 不引入通用“任意数据库写入平台”，本次仅覆盖 SmartHRBI 的受控数据摄入。
-
----
-
 ## 4. 核心决策
 
 ### 4.1 Workspace 优先

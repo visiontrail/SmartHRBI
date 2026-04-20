@@ -118,15 +118,18 @@ export function IngestionSetupCard({
   }
 
   return (
-    <Card data-testid="ingestion-setup-card">
+    <Card
+      className="flex max-h-[calc(100dvh-14rem)] flex-col overflow-hidden"
+      data-testid="ingestion-setup-card"
+    >
       <CardHeader>
         <CardTitle>{t("ingestion.setup.title")}</CardTitle>
         <CardDescription>
           {t("ingestion.setup.description")}
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form className="space-y-3" onSubmit={handleSubmit}>
+      <CardContent className="min-h-0 flex-1 overflow-y-auto pr-2 scrollbar-thin">
+        <form className="space-y-3 pb-1" onSubmit={handleSubmit}>
           <label className="block space-y-1 text-label text-stone-gray">
             <span>{t("ingestion.setup.businessType")}</span>
             <select
@@ -251,7 +254,7 @@ export function IngestionSetupCard({
             </p>
           ) : null}
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 pt-1">
             <Button type="submit" size="sm" disabled={isSubmitting}>
               {isSubmitting ? t("ingestion.setup.applying") : t("ingestion.setup.apply")}
             </Button>

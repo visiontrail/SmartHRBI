@@ -57,7 +57,7 @@ export function AppShell() {
 
   if (workspaceListQuery.isLoading && workspaces.length === 0) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-parchment">
+      <div className="flex h-[100dvh] w-screen items-center justify-center bg-parchment">
         <p className="text-body text-stone-gray">{t("app.loadingWorkspaces")}</p>
       </div>
     );
@@ -73,7 +73,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-parchment">
+    <div className="flex h-[100dvh] w-screen overflow-hidden bg-parchment">
       {chatSidebarOpen && <GlobalSidebar />}
 
       <div className="flex flex-1 min-w-0 overflow-hidden">
