@@ -129,6 +129,18 @@ class DiffPreview(BaseModel):
     predicted_conflict_count: int = Field(default=0, ge=0)
 
 
+class IngestionAgentGuess(BaseModel):
+    business_type: Literal["roster", "project_progress", "attendance", "other"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str = Field(default="", max_length=1000)
+
+
+class IngestionSetupQuestion(BaseModel):
+    question_id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=200)
+    options: list[str] = Field(default_factory=list)
+
+
 class IngestionProposalPayload(BaseModel):
     business_type: Literal["roster", "project_progress", "attendance", "other"]
     confidence: float = Field(ge=0.0, le=1.0)
@@ -151,6 +163,24 @@ class IngestionProposalPayload(BaseModel):
     sql_draft: str = ""
     requires_catalog_setup: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class IngestionHumanApprovalRequest(BaseModel):
+    required: bool = True
+    mechanism: Literal["frontend_approval_card", "catalog_setup_card"]
+    stage: Literal["proposal_approval", "catalog_setup"]
+    question: str = Field(min_length=1, max_length=300)
+    options: list[str] = Field(default_factory=list)
+    recommended_option: str | None = Field(default=None, max_length=80)
+
+
+class IngestionAgentPlanOutput(BaseModel):
+    status: Literal["awaiting_catalog_setup", "awaiting_user_approval"]
+    agent_guess: IngestionAgentGuess
+    setup_questions: list[IngestionSetupQuestion] = Field(default_factory=list)
+    suggested_catalog_seed: IngestionCatalogSetupSeed | None = None
+    proposal: IngestionProposalPayload | None = None
+    human_approval: IngestionHumanApprovalRequest
 
 
 class IngestionApprovalOverrides(BaseModel):

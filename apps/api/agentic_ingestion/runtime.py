@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import re
-import socket
 import sqlite3
 import time
 import uuid
@@ -12,20 +11,35 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 
+import anyio
 import duckdb
 import pandas as pd
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ClaudeSDKError,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ResultMessage,
+    TextBlock,
+    ToolAnnotations,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+    create_sdk_mcp_server,
+    tool,
+)
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
 from ..config import get_settings
 from .models import (
+    IngestionAgentPlanOutput,
     IngestionApprovalOverrides,
     IngestionCatalogSetupSeed,
     IngestionProposalPayload,
-    SETUP_WRITE_MODES,
 )
 from .routing import RouteDecision, select_agent_route
 
@@ -45,25 +59,164 @@ DEFAULT_ACTION_OPTIONS = [
     "new_table",
     "cancel",
 ]
-WRITE_MODE_TO_ACTION: dict[str, str] = {
-    "update_existing": "update_existing",
-    "time_partitioned_new_table": "time_partitioned_new_table",
-    "new_table": "new_table",
-    "append_only": "update_existing",
-}
-BUSINESS_TYPE_VALUES = {"roster", "project_progress", "attendance", "other"}
-_BUSINESS_TYPE_SYSTEM_PROMPT = """\
-You are an ingestion classifier.
-Classify the uploaded workbook into exactly one business type:
-- roster
-- project_progress
-- attendance
-- other
+CATALOG_SETUP_APPROVAL_OPTIONS = ["confirm_catalog_setup", "cancel"]
+INGESTION_SDK_MCP_SERVER_NAME = "ingestion"
+INGESTION_SDK_RUNTIME_BACKEND = "claude-agent-sdk"
+INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "get_workspace_catalog",
+        "description": (
+            "List workspace catalog entries that describe known writable targets, "
+            "business types, write modes, primary keys, and match columns."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+            },
+            "required": ["workspace_id"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "list_existing_tables",
+        "description": "List writable table names known for the workspace.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+            },
+            "required": ["workspace_id"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "inspect_upload",
+        "description": "Inspect the uploaded workbook metadata, sheets, columns, and sample preview.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "upload_id": {"type": "string"},
+            },
+            "required": ["upload_id"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "describe_table_schema",
+        "description": "Describe one catalog target's configured writable schema contract.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+                "table_name": {"type": "string"},
+            },
+            "required": ["workspace_id", "table_name"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "build_diff_preview",
+        "description": (
+            "Build a bounded dry preview for the proposed action using the upload row counts "
+            "and proposed match columns. This estimates inserts, updates, and conflicts."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "upload_id": {"type": "string"},
+                "match_columns": {"type": "array", "items": {"type": "string"}},
+                "action_mode": {"type": "string", "enum": DEFAULT_ACTION_OPTIONS},
+            },
+            "required": ["upload_id", "action_mode"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "generate_write_sql_draft",
+        "description": (
+            "Generate a draft SQL shape for the proposed write action. The draft is explanatory; "
+            "execution will later rebuild and validate SQL after human approval."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "target_table": {"type": "string"},
+                "action_mode": {"type": "string", "enum": DEFAULT_ACTION_OPTIONS},
+                "match_columns": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["workspace_id", "job_id", "target_table", "action_mode"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "request_human_approval",
+        "description": (
+            "Trigger the product Human-in-the-Loop approval mechanism. The agent must call this "
+            "before returning a setup request or a write proposal. This tool never approves; it "
+            "records the question and returns that approval is pending."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "stage": {"type": "string", "enum": ["catalog_setup", "proposal_approval"]},
+                "question": {"type": "string"},
+                "options": {"type": "array", "items": {"type": "string"}},
+                "recommended_option": {"type": "string"},
+            },
+            "required": ["stage", "question", "options"],
+        },
+        "read_only": False,
+    },
+]
+INGESTION_SDK_TOOL_NAMES = tuple(str(item["name"]) for item in INGESTION_AGENT_TOOL_DEFINITIONS)
+INGESTION_SDK_ALLOWED_TOOL_NAMES = tuple(
+    f"mcp__{INGESTION_SDK_MCP_SERVER_NAME}__{name}" for name in INGESTION_SDK_TOOL_NAMES
+)
+INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE = [
+    "inspect_upload",
+    "get_workspace_catalog",
+    "list_existing_tables",
+    "describe_table_schema",
+    "build_diff_preview",
+    "generate_write_sql_draft",
+    "request_human_approval",
+]
+MIN_INGESTION_AGENT_MAX_TURNS = len(INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE) + 2
+INGESTION_AGENT_SYSTEM_PROMPT = """\
+You are SmartHRBI's Write Ingestion Agent.
 
-Return only one JSON object with keys:
-- business_type: one of roster|project_progress|attendance|other
-- confidence: number between 0 and 1
-- reasoning: short sentence (<= 120 chars)
+The application has already routed this request to you through select_agent_route.
+Do not rely on hidden business rules. Use the provided tools to inspect the upload,
+workspace catalog, existing targets, and proposed diff before you decide what should
+happen next.
+
+Allowed decisions:
+- awaiting_catalog_setup: choose this when the workspace catalog is insufficient for
+  a confident writable target. Return setup_questions and suggested_catalog_seed.
+- awaiting_user_approval: choose this when you can produce a concrete write proposal.
+  Return proposal with business_type, confidence, recommended_action, candidate_actions,
+  target_table, match_columns, column_mapping, diff_preview, risks, explanation, and
+  sql_draft.
+
+Human approval is mandatory:
+- Before awaiting_catalog_setup, call request_human_approval with stage=catalog_setup
+  and options restricted to confirm_catalog_setup or cancel.
+- Before awaiting_user_approval, first complete build_diff_preview and
+  generate_write_sql_draft, then call request_human_approval with
+  stage=proposal_approval and options restricted to update_existing,
+  time_partitioned_new_table, new_table, or cancel.
+- Never claim approval has happened. The front-end approval card and /ingestion/approve
+  endpoint are the only approval mechanisms.
+
+For an existing-table proposal, use this exact order whenever the target table is known:
+inspect_upload, get_workspace_catalog, list_existing_tables, describe_table_schema,
+build_diff_preview, generate_write_sql_draft, request_human_approval, then the final
+structured output.
+
+Do not execute writes. Do not invent tool results. Return only the required structured output.
 """
 
 
@@ -275,89 +428,75 @@ class WriteIngestionAgentRuntime:
                 payload={"status": "planning", "trigger": "ingestion_plan"},
             )
 
-            tool_trace: list[dict[str, Any]] = []
-            catalog_payload = self._run_tool(
+            agent_output, tool_trace = self._run_planning_agent_loop(
                 conn=conn,
+                workspace_id=normalized_workspace_id,
                 job_id=normalized_job_id,
-                trace=tool_trace,
-                name="get_workspace_catalog",
-                arguments={"workspace_id": normalized_workspace_id},
-                handler=lambda: self._tool_get_workspace_catalog(
-                    conn=conn,
-                    workspace_id=normalized_workspace_id,
-                ),
+                upload_id=str(job["upload_id"]),
+                requested_by=normalized_requested_by,
+                conversation_id=normalized_conversation_id,
+                message=message,
             )
-            existing_tables = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="list_existing_tables",
-                arguments={"workspace_id": normalized_workspace_id},
-                handler=lambda: self._tool_list_existing_tables(
-                    conn=conn,
-                    workspace_id=normalized_workspace_id,
-                ),
-            )
-            upload_info = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="inspect_upload",
-                arguments={"upload_id": str(job["upload_id"])},
-                handler=lambda: self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"])),
-            )
-            business_guess = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="infer_business_type",
-                arguments={"upload_id": str(job["upload_id"])},
-                handler=lambda: self._tool_infer_business_type(upload_info=upload_info),
-            )
-            analysis_audit = {"business_type_inference": self._business_type_inference_audit(business_guess)}
+            agent_guess = agent_output.agent_guess.model_dump(mode="json")
+            analysis_audit = {
+                "agent_planning": {
+                    "engine": "write_ingestion_agent_loop",
+                    "runtime_backend": INGESTION_SDK_RUNTIME_BACKEND,
+                    "model": get_settings().ai_model.strip(),
+                    "human_approval_tool_required": True,
+                }
+            }
             self._insert_event(
                 conn=conn,
                 job_id=normalized_job_id,
                 event_type="business_type_inferred",
                 payload={
-                    "business_type": business_guess.get("business_type"),
-                    "confidence": business_guess.get("confidence"),
-                    "reasoning": business_guess.get("reasoning", ""),
-                    "analysis_audit": analysis_audit["business_type_inference"],
+                    "business_type": agent_guess["business_type"],
+                    "confidence": agent_guess["confidence"],
+                    "reasoning": agent_guess.get("reasoning", ""),
+                    "analysis_audit": analysis_audit["agent_planning"],
                 },
             )
             logger.info(
-                "ingestion_business_type_inferred workspace_id=%s job_id=%s business_type=%s confidence=%s engine=%s ai_configured=%s ai_attempted=%s ai_succeeded=%s fallback_reason=%s",
+                "ingestion_agent_plan_generated workspace_id=%s job_id=%s status=%s business_type=%s confidence=%s",
                 normalized_workspace_id,
                 normalized_job_id,
-                business_guess.get("business_type", "other"),
-                business_guess.get("confidence", 0.0),
-                analysis_audit["business_type_inference"]["engine"],
-                analysis_audit["business_type_inference"]["ai_configured"],
-                analysis_audit["business_type_inference"]["ai_attempted"],
-                analysis_audit["business_type_inference"]["ai_succeeded"],
-                analysis_audit["business_type_inference"]["fallback_reason"],
+                agent_output.status,
+                agent_guess["business_type"],
+                agent_guess["confidence"],
             )
 
-            catalog_entries = list(catalog_payload.get("entries", []))
-            candidate_catalog_entries = [
-                item for item in catalog_entries if item["business_type"] == business_guess["business_type"]
-            ]
-            if not candidate_catalog_entries:
-                setup_payload = self._build_setup_required_payload(
-                    workspace_id=normalized_workspace_id,
-                    job_id=normalized_job_id,
-                    upload_info=upload_info,
-                    business_guess=business_guess,
-                    route=route,
-                    trace=tool_trace,
-                    analysis_audit=analysis_audit,
+            if agent_output.status == "awaiting_catalog_setup":
+                self._assert_human_approval_requested(
+                    agent_output=agent_output,
+                    tool_trace=tool_trace,
+                    expected_stage="catalog_setup",
                 )
+                if agent_output.suggested_catalog_seed is None:
+                    raise IngestionPlanningError(
+                        code="AGENT_SETUP_SEED_REQUIRED",
+                        message="Agent output must include suggested_catalog_seed for catalog setup",
+                        status_code=502,
+                    )
+                setup_payload = {
+                    "status": "awaiting_catalog_setup",
+                    "workspace_id": normalized_workspace_id,
+                    "job_id": normalized_job_id,
+                    "agent_guess": agent_guess,
+                    "setup_questions": [
+                        item.model_dump(mode="json") for item in agent_output.setup_questions
+                    ],
+                    "suggested_catalog_seed": agent_output.suggested_catalog_seed.model_dump(mode="json"),
+                    "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                    "route": route.to_payload(),
+                    "tool_trace": tool_trace,
+                    "analysis_audit": analysis_audit,
+                }
                 self._set_job_status(
                     conn=conn,
                     job_id=normalized_job_id,
                     status="awaiting_catalog_setup",
-                    business_type_guess=business_guess["business_type"],
+                    business_type_guess=agent_guess["business_type"],
                     agent_session_id=normalized_conversation_id,
                 )
                 self._insert_event(
@@ -365,9 +504,10 @@ class WriteIngestionAgentRuntime:
                     job_id=normalized_job_id,
                     event_type="setup_required",
                     payload={
-                        "business_type": business_guess["business_type"],
-                        "confidence": business_guess["confidence"],
-                        "analysis_audit": analysis_audit["business_type_inference"],
+                        "business_type": agent_guess["business_type"],
+                        "confidence": agent_guess["confidence"],
+                        "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                        "analysis_audit": analysis_audit["agent_planning"],
                     },
                 )
                 conn.commit()
@@ -378,83 +518,18 @@ class WriteIngestionAgentRuntime:
                 )
                 return setup_payload
 
-            target_catalog = self._pick_target_catalog(candidate_catalog_entries)
-            table_schema = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="describe_table_schema",
-                arguments={"table_name": target_catalog["table_name"]},
-                handler=lambda: self._tool_describe_table_schema(target_catalog=target_catalog),
+            self._assert_human_approval_requested(
+                agent_output=agent_output,
+                tool_trace=tool_trace,
+                expected_stage="proposal_approval",
             )
-
-            recommended_action = WRITE_MODE_TO_ACTION.get(
-                str(target_catalog["write_mode"]),
-                "update_existing",
-            )
-            match_columns = list(target_catalog["match_columns"] or target_catalog["primary_keys"])
-            diff_preview = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="build_diff_preview",
-                arguments={
-                    "upload_id": str(job["upload_id"]),
-                    "target_table": target_catalog["table_name"],
-                    "match_columns": match_columns,
-                    "action_mode": recommended_action,
-                },
-                handler=lambda: self._tool_build_diff_preview(
-                    upload_info=upload_info,
-                    match_columns=match_columns,
-                    action_mode=recommended_action,
-                ),
-            )
-            sql_draft_payload = self._run_tool(
-                conn=conn,
-                job_id=normalized_job_id,
-                trace=tool_trace,
-                name="generate_write_sql_draft",
-                arguments={
-                    "target_table": target_catalog["table_name"],
-                    "action_mode": recommended_action,
-                },
-                handler=lambda: self._tool_generate_write_sql_draft(
-                    workspace_id=normalized_workspace_id,
-                    job_id=normalized_job_id,
-                    target_table=target_catalog["table_name"],
-                    action_mode=recommended_action,
-                    match_columns=match_columns,
-                ),
-            )
-
-            risks = self._build_risks(
-                upload_info=upload_info,
-                match_columns=match_columns,
-                diff_preview=diff_preview,
-            )
-            proposal = IngestionProposalPayload(
-                business_type=business_guess["business_type"],
-                confidence=business_guess["confidence"],
-                recommended_action=recommended_action,
-                candidate_actions=DEFAULT_ACTION_OPTIONS,
-                target_table=target_catalog["table_name"],
-                time_grain=target_catalog["time_grain"],
-                match_columns=match_columns,
-                column_mapping=self._build_column_mapping(
-                    upload_info=upload_info,
-                    table_schema=table_schema,
-                ),
-                diff_preview=diff_preview,
-                risks=risks,
-                explanation=(
-                    "The upload matches the workspace catalog active target and can proceed "
-                    "after explicit approval."
-                ),
-                sql_draft=sql_draft_payload["sql_draft"],
-                requires_catalog_setup=False,
-            )
-
+            if agent_output.proposal is None:
+                raise IngestionPlanningError(
+                    code="AGENT_PROPOSAL_REQUIRED",
+                    message="Agent output must include proposal for user approval",
+                    status_code=502,
+                )
+            proposal = self._normalize_agent_proposal(agent_output.proposal)
             proposal_id = self._persist_proposal(
                 conn=conn,
                 workspace_id=normalized_workspace_id,
@@ -465,7 +540,7 @@ class WriteIngestionAgentRuntime:
                 conn=conn,
                 job_id=normalized_job_id,
                 status="awaiting_user_approval",
-                business_type_guess=business_guess["business_type"],
+                business_type_guess=proposal.business_type,
                 agent_session_id=normalized_conversation_id,
             )
             self._insert_event(
@@ -476,6 +551,7 @@ class WriteIngestionAgentRuntime:
                     "proposal_id": proposal_id,
                     "recommended_action": proposal.recommended_action,
                     "target_table": proposal.target_table,
+                    "human_approval": agent_output.human_approval.model_dump(mode="json"),
                 },
             )
             conn.commit()
@@ -488,17 +564,18 @@ class WriteIngestionAgentRuntime:
                 proposal.recommended_action,
             )
 
-        return {
-            "status": "awaiting_user_approval",
-            "workspace_id": normalized_workspace_id,
-            "job_id": normalized_job_id,
-            "proposal_id": proposal_id,
-            "proposal_json": proposal.model_dump(mode="json"),
-            "route": route.to_payload(),
-            "existing_tables": existing_tables,
-            "tool_trace": tool_trace,
-            "analysis_audit": analysis_audit,
-        }
+            return {
+                "status": "awaiting_user_approval",
+                "workspace_id": normalized_workspace_id,
+                "job_id": normalized_job_id,
+                "proposal_id": proposal_id,
+                "proposal_json": proposal.model_dump(mode="json"),
+                "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                "route": route.to_payload(),
+                "existing_tables": self._latest_tool_result(tool_trace, "list_existing_tables"),
+                "tool_trace": tool_trace,
+                "analysis_audit": analysis_audit,
+            }
 
     def confirm_setup(
         self,
@@ -965,6 +1042,464 @@ class WriteIngestionAgentRuntime:
             "receipt": receipt,
         }
 
+    def _run_planning_agent_loop(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+        upload_id: str,
+        requested_by: str,
+        conversation_id: str | None,
+        message: str | None,
+    ) -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
+        settings = get_settings()
+        auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+        if not auth_token_source.strip() or not settings.ai_model.strip():
+            raise IngestionPlanningError(
+                code="INGESTION_AI_NOT_CONFIGURED",
+                message="Claude Agent SDK credentials are not configured for ingestion planning",
+                status_code=503,
+            )
+
+        async def runner() -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
+            return await self._run_planning_agent_loop_async(
+                conn=conn,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                upload_id=upload_id,
+                requested_by=requested_by,
+                conversation_id=conversation_id,
+                message=message,
+            )
+
+        try:
+            return anyio.run(runner)
+        except IngestionPlanningError:
+            raise
+        except (ClaudeSDKError, TimeoutError) as exc:
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=f"Claude Agent SDK is unavailable for ingestion planning: {exc}",
+                status_code=503,
+            ) from exc
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=f"Claude Agent SDK failed during ingestion planning: {exc}",
+                status_code=503,
+            ) from exc
+
+    async def _run_planning_agent_loop_async(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+        upload_id: str,
+        requested_by: str,
+        conversation_id: str | None,
+        message: str | None,
+    ) -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
+        settings = get_settings()
+        tool_trace: list[dict[str, Any]] = []
+        options = self._build_ingestion_sdk_options(
+            conn=conn,
+            job_id=job_id,
+            tool_trace=tool_trace,
+        )
+        prompt = self._build_ingestion_agent_prompt(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            upload_id=upload_id,
+            requested_by=requested_by,
+            message=message,
+        )
+        raw_output: dict[str, Any] | None = None
+        text_blocks: list[str] = []
+        session_id = conversation_id or f"ingestion-{job_id}"
+
+        with anyio.fail_after(settings.agent_timeout_seconds):
+            async with ClaudeSDKClient(options=options) as client:
+                await client.query(prompt, session_id=session_id)
+                async for sdk_message in client.receive_response():
+                    candidate = self._consume_ingestion_sdk_message(
+                        message=sdk_message,
+                        text_blocks=text_blocks,
+                    )
+                    if candidate is not None:
+                        raw_output = candidate
+
+        if raw_output is None and text_blocks:
+            raw_output = _decode_json_dict("\n".join(text_blocks))
+        if raw_output is None:
+            raise IngestionPlanningError(
+                code="AGENT_STRUCTURED_OUTPUT_MISSING",
+                message="Write Ingestion Agent did not return structured output",
+                status_code=502,
+            )
+        try:
+            output = IngestionAgentPlanOutput.model_validate(raw_output)
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="AGENT_STRUCTURED_OUTPUT_INVALID",
+                message="Write Ingestion Agent returned invalid structured output",
+                status_code=502,
+            ) from exc
+        return output, tool_trace
+
+    def _build_ingestion_sdk_options(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        tool_trace: list[dict[str, Any]],
+    ) -> ClaudeAgentOptions:
+        settings = get_settings()
+
+        async def can_use_tool(
+            tool_name: str,
+            input_data: dict[str, Any],
+            permission_context: Any,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            _ = (input_data, permission_context)
+            canonical_name = _canonical_ingestion_tool_name(tool_name)
+            if canonical_name in INGESTION_SDK_TOOL_NAMES:
+                return PermissionResultAllow()
+            return PermissionResultDeny(
+                message=f"Tool '{tool_name}' is outside the Write Ingestion Agent tool surface."
+            )
+
+        server = create_sdk_mcp_server(
+            name=INGESTION_SDK_MCP_SERVER_NAME,
+            version="1.0.0",
+            tools=self._build_ingestion_sdk_tools(
+                conn=conn,
+                job_id=job_id,
+                tool_trace=tool_trace,
+            ),
+        )
+        env: dict[str, str] = {
+            "API_TIMEOUT_MS": str(settings.api_timeout_ms),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+        auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+        auth_token = auth_token_source.strip()
+        if auth_token:
+            env["ANTHROPIC_API_KEY"] = auth_token
+            env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+        if settings.anthropic_base_url.strip():
+            env["ANTHROPIC_BASE_URL"] = settings.anthropic_base_url.strip()
+        model = settings.ai_model.strip() or None
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = (
+                settings.anthropic_default_haiku_model.strip() or model
+            )
+
+        return ClaudeAgentOptions(
+            tools=[],
+            system_prompt=INGESTION_AGENT_SYSTEM_PROMPT,
+            mcp_servers={INGESTION_SDK_MCP_SERVER_NAME: server},
+            can_use_tool=can_use_tool,
+            permission_mode="default",
+            max_turns=max(settings.agent_max_tool_steps, MIN_INGESTION_AGENT_MAX_TURNS),
+            model=model,
+            cwd=str(Path.cwd()),
+            env=env,
+            output_format={
+                "type": "json_schema",
+                "schema": IngestionAgentPlanOutput.model_json_schema(),
+            },
+        )
+
+    def _build_ingestion_sdk_tools(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        tool_trace: list[dict[str, Any]],
+    ) -> list[Any]:
+        sdk_tools: list[Any] = []
+        for definition in INGESTION_AGENT_TOOL_DEFINITIONS:
+            tool_name = str(definition["name"])
+            description = str(definition["description"])
+            input_schema = definition["parameters"]
+            is_read_only = bool(definition.get("read_only", True))
+            annotations = ToolAnnotations(
+                readOnlyHint=is_read_only,
+                destructiveHint=False,
+                idempotentHint=is_read_only,
+                openWorldHint=False,
+            )
+
+            async def handler(args: dict[str, Any], _tool_name: str = tool_name) -> dict[str, Any]:
+                result = self._invoke_ingestion_sdk_tool(
+                    conn=conn,
+                    job_id=job_id,
+                    tool_trace=tool_trace,
+                    tool_name=_tool_name,
+                    arguments=args,
+                )
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, ensure_ascii=False, default=str),
+                        }
+                    ],
+                    "is_error": False,
+                }
+
+            sdk_tools.append(
+                tool(
+                    tool_name,
+                    description,
+                    input_schema,
+                    annotations=annotations,
+                )(handler)
+            )
+        return sdk_tools
+
+    def _invoke_ingestion_sdk_tool(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        tool_trace: list[dict[str, Any]],
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        canonical_name = _canonical_ingestion_tool_name(tool_name)
+        if canonical_name not in INGESTION_SDK_TOOL_NAMES:
+            raise IngestionPlanningError(
+                code="INGESTION_TOOL_NOT_ALLOWED",
+                message=f"Tool '{tool_name}' is outside the Write Ingestion Agent tool surface",
+                status_code=403,
+            )
+        if not isinstance(arguments, dict):
+            arguments = {}
+        return self._run_tool(
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name=canonical_name,
+            arguments=arguments,
+            handler=lambda: self._handle_ingestion_tool(
+                conn=conn,
+                job_id=job_id,
+                tool_name=canonical_name,
+                arguments=arguments,
+            ),
+        )
+
+    def _handle_ingestion_tool(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if tool_name == "get_workspace_catalog":
+            return self._tool_get_workspace_catalog(
+                conn=conn,
+                workspace_id=str(arguments.get("workspace_id", "")),
+            )
+        if tool_name == "list_existing_tables":
+            return self._tool_list_existing_tables(
+                conn=conn,
+                workspace_id=str(arguments.get("workspace_id", "")),
+            )
+        if tool_name == "inspect_upload":
+            return self._tool_inspect_upload(
+                conn=conn,
+                upload_id=str(arguments.get("upload_id", "")),
+            )
+        if tool_name == "describe_table_schema":
+            return self._tool_describe_table_schema_by_name(
+                conn=conn,
+                workspace_id=str(arguments.get("workspace_id", "")),
+                table_name=str(arguments.get("table_name", "")),
+            )
+        if tool_name == "build_diff_preview":
+            upload_info = self._tool_inspect_upload(
+                conn=conn,
+                upload_id=str(arguments.get("upload_id", "")),
+            )
+            return self._tool_build_diff_preview(
+                upload_info=upload_info,
+                match_columns=[
+                    str(item).strip().lower()
+                    for item in arguments.get("match_columns", [])
+                    if str(item).strip()
+                ],
+                action_mode=str(arguments.get("action_mode", "")),
+            )
+        if tool_name == "generate_write_sql_draft":
+            return self._tool_generate_write_sql_draft(
+                workspace_id=str(arguments.get("workspace_id", "")),
+                job_id=str(arguments.get("job_id", job_id)),
+                target_table=str(arguments.get("target_table", "")),
+                action_mode=str(arguments.get("action_mode", "")),
+                match_columns=[
+                    str(item).strip().lower()
+                    for item in arguments.get("match_columns", [])
+                    if str(item).strip()
+                ],
+            )
+        if tool_name == "request_human_approval":
+            return self._tool_request_human_approval(conn=conn, job_id=job_id, arguments=arguments)
+        raise IngestionPlanningError(
+            code="INGESTION_TOOL_NOT_ALLOWED",
+            message=f"Unsupported ingestion tool: {tool_name}",
+            status_code=403,
+        )
+
+    @staticmethod
+    def _build_ingestion_agent_prompt(
+        *,
+        workspace_id: str,
+        job_id: str,
+        upload_id: str,
+        requested_by: str,
+        message: str | None,
+    ) -> str:
+        return json.dumps(
+            {
+                "task": "Build the next write ingestion lifecycle output.",
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "upload_id": upload_id,
+                "requested_by": requested_by,
+                "user_message": message or "",
+                "required_tool_sequence": [
+                    "inspect_upload",
+                    "get_workspace_catalog",
+                    "list_existing_tables",
+                    "describe_table_schema when a target table is considered",
+                    "build_diff_preview when producing a proposal",
+                    "generate_write_sql_draft when producing a proposal",
+                    "request_human_approval before the final structured output",
+                ],
+                "available_approval_options": {
+                    "catalog_setup": CATALOG_SETUP_APPROVAL_OPTIONS,
+                    "proposal_approval": DEFAULT_ACTION_OPTIONS,
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _consume_ingestion_sdk_message(
+        *,
+        message: Any,
+        text_blocks: list[str],
+    ) -> dict[str, Any] | None:
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text:
+                    text_blocks.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    continue
+            return None
+        if isinstance(message, UserMessage) and isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    continue
+            return None
+        if isinstance(message, ResultMessage):
+            if message.is_error:
+                error_suffix = ""
+                if message.errors:
+                    error_suffix = f": {'; '.join(str(item) for item in message.errors)}"
+                raise IngestionPlanningError(
+                    code="INGESTION_AI_UNAVAILABLE",
+                    message=(
+                        "Write Ingestion Agent ended before producing structured output "
+                        f"({message.subtype}, turns={message.num_turns}){error_suffix}"
+                    ),
+                    status_code=503,
+                )
+            if isinstance(message.structured_output, dict):
+                return message.structured_output
+            if message.result:
+                return _decode_json_dict(message.result)
+        return None
+
+    def _assert_human_approval_requested(
+        self,
+        *,
+        agent_output: IngestionAgentPlanOutput,
+        tool_trace: list[dict[str, Any]],
+        expected_stage: str,
+    ) -> None:
+        approval = agent_output.human_approval
+        if not approval.required or approval.stage != expected_stage:
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_REQUIRED",
+                message="Agent output must require human approval for the next step",
+                status_code=502,
+            )
+        allowed_options = (
+            CATALOG_SETUP_APPROVAL_OPTIONS
+            if expected_stage == "catalog_setup"
+            else DEFAULT_ACTION_OPTIONS
+        )
+        if not approval.options or any(option not in allowed_options for option in approval.options):
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_OPTIONS_INVALID",
+                message="Agent human approval options are outside the designed choices",
+                status_code=502,
+            )
+        if approval.recommended_option and approval.recommended_option not in approval.options:
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_RECOMMENDATION_INVALID",
+                message="Agent human approval recommendation is not in approval options",
+                status_code=502,
+            )
+        for item in tool_trace:
+            if item.get("tool_name") != "request_human_approval":
+                continue
+            arguments = item.get("arguments")
+            if isinstance(arguments, dict) and arguments.get("stage") == expected_stage:
+                return
+        raise IngestionPlanningError(
+            code="HUMAN_APPROVAL_NOT_REQUESTED",
+            message="Agent must call request_human_approval before returning the next step",
+            status_code=502,
+        )
+
+    @staticmethod
+    def _normalize_agent_proposal(proposal: IngestionProposalPayload) -> IngestionProposalPayload:
+        candidate_actions = list(proposal.candidate_actions)
+        if any(action not in DEFAULT_ACTION_OPTIONS for action in candidate_actions):
+            raise IngestionPlanningError(
+                code="AGENT_PROPOSAL_ACTION_INVALID",
+                message="Agent proposal contains an unsupported candidate action",
+                status_code=502,
+            )
+        if proposal.recommended_action not in candidate_actions:
+            raise IngestionPlanningError(
+                code="AGENT_PROPOSAL_RECOMMENDATION_INVALID",
+                message="Agent recommended action must be present in candidate_actions",
+                status_code=502,
+            )
+        if "cancel" not in candidate_actions:
+            raise IngestionPlanningError(
+                code="AGENT_PROPOSAL_CANCEL_REQUIRED",
+                message="Agent proposal candidate_actions must include cancel",
+                status_code=502,
+            )
+        return proposal
+
+    @staticmethod
+    def _latest_tool_result(tool_trace: list[dict[str, Any]], tool_name: str) -> dict[str, Any]:
+        for item in reversed(tool_trace):
+            if item.get("tool_name") == tool_name and isinstance(item.get("result"), dict):
+                return item["result"]
+        return {}
+
     def _run_tool(
         self,
         *,
@@ -1032,74 +1567,6 @@ class WriteIngestionAgentRuntime:
             elapsed_ms,
         )
         return result
-
-    @staticmethod
-    def _pick_target_catalog(entries: list[dict[str, Any]]) -> dict[str, Any]:
-        active = [item for item in entries if item["is_active_target"]]
-        if active:
-            return active[0]
-        return entries[0]
-
-    def _build_setup_required_payload(
-        self,
-        *,
-        workspace_id: str,
-        job_id: str,
-        upload_info: dict[str, Any],
-        business_guess: dict[str, Any],
-        route: RouteDecision,
-        trace: list[dict[str, Any]],
-        analysis_audit: dict[str, Any],
-    ) -> dict[str, Any]:
-        first_columns = list(upload_info["column_summary"].get("all_columns", []))[:3]
-        suggested_match = [first_columns[0]] if first_columns else []
-        suggested_table_name = self._suggest_table_name(
-            file_name=str(upload_info["file_name"]),
-            business_type=str(business_guess["business_type"]),
-        )
-        suggested_write_mode = "update_existing"
-        suggested_time_grain = "none"
-        if business_guess["business_type"] in {"attendance", "project_progress"}:
-            suggested_write_mode = "time_partitioned_new_table"
-            suggested_time_grain = "month"
-
-        return {
-            "status": "awaiting_catalog_setup",
-            "workspace_id": workspace_id,
-            "job_id": job_id,
-            "agent_guess": business_guess,
-            "setup_questions": [
-                {
-                    "question_id": "business_type",
-                    "title": "这份数据属于哪类业务？",
-                    "options": ["roster", "project_progress", "attendance", "other"],
-                },
-                {
-                    "question_id": "write_mode",
-                    "title": "默认写入方式是什么？",
-                    "options": list(SETUP_WRITE_MODES),
-                },
-                {
-                    "question_id": "match_columns",
-                    "title": "用于匹配更新的主键列是什么？",
-                    "options": first_columns,
-                },
-            ],
-            "suggested_catalog_seed": {
-                "business_type": business_guess["business_type"],
-                "table_name": suggested_table_name,
-                "human_label": suggested_table_name.replace("_", " ").title(),
-                "write_mode": suggested_write_mode,
-                "time_grain": suggested_time_grain,
-                "primary_keys": suggested_match,
-                "match_columns": suggested_match,
-                "is_active_target": True,
-                "description": "Seed generated from upload inspection and business-type inference.",
-            },
-            "route": route.to_payload(),
-            "tool_trace": trace,
-            "analysis_audit": analysis_audit,
-        }
 
     def _load_job_for_approval(
         self,
@@ -1883,161 +2350,31 @@ class WriteIngestionAgentRuntime:
             "sample_preview": _decode_json_list(row["sample_preview"]),
         }
 
-    def _tool_infer_business_type(self, *, upload_info: dict[str, Any]) -> dict[str, Any]:
-        columns = [
-            str(value).strip().lower()
-            for value in upload_info["column_summary"].get("all_columns", [])
-            if str(value).strip()
-        ]
-        sheet_names = [
-            str(item.get("sheet_name", "")).strip().lower()
-            for item in upload_info["sheet_summary"].get("sheets", [])
-            if str(item.get("sheet_name", "")).strip()
-        ]
-
-        settings = get_settings()
-        ai_configured = bool(
-            settings.ai_api_key.strip()
-            and settings.ai_model.strip()
-            and settings.model_provider_url.strip()
-        )
-        if not ai_configured:
-            raise IngestionPlanningError(
-                code="INGESTION_AI_NOT_CONFIGURED",
-                message="AI service is not configured for ingestion classification",
-                status_code=503,
-            )
-
-        try:
-            llm_guess = self._infer_business_type_with_llm(
-                file_name=str(upload_info.get("file_name", "")),
-                columns=columns,
-                sheet_names=sheet_names,
-                sample_preview=upload_info.get("sample_preview", []),
-                model=settings.ai_model,
-                base_url=settings.model_provider_url,
-                api_key=settings.ai_api_key,
-                timeout_seconds=settings.ai_timeout_seconds,
-            )
-        except IngestionPlanningError:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "ingestion_business_type_llm_failed file_name=%s error_type=%s error=%s",
-                str(upload_info.get("file_name", "")),
-                type(exc).__name__,
-                str(exc),
-            )
-            raise IngestionPlanningError(
-                code="INGESTION_AI_UNAVAILABLE",
-                message="AI service is unavailable for ingestion classification",
-                status_code=503,
-            ) from exc
-
-        llm_guess.update(
-            {
-                "inference_engine": "llm_classifier_v1",
-                "ai_configured": True,
-                "ai_attempted": True,
-                "ai_succeeded": True,
-                "fallback_reason": "",
-            }
-        )
-        return llm_guess
-
-    def _infer_business_type_with_llm(
+    def _tool_describe_table_schema_by_name(
         self,
         *,
-        file_name: str,
-        columns: list[str],
-        sheet_names: list[str],
-        sample_preview: list[Any],
-        model: str,
-        base_url: str,
-        api_key: str,
-        timeout_seconds: float,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        table_name: str,
     ) -> dict[str, Any]:
-        endpoint = _chat_completions_endpoint(base_url)
-        payload = {
-            "model": model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _BUSINESS_TYPE_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "file_name": file_name,
-                            "columns": columns[:80],
-                            "sheet_names": sheet_names[:20],
-                            "sample_preview": sample_preview[:2],
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-        }
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key.strip()}",
-        }
-        request = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
-
-        started_at = time.perf_counter()
-        try:
-            with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
-        except TimeoutError as exc:
-            raise RuntimeError("timeout") from exc
-        except socket.timeout as exc:
-            raise RuntimeError("timeout") from exc
-        except urllib_error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
-            raise RuntimeError(f"http_{exc.code}:{details or exc.reason}") from exc
-        except urllib_error.URLError as exc:
-            raise RuntimeError(f"url_error:{exc.reason}") from exc
-
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
-        logger.info(
-            "ingestion_business_type_llm_response file_name=%s endpoint=%s model=%s elapsed_ms=%s",
-            file_name,
-            endpoint,
-            model,
-            elapsed_ms,
-        )
-        data = _decode_json_dict(raw)
-        choices = data.get("choices", [])
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("empty_choices")
-        first = choices[0] if isinstance(choices[0], dict) else {}
-        message = first.get("message") if isinstance(first, dict) else {}
-        content = message.get("content") if isinstance(message, dict) else None
-        text_content = _content_to_text(content)
-        parsed = _json_from_text(text_content)
-
-        business_type = str(parsed.get("business_type", "")).strip()
-        if business_type not in BUSINESS_TYPE_VALUES:
-            raise RuntimeError(f"invalid_business_type:{business_type or 'empty'}")
-        confidence = _clamp_confidence(parsed.get("confidence"))
-        reasoning = str(parsed.get("reasoning", "")).strip() or "LLM classification result."
-        return {
-            "business_type": business_type,
-            "confidence": confidence,
-            "reasoning": reasoning,
-        }
-
-    @staticmethod
-    def _business_type_inference_audit(business_guess: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "engine": str(business_guess.get("inference_engine", "llm_classifier_v1")),
-            "ai_configured": bool(business_guess.get("ai_configured", False)),
-            "ai_attempted": bool(business_guess.get("ai_attempted", False)),
-            "ai_succeeded": bool(business_guess.get("ai_succeeded", False)),
-            "fallback_reason": str(business_guess.get("fallback_reason", "")),
-        }
-
-    def _tool_describe_table_schema(self, *, target_catalog: dict[str, Any]) -> dict[str, Any]:
+        normalized_table = table_name.strip().lower()
+        row = conn.execute(
+            """
+            SELECT *
+            FROM table_catalog
+            WHERE workspace_id = ? AND table_name = ?
+            ORDER BY is_active_target DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, normalized_table),
+        ).fetchone()
+        if row is None:
+            raise IngestionPlanningError(
+                code="CATALOG_ENTRY_NOT_FOUND",
+                message="Catalog entry not found for table schema description",
+                status_code=404,
+            )
+        target_catalog = self._serialize_catalog_entry(row)
         return {
             "table_name": target_catalog["table_name"],
             "business_type": target_catalog["business_type"],
@@ -2047,6 +2384,68 @@ class WriteIngestionAgentRuntime:
             "time_grain": target_catalog["time_grain"],
         }
 
+    def _tool_request_human_approval(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        stage = str(arguments.get("stage", "")).strip()
+        question = str(arguments.get("question", "")).strip()
+        options = [
+            str(item).strip()
+            for item in arguments.get("options", [])
+            if str(item).strip()
+        ]
+        recommended_option = str(arguments.get("recommended_option", "")).strip() or None
+        if stage == "catalog_setup":
+            allowed_options = CATALOG_SETUP_APPROVAL_OPTIONS
+            mechanism = "catalog_setup_card"
+        elif stage == "proposal_approval":
+            allowed_options = DEFAULT_ACTION_OPTIONS
+            mechanism = "frontend_approval_card"
+        else:
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_STAGE_INVALID",
+                message="Human approval stage is not supported",
+                status_code=422,
+            )
+        if not question:
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_QUESTION_REQUIRED",
+                message="Human approval question is required",
+                status_code=422,
+            )
+        if not options or any(option not in allowed_options for option in options):
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_OPTIONS_INVALID",
+                message="Human approval options are outside the designed choices",
+                status_code=422,
+            )
+        if recommended_option and recommended_option not in options:
+            raise IngestionPlanningError(
+                code="HUMAN_APPROVAL_RECOMMENDATION_INVALID",
+                message="Human approval recommendation must be one of the approval options",
+                status_code=422,
+            )
+        payload = {
+            "required": True,
+            "status": "pending",
+            "mechanism": mechanism,
+            "stage": stage,
+            "question": question,
+            "options": options,
+            "recommended_option": recommended_option,
+        }
+        self._insert_event(
+            conn=conn,
+            job_id=job_id,
+            event_type="human_approval_requested",
+            payload=payload,
+        )
+        return payload
+
     def _tool_build_diff_preview(
         self,
         *,
@@ -2054,10 +2453,23 @@ class WriteIngestionAgentRuntime:
         match_columns: list[str],
         action_mode: str,
     ) -> dict[str, int]:
+        normalized_action = action_mode.strip().lower()
+        if normalized_action not in DEFAULT_ACTION_OPTIONS:
+            raise IngestionPlanningError(
+                code="DIFF_PREVIEW_ACTION_INVALID",
+                message="Diff preview action is not supported",
+                status_code=422,
+            )
         sheets = upload_info["sheet_summary"].get("sheets", [])
         total_rows = sum(int(item.get("row_count", 0)) for item in sheets)
         total_rows = max(total_rows, 1)
-        if action_mode == "new_table":
+        if normalized_action == "cancel":
+            return {
+                "predicted_insert_count": 0,
+                "predicted_update_count": 0,
+                "predicted_conflict_count": 0,
+            }
+        if normalized_action in {"new_table", "time_partitioned_new_table"}:
             return {
                 "predicted_insert_count": total_rows,
                 "predicted_update_count": 0,
@@ -2088,16 +2500,23 @@ class WriteIngestionAgentRuntime:
         action_mode: str,
         match_columns: list[str],
     ) -> dict[str, str]:
+        normalized_action = action_mode.strip().lower()
+        if normalized_action not in {"update_existing", "time_partitioned_new_table", "new_table"}:
+            raise IngestionPlanningError(
+                code="SQL_DRAFT_ACTION_INVALID",
+                message="SQL draft action is not supported",
+                status_code=422,
+            )
         safe_target = target_table if SAFE_IDENTIFIER_RE.match(target_table) else "target_table"
         staging_name = f"staging_{job_id[:12]}"
         match_expr = " AND ".join([f"t.{value} = s.{value}" for value in match_columns]) or "1 = 0"
-        if action_mode == "new_table":
+        if normalized_action == "new_table":
             sql = (
                 f"-- workspace={workspace_id}\n"
                 f"CREATE TABLE {safe_target} AS\n"
                 f"SELECT * FROM {staging_name};"
             )
-        elif action_mode == "time_partitioned_new_table":
+        elif normalized_action == "time_partitioned_new_table":
             sql = (
                 f"-- workspace={workspace_id}\n"
                 f"CREATE TABLE {safe_target}_{{time_partition}} AS\n"
@@ -2114,58 +2533,6 @@ class WriteIngestionAgentRuntime:
             )
 
         return {"sql_draft": sql}
-
-    def _build_column_mapping(
-        self,
-        *,
-        upload_info: dict[str, Any],
-        table_schema: dict[str, Any],
-    ) -> dict[str, str]:
-        all_columns = [
-            str(value).strip()
-            for value in upload_info["column_summary"].get("all_columns", [])
-            if str(value).strip()
-        ]
-        target_candidates = set(str(value).strip() for value in table_schema.get("match_columns", []))
-        target_candidates.update(str(value).strip() for value in table_schema.get("primary_keys", []))
-        alias_map = {
-            "员工编号": "employee_id",
-            "工号": "employee_id",
-            "姓名": "employee_name",
-            "部门": "department",
-            "项目编号": "project_id",
-            "项目名称": "project_name",
-            "月份": "month",
-        }
-        mapping: dict[str, str] = {}
-        for column in all_columns:
-            normalized = alias_map.get(column, column.strip().lower().replace(" ", "_"))
-            if target_candidates and normalized not in target_candidates:
-                continue
-            mapping[column] = normalized
-
-        if not mapping:
-            for column in all_columns:
-                mapping[column] = alias_map.get(column, column.strip().lower().replace(" ", "_"))
-        return mapping
-
-    def _build_risks(
-        self,
-        *,
-        upload_info: dict[str, Any],
-        match_columns: list[str],
-        diff_preview: dict[str, int],
-    ) -> list[str]:
-        risks: list[str] = []
-        if not match_columns:
-            risks.append("No match columns configured; update matching may be unreliable.")
-        if diff_preview["predicted_conflict_count"] > 0:
-            risks.append(
-                f"{diff_preview['predicted_conflict_count']} potential conflicts were detected in dry preview."
-            )
-        if not upload_info["sample_preview"]:
-            risks.append("Workbook sample preview is empty.")
-        return risks
 
     def _load_job_context(
         self,
@@ -2201,17 +2568,6 @@ class WriteIngestionAgentRuntime:
                 status_code=409,
             )
         return row
-
-    @staticmethod
-    def _suggest_table_name(*, file_name: str, business_type: str) -> str:
-        base = PathLike.basename_without_extension(file_name)
-        normalized = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_").lower()
-        if not normalized:
-            normalized = business_type
-        if SAFE_IDENTIFIER_RE.match(normalized):
-            return normalized
-        candidate = f"{business_type}_table"
-        return candidate if SAFE_IDENTIFIER_RE.match(candidate) else "ingestion_table"
 
     def _insert_event(
         self,
@@ -2259,16 +2615,6 @@ class WriteIngestionAgentRuntime:
         }
 
 
-class PathLike:
-    @staticmethod
-    def basename_without_extension(raw: str) -> str:
-        parts = re.split(r"[\\/]", raw.strip())
-        leaf = parts[-1] if parts else raw
-        if "." not in leaf:
-            return leaf
-        return leaf.rsplit(".", 1)[0]
-
-
 def _decode_json_list(raw: Any) -> list[Any]:
     if isinstance(raw, list):
         return raw
@@ -2297,61 +2643,12 @@ def _decode_json_dict(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _chat_completions_endpoint(base_url: str) -> str:
-    normalized = base_url.strip().rstrip("/")
-    if normalized.endswith("/chat/completions"):
-        return normalized
-    if normalized.endswith("/v1"):
-        return f"{normalized}/chat/completions"
-    return f"{normalized}/v1/chat/completions"
-
-
-def _content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        chunks: list[str] = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("text")
-            if isinstance(text, str) and text.strip():
-                chunks.append(text.strip())
-        return "\n".join(chunks).strip()
-    return ""
-
-
-def _json_from_text(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    stripped = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", stripped)
-    stripped = re.sub(r"\n?```$", "", stripped)
-    if not stripped:
-        raise RuntimeError("empty_content")
-    try:
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
-    if not match:
-        raise RuntimeError("missing_json_object")
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("invalid_json_object") from exc
-    if isinstance(parsed, dict):
-        return parsed
-    raise RuntimeError("json_not_object")
-
-
-def _clamp_confidence(raw: Any) -> float:
-    try:
-        parsed = float(raw)
-    except (TypeError, ValueError):
-        parsed = 0.0
-    return round(max(0.0, min(parsed, 1.0)), 2)
+def _canonical_ingestion_tool_name(tool_name: str) -> str:
+    normalized = str(tool_name or "").strip()
+    prefix = f"mcp__{INGESTION_SDK_MCP_SERVER_NAME}__"
+    if normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    return normalized
 
 
 def _compact_json(payload: Any) -> str:

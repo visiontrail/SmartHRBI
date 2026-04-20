@@ -20,6 +20,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "false")
     get_settings.cache_clear()
 
 

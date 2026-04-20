@@ -9,7 +9,6 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.agentic_ingestion.uploads import clear_ingestion_upload_service_cache
-from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
 from apps.api.chat import clear_chat_stream_service_cache
@@ -22,6 +21,7 @@ from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
 from apps.api.workspaces import clear_workspace_service_cache
 from tests.auth_utils import auth_headers, expect_error_code
+from tests.agentic_ingestion_fakes import install_failing_planning_agent, install_mock_planning_agent
 
 
 def _set_minimal_env(
@@ -44,30 +44,7 @@ def _set_minimal_env(
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "true" if ingestion_enabled else "false")
     if mock_llm_success:
-        def _mock_infer_business_type_with_llm(
-            self,
-            *,
-            file_name: str,
-            columns: list[str],
-            sheet_names: list[str],
-            sample_preview: list[object],
-            model: str,
-            base_url: str,
-            api_key: str,
-            timeout_seconds: float,
-        ) -> dict[str, object]:
-            _ = (self, file_name, columns, sheet_names, sample_preview, model, base_url, api_key, timeout_seconds)
-            return {
-                "business_type": "roster",
-                "confidence": 0.91,
-                "reasoning": "mocked llm classification",
-            }
-
-        monkeypatch.setattr(
-            WriteIngestionAgentRuntime,
-            "_infer_business_type_with_llm",
-            _mock_infer_business_type_with_llm,
-        )
+        install_mock_planning_agent(monkeypatch)
 
     get_settings.cache_clear()
     clear_auth_cache()
@@ -265,10 +242,11 @@ def test_ingestion_plan_persists_proposal(monkeypatch, tmp_path: Path) -> None:
         assert "tool_use" in event_types
         assert "tool_result" in event_types
         assert "business_type_inferred" in event_types
+        assert "human_approval_requested" in event_types
         assert "proposal_generated" in event_types
 
 
-def test_ingestion_plan_reports_ai_inference_audit(monkeypatch, tmp_path: Path) -> None:
+def test_ingestion_plan_reports_agent_loop_audit(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
 
     with TestClient(app) as client:
@@ -288,19 +266,17 @@ def test_ingestion_plan_reports_ai_inference_audit(monkeypatch, tmp_path: Path) 
 
     assert plan_response.status_code == 200
     payload = plan_response.json()
-    audit = payload["analysis_audit"]["business_type_inference"]
-    assert audit["engine"] == "llm_classifier_v1"
-    assert audit["ai_configured"] is True
-    assert audit["ai_attempted"] is True
-    assert audit["ai_succeeded"] is True
-    assert audit["fallback_reason"] == ""
+    audit = payload["analysis_audit"]["agent_planning"]
+    assert audit["engine"] == "write_ingestion_agent_loop"
+    assert audit["runtime_backend"] == "claude-agent-sdk"
+    assert audit["human_approval_tool_required"] is True
 
-    infer_trace = next(
-        item for item in payload["tool_trace"] if item.get("tool_name") == "infer_business_type"
+    approval_trace = next(
+        item for item in payload["tool_trace"] if item.get("tool_name") == "request_human_approval"
     )
-    infer_result = infer_trace["result"]
-    assert infer_result["inference_engine"] == "llm_classifier_v1"
-    assert infer_result["ai_attempted"] is True
+    approval_result = approval_trace["result"]
+    assert approval_result["stage"] in {"catalog_setup", "proposal_approval"}
+    assert approval_result["status"] == "pending"
 
     db_path = tmp_path / "workspace-state.db"
     with sqlite3.connect(db_path) as conn:
@@ -317,7 +293,7 @@ def test_ingestion_plan_reports_ai_inference_audit(monkeypatch, tmp_path: Path) 
         ).fetchone()
         assert row is not None
         payload_json = json.loads(str(row["payload"]))
-        assert payload_json["analysis_audit"]["engine"] == "llm_classifier_v1"
+        assert payload_json["analysis_audit"]["engine"] == "write_ingestion_agent_loop"
 
 
 def test_ingestion_plan_fails_when_ai_not_configured(monkeypatch, tmp_path: Path) -> None:
@@ -356,6 +332,12 @@ def test_ingestion_plan_fails_when_ai_service_unavailable(monkeypatch, tmp_path:
         ai_api_key="demo-key",
         ai_timeout_seconds="0.2",
         mock_llm_success=False,
+    )
+    install_failing_planning_agent(
+        monkeypatch,
+        code="INGESTION_AI_UNAVAILABLE",
+        message="mock agent unavailable",
+        status_code=503,
     )
 
     with TestClient(app) as client:

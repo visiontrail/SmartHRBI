@@ -8,7 +8,6 @@ import duckdb
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 from apps.api.agentic_ingestion.uploads import clear_ingestion_upload_service_cache
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
@@ -21,6 +20,7 @@ from apps.api.table_catalog import clear_table_catalog_service_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
 from apps.api.workspaces import clear_workspace_service_cache
+from tests.agentic_ingestion_fakes import install_mock_planning_agent
 from tests.auth_utils import auth_headers, expect_error_code
 
 
@@ -34,31 +34,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path, *, ingestion_enabled: bool) ->
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "true" if ingestion_enabled else "false")
-
-    def _mock_infer_business_type_with_llm(
-        self,
-        *,
-        file_name: str,
-        columns: list[str],
-        sheet_names: list[str],
-        sample_preview: list[object],
-        model: str,
-        base_url: str,
-        api_key: str,
-        timeout_seconds: float,
-    ) -> dict[str, object]:
-        _ = (self, file_name, columns, sheet_names, sample_preview, model, base_url, api_key, timeout_seconds)
-        return {
-            "business_type": "roster",
-            "confidence": 0.9,
-            "reasoning": "mocked llm classification",
-        }
-
-    monkeypatch.setattr(
-        WriteIngestionAgentRuntime,
-        "_infer_business_type_with_llm",
-        _mock_infer_business_type_with_llm,
-    )
+    install_mock_planning_agent(monkeypatch)
 
     get_settings.cache_clear()
     clear_auth_cache()

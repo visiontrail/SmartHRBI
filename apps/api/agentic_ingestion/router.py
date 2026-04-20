@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..auth import AuthIdentity, require_permission
@@ -66,12 +67,14 @@ async def create_ingestion_plan(
     )
 
     try:
-        return runtime.build_plan(
-            workspace_id=request.workspace_id,
-            job_id=request.job_id,
-            requested_by=identity.user_id,
-            conversation_id=request.conversation_id,
-            message=request.message,
+        return await anyio.to_thread.run_sync(
+            lambda: runtime.build_plan(
+                workspace_id=request.workspace_id,
+                job_id=request.job_id,
+                requested_by=identity.user_id,
+                conversation_id=request.conversation_id,
+                message=request.message,
+            )
         )
     except IngestionPlanningError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
@@ -91,13 +94,15 @@ async def confirm_ingestion_setup(
     )
 
     try:
-        return runtime.confirm_setup(
-            workspace_id=request.workspace_id,
-            job_id=request.job_id,
-            requested_by=identity.user_id,
-            setup_seed=request.setup,
-            conversation_id=request.conversation_id,
-            message=request.message,
+        return await anyio.to_thread.run_sync(
+            lambda: runtime.confirm_setup(
+                workspace_id=request.workspace_id,
+                job_id=request.job_id,
+                requested_by=identity.user_id,
+                setup_seed=request.setup,
+                conversation_id=request.conversation_id,
+                message=request.message,
+            )
         )
     except IngestionPlanningError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
