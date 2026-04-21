@@ -89,3 +89,42 @@ def test_build_dry_run_summary_exposes_prediction_and_warnings() -> None:
     assert summary["predicted_conflict_count"] == 2
     assert summary["predicted_affected_rows"] == 40
     assert summary["target_table"] == "employee_roster"
+
+
+def test_build_validated_sql_casts_timestamp_columns_for_merge() -> None:
+    runtime = WriteIngestionAgentRuntime()
+    proposal = IngestionProposalPayload(
+        business_type="roster",
+        confidence=0.9,
+        recommended_action="update_existing",
+        candidate_actions=["update_existing", "new_table", "time_partitioned_new_table", "cancel"],
+        target_table="employee_roster",
+        time_grain="none",
+        match_columns=["employee_id"],
+        column_mapping={
+            "Employee ID": "employee_id",
+            "Snapshot At": "snapshot_at",
+        },
+        diff_preview=DiffPreview(
+            predicted_insert_count=1,
+            predicted_update_count=1,
+            predicted_conflict_count=0,
+        ),
+        risks=[],
+        sql_draft="",
+    )
+
+    sql = runtime._build_validated_sql(  # noqa: SLF001
+        approved_action="update_existing",
+        target_table="employee_roster",
+        staging_table="staging_123456789abc",
+        proposal_payload=proposal,
+        target_column_types={
+            "employee_id": "VARCHAR",
+            "snapshot_at": "TIMESTAMP",
+        },
+    )
+
+    assert "MERGE INTO employee_roster" in sql
+    assert "snapshot_at = COALESCE(" in sql
+    assert "TRY_CAST(s.snapshot_at AS TIMESTAMP)" in sql

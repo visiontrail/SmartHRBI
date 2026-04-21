@@ -65,8 +65,17 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.ingestion.awaitingApprovalQuestion": "Approval required: {{question}}",
     "chat.ingestion.awaitingApprovalOptions": "Reply with one option (or number): {{options}}",
     "chat.ingestion.awaitingApprovalRecommended": "Recommended option: {{action}}",
+    "chat.ingestion.awaitingApprovalRecommendedTag": "Recommended",
     "chat.ingestion.awaitingApprovalInvalidChoice":
       "A pending ingestion approval is waiting. Reply with one valid option: {{options}}",
+    "chat.ingestion.approvalOptionsTitle": "Choose an approval option.",
+    "chat.ingestion.approvalQuickPickHint":
+      "Pick one option to approve quickly, or click Custom input for manual text.",
+    "chat.ingestion.approvalCustomInput": "Custom input",
+    "chat.ingestion.approvalCustomInputHint":
+      "Custom input enabled. Type your own approval instruction and send.",
+    "chat.ingestion.approvalInputLocked":
+      "Pending approval detected. Click an option, or choose Custom input to type manually.",
     "chat.emptyStartTitle": "Start a Conversation",
     "chat.emptyDescription":
       "Ask questions about your HR and project data. The AI will analyze your data and generate interactive visualizations you can add to your report workspace.",
@@ -283,8 +292,14 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.ingestion.awaitingApprovalQuestion": "需要你确认：{{question}}",
     "chat.ingestion.awaitingApprovalOptions": "请回复一个选项（或序号）：{{options}}",
     "chat.ingestion.awaitingApprovalRecommended": "推荐选项：{{action}}",
+    "chat.ingestion.awaitingApprovalRecommendedTag": "推荐",
     "chat.ingestion.awaitingApprovalInvalidChoice":
       "当前有待确认的导入方案，请回复一个有效选项：{{options}}",
+    "chat.ingestion.approvalOptionsTitle": "请选择审批选项。",
+    "chat.ingestion.approvalQuickPickHint": "可直接点击一个选项完成确认，或点“自定义输入”手动填写。",
+    "chat.ingestion.approvalCustomInput": "自定义输入",
+    "chat.ingestion.approvalCustomInputHint": "已开启自定义输入，请输入审批指令后发送。",
+    "chat.ingestion.approvalInputLocked": "当前存在待审批流程，请先选择选项，或点“自定义输入”后再手动输入。",
     "chat.emptyStartTitle": "开始一段会话",
     "chat.emptyDescription": "你可以围绕 HR 与项目数据提问，AI 会自动分析并生成可交互图表，直接加入你的报告工作空间。",
     "chat.emptyPrompt1": "按部门展示人数分布",

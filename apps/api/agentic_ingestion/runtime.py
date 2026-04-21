@@ -46,6 +46,7 @@ from .routing import RouteDecision, select_agent_route
 logger = logging.getLogger("smarthrbi.ingestion")
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SAFE_DUCKDB_TYPE_RE = re.compile(r"^[A-Za-z0-9_(),\s]+$")
 FORBIDDEN_WRITE_EXPRESSIONS: tuple[type[exp.Expression], ...] = (
     exp.Drop,
     exp.Alter,
@@ -60,6 +61,10 @@ DEFAULT_ACTION_OPTIONS = [
     "cancel",
 ]
 CATALOG_SETUP_APPROVAL_OPTIONS = ["confirm_catalog_setup", "cancel"]
+INGESTION_APPROVAL_OPTION_VALUES = [
+    *DEFAULT_ACTION_OPTIONS,
+    *[item for item in CATALOG_SETUP_APPROVAL_OPTIONS if item not in DEFAULT_ACTION_OPTIONS],
+]
 INGESTION_SDK_MCP_SERVER_NAME = "ingestion"
 INGESTION_SDK_RUNTIME_BACKEND = "claude-agent-sdk"
 INGESTION_APPROVAL_TOOL_NAME = "AskUserQuestion"
@@ -171,8 +176,17 @@ INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "stage": {"type": "string", "enum": ["catalog_setup", "proposal_approval"]},
                 "question": {"type": "string"},
-                "options": {"type": "array", "items": {"type": "string"}},
-                "recommended_option": {"type": "string"},
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": INGESTION_APPROVAL_OPTION_VALUES},
+                    "minItems": 2,
+                    "maxItems": 4,
+                    "uniqueItems": True,
+                },
+                "recommended_option": {
+                    "type": "string",
+                    "enum": INGESTION_APPROVAL_OPTION_VALUES,
+                },
             },
             "required": ["stage", "question", "options"],
         },
@@ -216,6 +230,8 @@ Human approval is mandatory:
   generate_write_sql_draft, then call AskUserQuestion with
   stage=proposal_approval and options restricted to update_existing,
   time_partitioned_new_table, new_table, or cancel.
+- AskUserQuestion options must use canonical machine values (do not localize,
+  translate, or paraphrase option tokens).
 - Never claim approval has happened. The front-end approval card and /ingestion/approve
   endpoint are the only approval mechanisms.
 
@@ -779,11 +795,16 @@ class WriteIngestionAgentRuntime:
                 overrides=user_overrides,
             )
             staging_table = self._staging_table_name(normalized_job_id)
+            target_column_types = self._load_target_column_types(
+                workspace_id=normalized_workspace_id,
+                target_table=target_table,
+            )
             finalized_sql = self._build_validated_sql(
                 approved_action=normalized_action,
                 target_table=target_table,
                 staging_table=staging_table,
                 proposal_payload=proposal_payload,
+                target_column_types=target_column_types,
             )
             validator = SQLWriteValidator(
                 target_table=target_table,
@@ -2112,6 +2133,7 @@ class WriteIngestionAgentRuntime:
         target_table: str,
         staging_table: str,
         proposal_payload: IngestionProposalPayload,
+        target_column_types: dict[str, str] | None = None,
     ) -> str:
         mapping_values = [
             str(value).strip().lower()
@@ -2125,8 +2147,21 @@ class WriteIngestionAgentRuntime:
         ]
         ordered_columns = self._dedupe_preserve_order([*mapping_values, *match_columns])
         safe_columns = [column for column in ordered_columns if SAFE_IDENTIFIER_RE.match(column)]
+        normalized_target_types = {
+            str(column).strip().lower(): str(dtype).strip()
+            for column, dtype in (target_column_types or {}).items()
+            if SAFE_IDENTIFIER_RE.match(str(column).strip().lower()) and str(dtype).strip()
+        }
+        if normalized_target_types:
+            safe_columns = [
+                column for column in safe_columns if column in normalized_target_types
+            ]
         if not safe_columns:
             safe_columns = self._dedupe_preserve_order(match_columns)
+            if normalized_target_types:
+                safe_columns = [
+                    column for column in safe_columns if column in normalized_target_types
+                ]
         if not safe_columns:
             raise IngestionPlanningError(
                 code="COLUMN_MAPPING_INVALID",
@@ -2148,13 +2183,36 @@ class WriteIngestionAgentRuntime:
                     message="match_columns must be valid SQL identifiers",
                     status_code=422,
                 )
-            match_expr = " AND ".join([f"t.{value} = s.{value}" for value in safe_match_columns])
+            if normalized_target_types:
+                safe_match_columns = [
+                    value for value in safe_match_columns if value in normalized_target_types
+                ]
+                if not safe_match_columns:
+                    raise IngestionPlanningError(
+                        code="MATCH_COLUMNS_INVALID",
+                        message="match_columns must exist in the target table schema",
+                        status_code=422,
+                    )
+
+            source_expr_by_column = {
+                value: self._source_expr_for_target_type(
+                    source_alias="s",
+                    column=value,
+                    target_type=normalized_target_types.get(value),
+                )
+                for value in safe_columns
+            }
+            match_expr = " AND ".join(
+                [f"t.{value} = {source_expr_by_column[value]}" for value in safe_match_columns]
+            )
             update_columns = [value for value in safe_columns if value not in set(safe_match_columns)]
             if not update_columns:
                 update_columns = list(safe_columns)
-            update_expr = ", ".join([f"{value} = s.{value}" for value in update_columns])
+            update_expr = ", ".join(
+                [f"{value} = {source_expr_by_column[value]}" for value in update_columns]
+            )
             insert_cols = ", ".join(safe_columns)
-            insert_vals = ", ".join([f"s.{value}" for value in safe_columns])
+            insert_vals = ", ".join([source_expr_by_column[value] for value in safe_columns])
             return (
                 f"MERGE INTO {target_table} AS t\n"
                 f"USING {staging_table} AS s\n"
@@ -2167,6 +2225,109 @@ class WriteIngestionAgentRuntime:
         return (
             f"CREATE TABLE {target_table} AS\n"
             f"SELECT {select_cols} FROM {staging_table}"
+        )
+
+    def _load_target_column_types(
+        self,
+        *,
+        workspace_id: str,
+        target_table: str,
+    ) -> dict[str, str]:
+        db_path = self._workspace_duckdb_path(workspace_id=workspace_id)
+        if not db_path.exists():
+            return {}
+
+        try:
+            conn = duckdb.connect(str(db_path))
+        except Exception:  # pragma: no cover - defensive
+            return {}
+
+        try:
+            rows = conn.execute(f"PRAGMA table_info('{target_table}')").fetchall()
+        except Exception:
+            return {}
+        finally:
+            conn.close()
+
+        schema: dict[str, str] = {}
+        for row in rows:
+            if len(row) < 3:
+                continue
+            name = str(row[1]).strip().lower()
+            dtype = str(row[2]).strip()
+            if not SAFE_IDENTIFIER_RE.match(name):
+                continue
+            if not dtype:
+                continue
+            schema[name] = dtype
+        return schema
+
+    def _source_expr_for_target_type(
+        self,
+        *,
+        source_alias: str,
+        column: str,
+        target_type: str | None,
+    ) -> str:
+        source_expr = f"{source_alias}.{column}"
+        normalized_type = self._normalize_duckdb_type(target_type)
+        if not normalized_type:
+            return source_expr
+
+        upper_type = normalized_type.upper()
+        if "TIMESTAMP" in upper_type:
+            return self._timestamp_cast_expr(source_expr=source_expr, target_type=normalized_type)
+        if upper_type == "DATE":
+            return self._date_cast_expr(source_expr=source_expr, target_type=normalized_type)
+        return f"TRY_CAST({source_expr} AS {normalized_type})"
+
+    @staticmethod
+    def _normalize_duckdb_type(raw_type: str | None) -> str | None:
+        if raw_type is None:
+            return None
+        normalized = " ".join(str(raw_type).strip().split())
+        if not normalized:
+            return None
+        if not SAFE_DUCKDB_TYPE_RE.match(normalized):
+            return None
+        return normalized
+
+    @staticmethod
+    def _timestamp_cast_expr(*, source_expr: str, target_type: str) -> str:
+        numeric_expr = f"TRY_CAST({source_expr} AS DOUBLE)"
+        excel_serial_expr = (
+            "CASE "
+            f"WHEN {numeric_expr} IS NOT NULL AND {numeric_expr} BETWEEN 1 AND 600000 "
+            f"THEN TRY_CAST("
+            f"CAST(DATE '1899-12-30' + CAST(FLOOR({numeric_expr}) AS INTEGER) AS TIMESTAMP) "
+            f"+ ({numeric_expr} - FLOOR({numeric_expr})) * INTERVAL '1 day' "
+            f"AS {target_type}"
+            ") "
+            "ELSE NULL END"
+        )
+        return (
+            "COALESCE("
+            f"TRY_CAST({source_expr} AS {target_type}), "
+            f"TRY_CAST(CAST({source_expr} AS VARCHAR) AS {target_type}), "
+            f"{excel_serial_expr}"
+            ")"
+        )
+
+    @staticmethod
+    def _date_cast_expr(*, source_expr: str, target_type: str) -> str:
+        numeric_expr = f"TRY_CAST({source_expr} AS DOUBLE)"
+        excel_serial_expr = (
+            "CASE "
+            f"WHEN {numeric_expr} IS NOT NULL AND {numeric_expr} BETWEEN 1 AND 600000 "
+            f"THEN TRY_CAST(DATE '1899-12-30' + CAST(FLOOR({numeric_expr}) AS INTEGER) AS {target_type}) "
+            "ELSE NULL END"
+        )
+        return (
+            "COALESCE("
+            f"TRY_CAST({source_expr} AS {target_type}), "
+            f"TRY_CAST(CAST({source_expr} AS VARCHAR) AS {target_type}), "
+            f"{excel_serial_expr}"
+            ")"
         )
 
     def _build_dry_run_summary(

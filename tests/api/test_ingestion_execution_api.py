@@ -8,6 +8,7 @@ import duckdb
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 from apps.api.agentic_ingestion.uploads import clear_ingestion_upload_service_cache
 from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
@@ -64,13 +65,32 @@ def _excel_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _upload_file_payload() -> list[tuple[str, tuple[str, bytes, str]]]:
+def _excel_bytes_with_numeric_timestamp() -> bytes:
+    roster = pd.DataFrame(
+        [
+            {"Employee ID": "E-001", "Snapshot At": 45292},
+            {"Employee ID": "E-002", "Snapshot At": 45293},
+        ]
+    )
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        roster.to_excel(writer, index=False, sheet_name="Roster")
+    return buffer.getvalue()
+
+
+def _upload_file_payload(
+    *,
+    file_name: str = "roster.xlsx",
+    file_bytes: bytes | None = None,
+) -> list[tuple[str, tuple[str, bytes, str]]]:
+    content = file_bytes if file_bytes is not None else _excel_bytes()
     return [
         (
             "files",
             (
-                "roster.xlsx",
-                _excel_bytes(),
+                file_name,
+                content,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
         )
@@ -214,6 +234,106 @@ def test_ingestion_approve_and_execute_persist_receipt(monkeypatch, tmp_path: Pa
     finally:
         conn.close()
     assert count > 0
+
+
+def test_ingestion_execute_handles_numeric_timestamp_values(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Execution Timestamp Workspace")
+        catalog_response = client.post(
+            f"/workspaces/{workspace_id}/catalog",
+            headers=owner_headers,
+            json={
+                "table_name": "employee_roster_ts",
+                "human_label": "Employee Roster Timestamp",
+                "business_type": "roster",
+                "write_mode": "update_existing",
+                "time_grain": "none",
+                "primary_keys": ["employee_id"],
+                "match_columns": ["employee_id"],
+                "is_active_target": True,
+                "description": "Timestamp casting regression guard",
+            },
+        )
+        assert catalog_response.status_code == 200
+
+        runtime = WriteIngestionAgentRuntime()
+        duckdb_path = runtime._workspace_duckdb_path(workspace_id=workspace_id)  # noqa: SLF001
+        duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(duckdb_path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS employee_roster_ts (
+                    employee_id VARCHAR,
+                    snapshot_at TIMESTAMP
+                )
+                """
+            )
+        finally:
+            conn.close()
+
+        upload_response = client.post(
+            "/ingestion/uploads",
+            data={"workspace_id": workspace_id},
+            headers=owner_headers,
+            files=_upload_file_payload(
+                file_name="roster_timestamp.xlsx",
+                file_bytes=_excel_bytes_with_numeric_timestamp(),
+            ),
+        )
+        assert upload_response.status_code == 200
+        upload_payload = upload_response.json()
+        job_id = upload_payload["job_id"]
+
+        plan_response = client.post(
+            "/ingestion/plan",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "conversation_id": "conv-exec-ts",
+                "message": "请更新花名册并写入时间戳",
+            },
+            headers=owner_headers,
+        )
+        assert plan_response.status_code == 200
+        plan_payload = plan_response.json()
+        assert plan_payload["status"] == "awaiting_user_approval"
+
+        approve_response = client.post(
+            "/ingestion/approve",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "proposal_id": plan_payload["proposal_id"],
+                "approved_action": "update_existing",
+            },
+            headers=owner_headers,
+        )
+        assert approve_response.status_code == 200
+
+        execute_response = client.post(
+            "/ingestion/execute",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "proposal_id": plan_payload["proposal_id"],
+            },
+            headers=owner_headers,
+        )
+        assert execute_response.status_code == 200
+
+    conn = duckdb.connect(str(duckdb_path))
+    try:
+        row_count, non_null_snapshot_count = conn.execute(
+            "SELECT COUNT(*), COUNT(snapshot_at) FROM employee_roster_ts"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert int(row_count) > 0
+    assert int(non_null_snapshot_count) > 0
 
 
 def test_ingestion_execute_requires_approval(monkeypatch, tmp_path: Path) -> None:

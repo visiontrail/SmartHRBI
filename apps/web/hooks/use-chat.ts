@@ -101,10 +101,12 @@ export function useSendMessage() {
       sessionId,
       content,
       attachment,
+      approvedAction,
     }: {
       sessionId: string;
       content: string;
       attachment?: File;
+      approvedAction?: IngestionProposalAction;
     }) => {
       setIsSending(true);
       const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
@@ -124,11 +126,15 @@ export function useSendMessage() {
         });
       }
       if (pendingApproval) {
-        const approvedAction = resolvePendingApprovalAction({
-          rawInput: trimmedContent,
-          pending: pendingApproval,
-        });
-        if (!approvedAction) {
+        const options = collectApprovalOptions(pendingApproval.plan);
+        const resolvedAction =
+          approvedAction && options.includes(approvedAction)
+            ? approvedAction
+            : resolvePendingApprovalAction({
+                rawInput: trimmedContent,
+                pending: pendingApproval,
+              });
+        if (!resolvedAction) {
           throw new Error(
             t("chat.ingestion.awaitingApprovalInvalidChoice", {
               options: formatPendingApprovalOptions({
@@ -141,7 +147,7 @@ export function useSendMessage() {
         return runIngestionApprovalResponse({
           sessionId,
           pending: pendingApproval,
-          approvedAction,
+          approvedAction: resolvedAction,
           t,
         });
       }
