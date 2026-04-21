@@ -62,6 +62,14 @@ DEFAULT_ACTION_OPTIONS = [
 CATALOG_SETUP_APPROVAL_OPTIONS = ["confirm_catalog_setup", "cancel"]
 INGESTION_SDK_MCP_SERVER_NAME = "ingestion"
 INGESTION_SDK_RUNTIME_BACKEND = "claude-agent-sdk"
+INGESTION_APPROVAL_TOOL_NAME = "AskUserQuestion"
+INGESTION_LEGACY_APPROVAL_TOOL_NAME = "request_human_approval"
+INGESTION_APPROVAL_TOOL_ALIASES = frozenset(
+    {
+        INGESTION_APPROVAL_TOOL_NAME,
+        INGESTION_LEGACY_APPROVAL_TOOL_NAME,
+    }
+)
 INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "get_workspace_catalog",
@@ -152,9 +160,9 @@ INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "read_only": True,
     },
     {
-        "name": "request_human_approval",
+        "name": INGESTION_APPROVAL_TOOL_NAME,
         "description": (
-            "Trigger the product Human-in-the-Loop approval mechanism. The agent must call this "
+            "AskUserQuestion for product Human-in-the-Loop approval. The agent must call this "
             "before returning a setup request or a write proposal. This tool never approves; it "
             "records the question and returns that approval is pending."
         ),
@@ -182,7 +190,7 @@ INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE = [
     "describe_table_schema",
     "build_diff_preview",
     "generate_write_sql_draft",
-    "request_human_approval",
+    INGESTION_APPROVAL_TOOL_NAME,
 ]
 MIN_INGESTION_AGENT_MAX_TURNS = len(INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE) + 2
 INGESTION_AGENT_SYSTEM_PROMPT = """\
@@ -202,10 +210,10 @@ Allowed decisions:
   sql_draft.
 
 Human approval is mandatory:
-- Before awaiting_catalog_setup, call request_human_approval with stage=catalog_setup
+- Before awaiting_catalog_setup, call AskUserQuestion with stage=catalog_setup
   and options restricted to confirm_catalog_setup or cancel.
 - Before awaiting_user_approval, first complete build_diff_preview and
-  generate_write_sql_draft, then call request_human_approval with
+  generate_write_sql_draft, then call AskUserQuestion with
   stage=proposal_approval and options restricted to update_existing,
   time_partitioned_new_table, new_table, or cancel.
 - Never claim approval has happened. The front-end approval card and /ingestion/approve
@@ -213,7 +221,7 @@ Human approval is mandatory:
 
 For an existing-table proposal, use this exact order whenever the target table is known:
 inspect_upload, get_workspace_catalog, list_existing_tables, describe_table_schema,
-build_diff_preview, generate_write_sql_draft, request_human_approval, then the final
+build_diff_preview, generate_write_sql_draft, AskUserQuestion, then the final
 structured output.
 
 Do not execute writes. Do not invent tool results. Return only the required structured output.
@@ -1062,6 +1070,8 @@ class WriteIngestionAgentRuntime:
                 status_code=503,
             )
 
+        tool_trace_snapshot: list[dict[str, Any]] = []
+
         async def runner() -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
             return await self._run_planning_agent_loop_async(
                 conn=conn,
@@ -1071,16 +1081,42 @@ class WriteIngestionAgentRuntime:
                 requested_by=requested_by,
                 conversation_id=conversation_id,
                 message=message,
+                tool_trace_sink=tool_trace_snapshot,
             )
 
         try:
             return anyio.run(runner)
         except IngestionPlanningError:
             raise
-        except (ClaudeSDKError, TimeoutError) as exc:
+        except TimeoutError as exc:
+            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace_snapshot)
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=timeout_outer",
+                    job_id,
+                )
+                return recovered, tool_trace_snapshot
             raise IngestionPlanningError(
                 code="INGESTION_AI_UNAVAILABLE",
-                message=f"Claude Agent SDK is unavailable for ingestion planning: {exc}",
+                message=(
+                    "Claude Agent SDK timed out during ingestion planning "
+                    f"(>{settings.agent_timeout_seconds}s)"
+                ),
+                status_code=503,
+            ) from exc
+        except ClaudeSDKError as exc:
+            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace_snapshot)
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=claude_sdk_error",
+                    job_id,
+                )
+                return recovered, tool_trace_snapshot
+            suffix = str(exc).strip()
+            detail = f": {suffix}" if suffix else ""
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=f"Claude Agent SDK is unavailable for ingestion planning{detail}",
                 status_code=503,
             ) from exc
         except Exception as exc:
@@ -1100,9 +1136,10 @@ class WriteIngestionAgentRuntime:
         requested_by: str,
         conversation_id: str | None,
         message: str | None,
+        tool_trace_sink: list[dict[str, Any]] | None = None,
     ) -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
         settings = get_settings()
-        tool_trace: list[dict[str, Any]] = []
+        tool_trace = tool_trace_sink if tool_trace_sink is not None else []
         options = self._build_ingestion_sdk_options(
             conn=conn,
             job_id=job_id,
@@ -1119,20 +1156,37 @@ class WriteIngestionAgentRuntime:
         text_blocks: list[str] = []
         session_id = conversation_id or f"ingestion-{job_id}"
 
-        with anyio.fail_after(settings.agent_timeout_seconds):
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(prompt, session_id=session_id)
-                async for sdk_message in client.receive_response():
-                    candidate = self._consume_ingestion_sdk_message(
-                        message=sdk_message,
-                        text_blocks=text_blocks,
-                    )
-                    if candidate is not None:
-                        raw_output = candidate
+        try:
+            with anyio.fail_after(settings.agent_timeout_seconds):
+                async with ClaudeSDKClient(options=options) as client:
+                    await client.query(prompt, session_id=session_id)
+                    async for sdk_message in client.receive_response():
+                        candidate = self._consume_ingestion_sdk_message(
+                            message=sdk_message,
+                            text_blocks=text_blocks,
+                        )
+                        if candidate is not None:
+                            raw_output = candidate
+        except TimeoutError:
+            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=timeout",
+                    job_id,
+                )
+                return recovered, tool_trace
+            raise
 
         if raw_output is None and text_blocks:
             raw_output = _decode_json_dict("\n".join(text_blocks))
         if raw_output is None:
+            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=missing_structured_output",
+                    job_id,
+                )
+                return recovered, tool_trace
             raise IngestionPlanningError(
                 code="AGENT_STRUCTURED_OUTPUT_MISSING",
                 message="Write Ingestion Agent did not return structured output",
@@ -1141,6 +1195,13 @@ class WriteIngestionAgentRuntime:
         try:
             output = IngestionAgentPlanOutput.model_validate(raw_output)
         except Exception as exc:
+            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=invalid_structured_output",
+                    job_id,
+                )
+                return recovered, tool_trace
             raise IngestionPlanningError(
                 code="AGENT_STRUCTURED_OUTPUT_INVALID",
                 message="Write Ingestion Agent returned invalid structured output",
@@ -1348,7 +1409,7 @@ class WriteIngestionAgentRuntime:
                     if str(item).strip()
                 ],
             )
-        if tool_name == "request_human_approval":
+        if tool_name in INGESTION_APPROVAL_TOOL_ALIASES:
             return self._tool_request_human_approval(conn=conn, job_id=job_id, arguments=arguments)
         raise IngestionPlanningError(
             code="INGESTION_TOOL_NOT_ALLOWED",
@@ -1380,7 +1441,7 @@ class WriteIngestionAgentRuntime:
                     "describe_table_schema when a target table is considered",
                     "build_diff_preview when producing a proposal",
                     "generate_write_sql_draft when producing a proposal",
-                    "request_human_approval before the final structured output",
+                    f"{INGESTION_APPROVAL_TOOL_NAME} before the final structured output",
                 ],
                 "available_approval_options": {
                     "catalog_setup": CATALOG_SETUP_APPROVAL_OPTIONS,
@@ -1459,14 +1520,17 @@ class WriteIngestionAgentRuntime:
                 status_code=502,
             )
         for item in tool_trace:
-            if item.get("tool_name") != "request_human_approval":
+            if item.get("tool_name") not in INGESTION_APPROVAL_TOOL_ALIASES:
                 continue
             arguments = item.get("arguments")
             if isinstance(arguments, dict) and arguments.get("stage") == expected_stage:
                 return
         raise IngestionPlanningError(
             code="HUMAN_APPROVAL_NOT_REQUESTED",
-            message="Agent must call request_human_approval before returning the next step",
+            message=(
+                "Agent must call AskUserQuestion before returning the next step "
+                "(request_human_approval is accepted as a legacy alias)"
+            ),
             status_code=502,
         )
 
@@ -1499,6 +1563,272 @@ class WriteIngestionAgentRuntime:
             if item.get("tool_name") == tool_name and isinstance(item.get("result"), dict):
                 return item["result"]
         return {}
+
+    @staticmethod
+    def _latest_tool_trace_item(
+        tool_trace: list[dict[str, Any]],
+        *,
+        names: set[str] | frozenset[str] | tuple[str, ...] | list[str],
+    ) -> dict[str, Any] | None:
+        name_set = set(names)
+        for item in reversed(tool_trace):
+            if item.get("tool_name") in name_set:
+                return item
+        return None
+
+    def _recover_agent_output_from_tool_trace(
+        self,
+        *,
+        tool_trace: list[dict[str, Any]],
+    ) -> IngestionAgentPlanOutput | None:
+        approval_item = self._latest_tool_trace_item(
+            tool_trace,
+            names=INGESTION_APPROVAL_TOOL_ALIASES,
+        )
+        if approval_item is None:
+            return None
+
+        arguments = approval_item.get("arguments") if isinstance(approval_item.get("arguments"), dict) else {}
+        result = approval_item.get("result") if isinstance(approval_item.get("result"), dict) else {}
+        stage = str(result.get("stage") or arguments.get("stage") or "").strip()
+        if stage not in {"catalog_setup", "proposal_approval"}:
+            return None
+
+        if stage == "catalog_setup":
+            allowed_options = list(CATALOG_SETUP_APPROVAL_OPTIONS)
+            default_recommended = "confirm_catalog_setup"
+            default_mechanism = "catalog_setup_card"
+        else:
+            allowed_options = list(DEFAULT_ACTION_OPTIONS)
+            default_recommended = "update_existing"
+            default_mechanism = "frontend_approval_card"
+
+        raw_options = result.get("options") if isinstance(result.get("options"), list) else arguments.get("options")
+        options = [
+            str(item).strip()
+            for item in (raw_options or [])
+            if str(item).strip() in allowed_options
+        ]
+        if not options:
+            options = list(allowed_options)
+
+        recommended_option = str(
+            result.get("recommended_option") or arguments.get("recommended_option") or ""
+        ).strip()
+        if recommended_option not in options:
+            recommended_option = default_recommended if default_recommended in options else options[0]
+
+        question = str(result.get("question") or arguments.get("question") or "").strip()
+        if not question:
+            question = (
+                "Please confirm the catalog setup before proceeding."
+                if stage == "catalog_setup"
+                else "Please choose the ingestion action."
+            )
+        if len(question) > 300:
+            question = question[:300].rstrip()
+
+        mechanism = str(result.get("mechanism") or "").strip() or default_mechanism
+        human_approval_payload = {
+            "required": True,
+            "mechanism": mechanism,
+            "stage": stage,
+            "question": question,
+            "options": options,
+            "recommended_option": recommended_option,
+        }
+
+        schema = self._latest_tool_result(tool_trace, "describe_table_schema")
+        upload_info = self._latest_tool_result(tool_trace, "inspect_upload")
+        column_summary = upload_info.get("column_summary") if isinstance(upload_info.get("column_summary"), dict) else {}
+        raw_columns = column_summary.get("all_columns") if isinstance(column_summary.get("all_columns"), list) else []
+        upload_columns = [str(item).strip() for item in raw_columns if str(item).strip()]
+        normalized_columns: list[str] = []
+        for raw_column in upload_columns:
+            candidate = self._normalize_identifier(raw_column)
+            if candidate and candidate not in normalized_columns:
+                normalized_columns.append(candidate)
+
+        business_type = str(schema.get("business_type") or "other").strip()
+        if business_type not in {"roster", "project_progress", "attendance", "other"}:
+            business_type = "other"
+        agent_guess_payload = {
+            "business_type": business_type,
+            "confidence": 0.55,
+            "reasoning": (
+                "Recovered from tool trace because the agent called AskUserQuestion "
+                "but did not return structured output before timeout."
+            ),
+        }
+
+        if stage == "catalog_setup":
+            table_name = str(schema.get("table_name") or "employee_roster").strip().lower()
+            if not SAFE_IDENTIFIER_RE.match(table_name):
+                table_name = self._normalize_identifier(table_name) or "employee_roster"
+
+            match_columns = [
+                str(item).strip().lower()
+                for item in (schema.get("match_columns") if isinstance(schema.get("match_columns"), list) else [])
+                if str(item).strip()
+            ]
+            if not match_columns and normalized_columns:
+                match_columns = [normalized_columns[0]]
+
+            primary_keys = [
+                str(item).strip().lower()
+                for item in (schema.get("primary_keys") if isinstance(schema.get("primary_keys"), list) else [])
+                if str(item).strip()
+            ]
+            if not primary_keys:
+                primary_keys = list(match_columns)
+
+            write_mode = str(schema.get("write_mode") or "update_existing").strip()
+            if write_mode not in {"update_existing", "time_partitioned_new_table", "new_table"}:
+                write_mode = "update_existing"
+            time_grain = str(schema.get("time_grain") or "none").strip()
+            if time_grain not in {"none", "month", "quarter", "year"}:
+                time_grain = "none"
+
+            setup_questions = [
+                {
+                    "question_id": "business_type",
+                    "title": "Select business type",
+                    "options": ["roster", "project_progress", "attendance", "other"],
+                },
+                {
+                    "question_id": "write_mode",
+                    "title": "Select write mode",
+                    "options": ["update_existing", "time_partitioned_new_table", "new_table"],
+                },
+                {
+                    "question_id": "match_columns",
+                    "title": "Select match columns",
+                    "options": upload_columns[:12],
+                },
+            ]
+            try:
+                return IngestionAgentPlanOutput.model_validate(
+                    {
+                        "status": "awaiting_catalog_setup",
+                        "agent_guess": agent_guess_payload,
+                        "setup_questions": setup_questions,
+                        "suggested_catalog_seed": {
+                            "business_type": business_type,
+                            "table_name": table_name,
+                            "human_label": table_name.replace("_", " ").title(),
+                            "write_mode": write_mode,
+                            "time_grain": time_grain,
+                            "primary_keys": primary_keys,
+                            "match_columns": match_columns,
+                            "is_active_target": True,
+                            "description": (
+                                "Recovered from AskUserQuestion fallback after SDK timeout."
+                            ),
+                        },
+                        "human_approval": human_approval_payload,
+                    }
+                )
+            except Exception:
+                return None
+
+        diff_preview_result = self._latest_tool_result(tool_trace, "build_diff_preview")
+        draft_trace = self._latest_tool_trace_item(
+            tool_trace,
+            names={"generate_write_sql_draft"},
+        )
+        draft_arguments = draft_trace.get("arguments") if isinstance(draft_trace, dict) else {}
+        sql_payload = self._latest_tool_result(tool_trace, "generate_write_sql_draft")
+
+        target_table = str(draft_arguments.get("target_table") or schema.get("table_name") or "").strip().lower()
+        if target_table and not SAFE_IDENTIFIER_RE.match(target_table):
+            target_table = self._normalize_identifier(target_table)
+        if not target_table:
+            target_table = None
+
+        candidate_actions = [item for item in options if item in DEFAULT_ACTION_OPTIONS]
+        if "cancel" not in candidate_actions:
+            candidate_actions.append("cancel")
+        recommended_action = recommended_option if recommended_option in candidate_actions else candidate_actions[0]
+
+        match_columns: list[str] = []
+        for item in (
+            draft_arguments.get("match_columns")
+            if isinstance(draft_arguments.get("match_columns"), list)
+            else []
+        ):
+            normalized = self._normalize_identifier(str(item))
+            if normalized and normalized not in match_columns:
+                match_columns.append(normalized)
+        if not match_columns:
+            for item in (
+                schema.get("match_columns")
+                if isinstance(schema.get("match_columns"), list)
+                else []
+            ):
+                normalized = self._normalize_identifier(str(item))
+                if normalized and normalized not in match_columns:
+                    match_columns.append(normalized)
+        if not match_columns and normalized_columns:
+            match_columns = [normalized_columns[0]]
+
+        time_grain = str(schema.get("time_grain") or "none").strip()
+        if time_grain not in {"none", "month", "quarter", "year"}:
+            time_grain = "none"
+
+        def _as_non_negative_int(value: Any) -> int:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        column_mapping: dict[str, str] = {}
+        for raw_column in upload_columns:
+            normalized = self._normalize_identifier(raw_column)
+            if not normalized:
+                continue
+            column_mapping[raw_column] = normalized
+
+        proposal_payload = {
+            "business_type": business_type,
+            "confidence": 0.6,
+            "recommended_action": recommended_action,
+            "candidate_actions": candidate_actions,
+            "target_table": target_table,
+            "time_grain": time_grain,
+            "match_columns": match_columns,
+            "column_mapping": column_mapping,
+            "diff_preview": {
+                "predicted_insert_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_insert_count")
+                ),
+                "predicted_update_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_update_count")
+                ),
+                "predicted_conflict_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_conflict_count")
+                ),
+            },
+            "risks": [
+                "Recovered from AskUserQuestion fallback after SDK timeout; review before approval."
+            ],
+            "explanation": (
+                "Recovered a proposal from tool trace because the agent did not return "
+                "structured output before timeout."
+            ),
+            "sql_draft": str(sql_payload.get("sql_draft") or "").strip(),
+            "requires_catalog_setup": False,
+        }
+        try:
+            return IngestionAgentPlanOutput.model_validate(
+                {
+                    "status": "awaiting_user_approval",
+                    "agent_guess": agent_guess_payload,
+                    "proposal": proposal_payload,
+                    "human_approval": human_approval_payload,
+                }
+            )
+        except Exception:
+            return None
 
     def _run_tool(
         self,
@@ -2393,6 +2723,8 @@ class WriteIngestionAgentRuntime:
     ) -> dict[str, Any]:
         stage = str(arguments.get("stage", "")).strip()
         question = str(arguments.get("question", "")).strip()
+        if len(question) > 300:
+            question = question[:300].rstrip()
         options = [
             str(item).strip()
             for item in arguments.get("options", [])

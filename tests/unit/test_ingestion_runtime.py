@@ -58,7 +58,7 @@ def test_ingestion_sdk_turn_budget_covers_full_proposal_sequence(
 
 def test_ingestion_system_prompt_keeps_approval_after_preview_and_sql() -> None:
     expected_sequence = (
-        "build_diff_preview, generate_write_sql_draft, request_human_approval, "
+        "build_diff_preview, generate_write_sql_draft, AskUserQuestion, "
         "then the final"
     )
 
@@ -82,3 +82,69 @@ def test_ingestion_sdk_error_result_is_reported_as_ai_unavailable() -> None:
     assert exc_info.value.code == "INGESTION_AI_UNAVAILABLE"
     assert exc_info.value.status_code == 503
     assert "error_max_turns" in exc_info.value.message
+
+
+def test_recover_agent_output_from_tool_trace_for_ask_user_question() -> None:
+    runtime = WriteIngestionAgentRuntime()
+    tool_trace = [
+        {
+            "tool_name": "describe_table_schema",
+            "result": {
+                "table_name": "employee_roster",
+                "business_type": "roster",
+                "primary_keys": ["employee_id"],
+                "match_columns": ["employee_id"],
+                "write_mode": "update_existing",
+                "time_grain": "none",
+            },
+        },
+        {
+            "tool_name": "inspect_upload",
+            "result": {
+                "column_summary": {"all_columns": ["Employee ID", "Name"]},
+            },
+        },
+        {
+            "tool_name": "build_diff_preview",
+            "result": {
+                "predicted_insert_count": 3,
+                "predicted_update_count": 2,
+                "predicted_conflict_count": 0,
+            },
+        },
+        {
+            "tool_name": "generate_write_sql_draft",
+            "arguments": {
+                "target_table": "employee_roster",
+                "action_mode": "update_existing",
+                "match_columns": ["employee_id"],
+            },
+            "result": {"sql_draft": "MERGE INTO employee_roster ..."},
+        },
+        {
+            "tool_name": "AskUserQuestion",
+            "arguments": {
+                "stage": "proposal_approval",
+                "question": "Approve this ingestion action?",
+                "options": ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
+                "recommended_option": "update_existing",
+            },
+            "result": {
+                "required": True,
+                "status": "pending",
+                "mechanism": "frontend_approval_card",
+                "stage": "proposal_approval",
+                "question": "Approve this ingestion action?",
+                "options": ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
+                "recommended_option": "update_existing",
+            },
+        },
+    ]
+
+    output = runtime._recover_agent_output_from_tool_trace(tool_trace=tool_trace)  # noqa: SLF001
+
+    assert output is not None
+    assert output.status == "awaiting_user_approval"
+    assert output.human_approval.stage == "proposal_approval"
+    assert output.proposal is not None
+    assert output.proposal.recommended_action == "update_existing"

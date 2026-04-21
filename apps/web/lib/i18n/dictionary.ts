@@ -62,6 +62,11 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.ingestion.executionReceipt":
       "Execution receipt: target {{targetTable}} · inserted {{insertedRows}} · updated {{updatedRows}}",
     "chat.ingestion.executionRows": "Affected rows {{affectedRows}} · rows after import {{rowsAfter}}",
+    "chat.ingestion.awaitingApprovalQuestion": "Approval required: {{question}}",
+    "chat.ingestion.awaitingApprovalOptions": "Reply with one option (or number): {{options}}",
+    "chat.ingestion.awaitingApprovalRecommended": "Recommended option: {{action}}",
+    "chat.ingestion.awaitingApprovalInvalidChoice":
+      "A pending ingestion approval is waiting. Reply with one valid option: {{options}}",
     "chat.emptyStartTitle": "Start a Conversation",
     "chat.emptyDescription":
       "Ask questions about your HR and project data. The AI will analyze your data and generate interactive visualizations you can add to your report workspace.",
@@ -275,6 +280,11 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.ingestion.executionReceipt":
       "执行回执：目标表 {{targetTable}} · 新增 {{insertedRows}} · 更新 {{updatedRows}}",
     "chat.ingestion.executionRows": "影响行数 {{affectedRows}} · 导入后总行数 {{rowsAfter}}",
+    "chat.ingestion.awaitingApprovalQuestion": "需要你确认：{{question}}",
+    "chat.ingestion.awaitingApprovalOptions": "请回复一个选项（或序号）：{{options}}",
+    "chat.ingestion.awaitingApprovalRecommended": "推荐选项：{{action}}",
+    "chat.ingestion.awaitingApprovalInvalidChoice":
+      "当前有待确认的导入方案，请回复一个有效选项：{{options}}",
     "chat.emptyStartTitle": "开始一段会话",
     "chat.emptyDescription": "你可以围绕 HR 与项目数据提问，AI 会自动分析并生成可交互图表，直接加入你的报告工作空间。",
     "chat.emptyPrompt1": "按部门展示人数分布",

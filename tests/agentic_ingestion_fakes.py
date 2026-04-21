@@ -106,7 +106,7 @@ def _mock_run_planning_agent_loop(
             conn=conn,
             job_id=job_id,
             trace=tool_trace,
-            name="request_human_approval",
+            name="AskUserQuestion",
             arguments={
                 "stage": "catalog_setup",
                 "question": "Approve catalog setup before planning the write?",
@@ -204,7 +204,7 @@ def _mock_run_planning_agent_loop(
         conn=conn,
         job_id=job_id,
         trace=tool_trace,
-        name="request_human_approval",
+        name="AskUserQuestion",
         arguments={
             "stage": "proposal_approval",
             "question": "Approve the next ingestion action?",

@@ -5,6 +5,7 @@ import type {
   IngestionCatalogSetupSeed,
   IngestionDryRunSummary,
   IngestionExecuteResult,
+  IngestionHumanApproval,
   IngestionPlanResult,
   IngestionProposal,
   IngestionProposalAction,
@@ -266,6 +267,7 @@ function mapPlanLikePayload(payload: unknown): IngestionPlanResult {
       },
       setupQuestions: asSetupQuestions(record.setup_questions),
       suggestedCatalogSeed: fromApiSetupSeed(asRecord(record.suggested_catalog_seed)),
+      humanApproval: mapHumanApproval(record.human_approval, "catalog_setup"),
       route: {
         route: asString(asRecord(record.route).route),
         reason: asString(asRecord(record.route).reason),
@@ -280,6 +282,7 @@ function mapPlanLikePayload(payload: unknown): IngestionPlanResult {
     jobId: asString(record.job_id),
     proposalId: asString(record.proposal_id),
     proposal: mapProposal(asRecord(record.proposal_json)),
+    humanApproval: mapHumanApproval(record.human_approval, "proposal_approval"),
     route: {
       route: asString(asRecord(record.route).route),
       reason: asString(asRecord(record.route).reason),
@@ -292,6 +295,22 @@ function mapPlanLikePayload(payload: unknown): IngestionPlanResult {
           catalogEntry: asRecord(asRecord(record.setup).catalog_entry),
         }
       : undefined,
+  };
+}
+
+function mapHumanApproval(
+  payload: unknown,
+  fallbackStage: IngestionHumanApproval["stage"]
+): IngestionHumanApproval {
+  const record = asRecord(payload);
+  const stage = normalizeApprovalStage(asOptionalString(record.stage), fallbackStage);
+  return {
+    required: record.required === undefined ? true : Boolean(record.required),
+    mechanism: asOptionalString(record.mechanism) ?? "frontend_approval_card",
+    stage,
+    question: asOptionalString(record.question) ?? "",
+    options: asStringList(record.options),
+    recommendedOption: asOptionalString(record.recommended_option) ?? null,
   };
 }
 
@@ -316,6 +335,16 @@ function mapProposal(payload: Record<string, unknown>): IngestionProposal {
     requiresCatalogSetup: Boolean(payload.requires_catalog_setup),
     createdAt: asString(payload.created_at),
   };
+}
+
+function normalizeApprovalStage(
+  value: string | undefined,
+  fallbackStage: IngestionHumanApproval["stage"]
+): IngestionHumanApproval["stage"] {
+  if (value === "catalog_setup" || value === "proposal_approval") {
+    return value;
+  }
+  return fallbackStage;
 }
 
 function mapDryRunSummary(payload: unknown): IngestionDryRunSummary {

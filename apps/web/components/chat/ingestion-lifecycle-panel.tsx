@@ -242,6 +242,8 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
   }
 
   const candidateActions = approvalPayload?.proposal.candidateActions ?? [];
+  const approvalOptions = approvalPayload?.humanApproval.options ?? [];
+  const supportedActions = approvalOptions.length > 0 ? approvalOptions : candidateActions;
 
   return (
     <div className="border-b border-border-cream bg-parchment/60 px-4 py-3" data-testid="ingestion-lifecycle-panel">
@@ -332,6 +334,19 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
 
           {approvalPayload ? (
             <div className="space-y-3" data-testid="ingestion-proposal-card">
+              {approvalPayload.humanApproval.question ? (
+                <div
+                  className="rounded-comfortable border border-border-cream bg-amber-50 px-3 py-3"
+                  data-testid="ingestion-approval-question"
+                >
+                  <p className="text-body-sm text-near-black">{approvalPayload.humanApproval.question}</p>
+                  {approvalPayload.humanApproval.recommendedOption ? (
+                    <p className="pt-1 text-caption text-stone-gray">
+                      Recommended: {approvalPayload.humanApproval.recommendedOption}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="rounded-comfortable border border-border-cream bg-ivory/70 px-3 py-3">
                 <p className="text-body-sm font-medium text-near-black">
                   {t("ingestion.lifecycle.recommendedAction", {
@@ -362,8 +377,7 @@ export function IngestionLifecyclePanel({ workspaceId, workspaceTitle }: Ingesti
 
               <div className="flex flex-wrap gap-2">
                 {PROPOSAL_ACTION_BUTTONS.map((button) => {
-                  const isSupported =
-                    button.approvedAction === "cancel" || candidateActions.includes(button.approvedAction);
+                  const isSupported = supportedActions.includes(button.approvedAction);
                   return (
                     <Button
                       key={`${button.approvedAction}-${button.timeGrain ?? "none"}`}

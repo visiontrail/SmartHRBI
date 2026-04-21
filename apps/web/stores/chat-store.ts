@@ -1,15 +1,22 @@
 import { create } from "zustand";
 import type { ChatSession, ChatMessage } from "@/types/chat";
+import type { IngestionPlanAwaitingApproval, IngestionUploadResult } from "@/types/ingestion";
 import {
   CHAT_STORAGE_KEY,
   safeLoadFromStorage,
   safeSaveToStorage,
 } from "@/lib/chat/session-storage";
 
+export type PendingIngestionApproval = {
+  upload: IngestionUploadResult;
+  plan: IngestionPlanAwaitingApproval;
+};
+
 type ChatState = {
   sessions: ChatSession[];
   activeSessionId: string | null;
   messagesBySession: Record<string, ChatMessage[]>;
+  pendingIngestionBySession: Record<string, PendingIngestionApproval | undefined>;
   isComposing: boolean;
   composerText: string;
 
@@ -19,6 +26,11 @@ type ChatState = {
   setActiveSession: (sessionId: string | null) => void;
   setMessages: (sessionId: string, messages: ChatMessage[]) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
+  setPendingIngestionApproval: (
+    sessionId: string,
+    pending: PendingIngestionApproval | null
+  ) => void;
+  clearPendingIngestionApproval: (sessionId: string) => void;
   touchSession: (
     sessionId: string,
     updates: { lastMessage?: string; messageDelta?: number; title?: string }
@@ -81,6 +93,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: persistedChatState?.sessions ?? [],
   activeSessionId: persistedChatState?.activeSessionId ?? null,
   messagesBySession: persistedChatState?.messagesBySession ?? {},
+  pendingIngestionBySession: {},
   isComposing: false,
   composerText: "",
 
@@ -94,7 +107,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messagesBySession = Object.fromEntries(
         Object.entries(state.messagesBySession).filter(([sessionId]) => sessionIds.has(sessionId))
       );
-      const nextState = { sessions, activeSessionId, messagesBySession };
+      const pendingIngestionBySession = Object.fromEntries(
+        Object.entries(state.pendingIngestionBySession).filter(([sessionId]) => sessionIds.has(sessionId))
+      );
+      const nextState = {
+        sessions,
+        activeSessionId,
+        messagesBySession,
+        pendingIngestionBySession,
+      };
       persistChatState(nextState);
       return nextState;
     }),
@@ -124,7 +145,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         delete next[sessionId];
         return next;
       })();
-      const nextState = { sessions, activeSessionId, messagesBySession };
+      const pendingIngestionBySession = (() => {
+        const next = { ...state.pendingIngestionBySession };
+        delete next[sessionId];
+        return next;
+      })();
+      const nextState = { sessions, activeSessionId, messagesBySession, pendingIngestionBySession };
       persistChatState(nextState);
       return nextState;
     }),
@@ -159,6 +185,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         messagesBySession: nextState.messagesBySession,
       };
+    }),
+
+  setPendingIngestionApproval: (sessionId, pending) =>
+    set((state) => {
+      const next = { ...state.pendingIngestionBySession };
+      if (pending) {
+        next[sessionId] = pending;
+      } else {
+        delete next[sessionId];
+      }
+      return { pendingIngestionBySession: next };
+    }),
+
+  clearPendingIngestionApproval: (sessionId) =>
+    set((state) => {
+      if (!state.pendingIngestionBySession[sessionId]) {
+        return state;
+      }
+      const next = { ...state.pendingIngestionBySession };
+      delete next[sessionId];
+      return { pendingIngestionBySession: next };
     }),
 
   touchSession: (sessionId, updates) =>

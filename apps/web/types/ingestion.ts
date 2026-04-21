@@ -72,6 +72,15 @@ export type IngestionProposal = {
   createdAt: string;
 };
 
+export type IngestionHumanApproval = {
+  required: boolean;
+  mechanism: string;
+  stage: "proposal_approval" | "catalog_setup";
+  question: string;
+  options: string[];
+  recommendedOption: string | null;
+};
+
 export type IngestionPlanAwaitingSetup = {
   status: "awaiting_catalog_setup";
   workspaceId: string;
@@ -79,6 +88,7 @@ export type IngestionPlanAwaitingSetup = {
   agentGuess: IngestionAgentGuess;
   setupQuestions: IngestionSetupQuestion[];
   suggestedCatalogSeed: IngestionCatalogSetupSeed;
+  humanApproval: IngestionHumanApproval;
   route: IngestionAgentRoute;
   toolTrace: Record<string, unknown>[];
 };
@@ -89,6 +99,7 @@ export type IngestionPlanAwaitingApproval = {
   jobId: string;
   proposalId: string;
   proposal: IngestionProposal;
+  humanApproval: IngestionHumanApproval;
   route: IngestionAgentRoute;
   toolTrace: Record<string, unknown>[];
   existingTables?: Record<string, unknown>;

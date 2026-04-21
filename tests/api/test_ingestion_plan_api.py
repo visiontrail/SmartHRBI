@@ -272,7 +272,7 @@ def test_ingestion_plan_reports_agent_loop_audit(monkeypatch, tmp_path: Path) ->
     assert audit["human_approval_tool_required"] is True
 
     approval_trace = next(
-        item for item in payload["tool_trace"] if item.get("tool_name") == "request_human_approval"
+        item for item in payload["tool_trace"] if item.get("tool_name") == "AskUserQuestion"
     )
     approval_result = approval_trace["result"]
     assert approval_result["stage"] in {"catalog_setup", "proposal_approval"}

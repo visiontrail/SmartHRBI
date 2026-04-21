@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useChatStore } from "@/stores/chat-store";
+import { useChatStore, type PendingIngestionApproval } from "@/stores/chat-store";
 import { useAssetStore } from "@/stores/asset-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -23,6 +23,8 @@ import type {
   IngestionExecuteResult,
   IngestionPlanAwaitingApproval,
   IngestionPlanResult,
+  IngestionProposalAction,
+  IngestionTimeGrain,
   IngestionUploadResult,
 } from "@/types/ingestion";
 
@@ -110,12 +112,36 @@ export function useSendMessage() {
         throw new Error(t("chat.toast.noWorkspace"));
       }
       const trimmedContent = content.trim();
+      const pendingApproval = useChatStore.getState().pendingIngestionBySession[sessionId];
       if (attachment) {
+        useChatStore.getState().clearPendingIngestionApproval(sessionId);
         return runIngestionConversationResponse({
           sessionId,
           workspaceId,
           content: trimmedContent || t("chat.ingestion.defaultRequirement"),
           attachment,
+          t,
+        });
+      }
+      if (pendingApproval) {
+        const approvedAction = resolvePendingApprovalAction({
+          rawInput: trimmedContent,
+          pending: pendingApproval,
+        });
+        if (!approvedAction) {
+          throw new Error(
+            t("chat.ingestion.awaitingApprovalInvalidChoice", {
+              options: formatPendingApprovalOptions({
+                pending: pendingApproval,
+                t,
+              }),
+            })
+          );
+        }
+        return runIngestionApprovalResponse({
+          sessionId,
+          pending: pendingApproval,
+          approvedAction,
           t,
         });
       }
@@ -353,26 +379,10 @@ async function runIngestionConversationResponse({
   let approvalResult: IngestionApprovalResult | null = null;
   let executionResult: IngestionExecuteResult | null = null;
   if (plan.status === "awaiting_user_approval") {
-    const approvedAction = plan.proposal.recommendedAction;
-    approvalResult = await approveIngestionProposal({
-      workspaceId,
-      jobId: upload.jobId,
-      proposalId: plan.proposalId,
-      approvedAction,
-      userOverrides:
-        approvedAction === "time_partitioned_new_table"
-          ? {
-              timeGrain: plan.proposal.timeGrain,
-            }
-          : undefined,
+    useChatStore.getState().setPendingIngestionApproval(sessionId, {
+      upload,
+      plan,
     });
-    if (approvalResult.status === "approved") {
-      executionResult = await executeIngestionProposal({
-        workspaceId,
-        jobId: upload.jobId,
-        proposalId: plan.proposalId,
-      });
-    }
   }
 
   const assistantMessage: ChatMessage = {
@@ -384,6 +394,59 @@ async function runIngestionConversationResponse({
       plan,
       autoSetupApplied,
       setupTableName,
+      approvalResult,
+      executionResult,
+      t,
+    }),
+    timestamp: new Date().toISOString(),
+  };
+  return { assistantMessage };
+}
+
+async function runIngestionApprovalResponse({
+  sessionId,
+  pending,
+  approvedAction,
+  t,
+}: {
+  sessionId: string;
+  pending: PendingIngestionApproval;
+  approvedAction: IngestionProposalAction;
+  t: TranslateFn;
+}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+  const plan = pending.plan;
+  const approvalResult = await approveIngestionProposal({
+    workspaceId: plan.workspaceId,
+    jobId: plan.jobId,
+    proposalId: plan.proposalId,
+    approvedAction,
+    userOverrides:
+      approvedAction === "time_partitioned_new_table"
+        ? {
+            timeGrain: plan.proposal.timeGrain,
+          }
+        : undefined,
+  });
+  useChatStore.getState().clearPendingIngestionApproval(sessionId);
+
+  let executionResult: IngestionExecuteResult | null = null;
+  if (approvalResult.status === "approved") {
+    executionResult = await executeIngestionProposal({
+      workspaceId: plan.workspaceId,
+      jobId: plan.jobId,
+      proposalId: plan.proposalId,
+    });
+  }
+
+  const assistantMessage: ChatMessage = {
+    id: `msg-${generateId()}`,
+    sessionId,
+    role: "assistant",
+    content: buildIngestionSummaryMessage({
+      upload: pending.upload,
+      plan,
+      autoSetupApplied: false,
+      setupTableName: null,
       approvalResult,
       executionResult,
       t,
@@ -528,6 +591,36 @@ function buildAwaitingApprovalSummary(
     return lines;
   }
 
+  if (!approvalResult) {
+    const options = collectApprovalOptions(plan);
+    lines.push(
+      t("chat.ingestion.awaitingApprovalQuestion", {
+        question: plan.humanApproval.question,
+      })
+    );
+    lines.push(
+      t("chat.ingestion.awaitingApprovalOptions", {
+        options: formatApprovalActionsForDisplay({
+          actions: options,
+          timeGrain: plan.proposal.timeGrain,
+          t,
+        }),
+      })
+    );
+    if (plan.humanApproval.recommendedOption) {
+      lines.push(
+        t("chat.ingestion.awaitingApprovalRecommended", {
+          action: toProposalActionLabel({
+            action: plan.humanApproval.recommendedOption,
+            timeGrain: plan.proposal.timeGrain,
+            t,
+          }),
+        })
+      );
+    }
+    return lines;
+  }
+
   if (approvalResult?.status === "approved") {
     lines.push(
       t("chat.ingestion.autoApproved", {
@@ -555,6 +648,122 @@ function buildAwaitingApprovalSummary(
     );
   }
   return lines;
+}
+
+function normalizeProposalAction(action: string): IngestionProposalAction | null {
+  const normalized = action.trim().toLowerCase();
+  if (
+    normalized === "update_existing" ||
+    normalized === "time_partitioned_new_table" ||
+    normalized === "new_table" ||
+    normalized === "cancel"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function collectApprovalOptions(plan: IngestionPlanAwaitingApproval): IngestionProposalAction[] {
+  const fromApproval = plan.humanApproval.options
+    .map((item) => normalizeProposalAction(item))
+    .filter((item): item is IngestionProposalAction => item !== null);
+  const fromProposal = plan.proposal.candidateActions
+    .map((item) => normalizeProposalAction(item))
+    .filter((item): item is IngestionProposalAction => item !== null);
+  const merged = fromApproval.length > 0 ? fromApproval : fromProposal;
+  if (merged.length === 0) {
+    return ["update_existing", "time_partitioned_new_table", "new_table", "cancel"];
+  }
+  const deduped: IngestionProposalAction[] = [];
+  for (const item of merged) {
+    if (!deduped.includes(item)) {
+      deduped.push(item);
+    }
+  }
+  return deduped;
+}
+
+function formatApprovalActionsForDisplay({
+  actions,
+  timeGrain,
+  t,
+}: {
+  actions: IngestionProposalAction[];
+  timeGrain: IngestionTimeGrain;
+  t: TranslateFn;
+}): string {
+  return actions
+    .map((action, index) => `${index + 1}) ${action} (${toProposalActionLabel({ action, timeGrain, t })})`)
+    .join("  ");
+}
+
+function formatPendingApprovalOptions({
+  pending,
+  t,
+}: {
+  pending: PendingIngestionApproval;
+  t: TranslateFn;
+}): string {
+  return formatApprovalActionsForDisplay({
+    actions: collectApprovalOptions(pending.plan),
+    timeGrain: pending.plan.proposal.timeGrain,
+    t,
+  });
+}
+
+function resolvePendingApprovalAction({
+  rawInput,
+  pending,
+}: {
+  rawInput: string;
+  pending: PendingIngestionApproval;
+}): IngestionProposalAction | null {
+  const options = collectApprovalOptions(pending.plan);
+  if (options.length === 0) {
+    return null;
+  }
+  const normalized = rawInput.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const direct = normalizeProposalAction(normalized);
+  if (direct && options.includes(direct)) {
+    return direct;
+  }
+
+  const compact = normalized.replace(/\s+/g, "");
+  const aliases: Record<string, IngestionProposalAction> = {
+    "updateexisting": "update_existing",
+    "更新现有表": "update_existing",
+    "更新已有表": "update_existing",
+    "timepartitionednewtable": "time_partitioned_new_table",
+    "分区新表": "time_partitioned_new_table",
+    "按时间分区新建表": "time_partitioned_new_table",
+    "newtable": "new_table",
+    "创建新表": "new_table",
+    "cancel": "cancel",
+    "取消": "cancel",
+    "recommended": pending.plan.proposal.recommendedAction,
+    "推荐": pending.plan.proposal.recommendedAction,
+    "建议": pending.plan.proposal.recommendedAction,
+  };
+  const aliasAction = aliases[compact];
+  if (aliasAction && options.includes(aliasAction)) {
+    return aliasAction;
+  }
+
+  const asIndex = Number.parseInt(compact, 10);
+  if (Number.isFinite(asIndex) && asIndex >= 1 && asIndex <= options.length) {
+    return options[asIndex - 1] ?? null;
+  }
+
+  for (const option of options) {
+    if (normalized.includes(option)) {
+      return option;
+    }
+  }
+  return null;
 }
 
 function toProposalActionLabel({
