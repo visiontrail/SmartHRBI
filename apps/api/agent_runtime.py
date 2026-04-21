@@ -322,6 +322,7 @@ class AgentRequest:
     role: str
     department: str | None
     clearance: int
+    workspace_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -1026,6 +1027,7 @@ class AgentRuntime:
                     ),
                     user_id=run_context.request.user_id,
                     project_id=run_context.request.project_id,
+                    workspace_id=run_context.request.workspace_id,
                     dataset_table=run_context.request.dataset_table,
                     role=run_context.request.role,
                     department=run_context.request.department,
@@ -1300,6 +1302,7 @@ class AgentRuntime:
             all_tables = self.tool_service.dataset_service.list_tables(
                 user_id=request.user_id,
                 project_id=request.project_id,
+                workspace_id=request.workspace_id,
             )
         except Exception:
             return request.dataset_table
@@ -1338,7 +1341,9 @@ class AgentRuntime:
 
         try:
             all_tables = self.tool_service.dataset_service.list_tables(
-                user_id=request.user_id, project_id=request.project_id
+                user_id=request.user_id,
+                project_id=request.project_id,
+                workspace_id=request.workspace_id,
             )
         except Exception:
             all_tables = [request.dataset_table]

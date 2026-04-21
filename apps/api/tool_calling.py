@@ -31,7 +31,6 @@ from .security import (
     SQLReadOnlyValidator,
     secure_query_sql,
 )
-from .schema_inference import load_schema_overlay
 from .semantic import (
     IntentParser,
     MetricCompileError,
@@ -39,10 +38,8 @@ from .semantic import (
     QueryFilter,
     SemanticQueryAST,
     SemanticRegistry,
-    build_overlay_registry,
     get_metric_compiler,
     get_semantic_registry,
-    merge_registries,
 )
 from .views import SaveViewInput, ViewStorageError, get_view_storage_service
 
@@ -89,6 +86,7 @@ class ToolCallRequest(BaseModel):
     idempotency_key: str = Field(default_factory=lambda: uuid.uuid4().hex)
     user_id: str
     project_id: str
+    workspace_id: str | None = None
     dataset_table: str
     role: str = "viewer"
     department: str | None = None
@@ -129,6 +127,7 @@ class ToolExecutionError(Exception):
 class ToolContext:
     user_id: str
     project_id: str
+    workspace_id: str | None
     dataset_table: str
     role: str
     department: str | None
@@ -233,6 +232,7 @@ class ToolCallingService:
         context = ToolContext(
             user_id=request.user_id,
             project_id=request.project_id,
+            workspace_id=request.workspace_id,
             dataset_table=request.dataset_table,
             role=request.role,
             department=request.department,
@@ -632,7 +632,11 @@ class ToolCallingService:
             ) from exc
 
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+            with self.dataset_service.session_manager.connection(
+                context.user_id,
+                context.project_id,
+                workspace_id=context.workspace_id,
+            ) as conn:
                 cursor = conn.execute(secure_sql)
                 columns = [column[0] for column in (cursor.description or [])]
                 rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -714,7 +718,11 @@ class ToolCallingService:
         )
 
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+            with self.dataset_service.session_manager.connection(
+                context.user_id,
+                context.project_id,
+                workspace_id=context.workspace_id,
+            ) as conn:
                 column_rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
                 row_count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
                 cursor = conn.execute(f'SELECT * FROM "{table}" LIMIT {sample_limit}')
@@ -757,7 +765,11 @@ class ToolCallingService:
         )
 
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+            with self.dataset_service.session_manager.connection(
+                context.user_id,
+                context.project_id,
+                workspace_id=context.workspace_id,
+            ) as conn:
                 cursor = conn.execute(f'SELECT * FROM "{table}" LIMIT {limit}')
                 columns = [column[0] for column in (cursor.description or [])]
                 rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -831,7 +843,11 @@ class ToolCallingService:
 
         limited_sql = f"SELECT * FROM ({secure_sql}) AS scoped_query LIMIT {max_rows}"
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+            with self.dataset_service.session_manager.connection(
+                context.user_id,
+                context.project_id,
+                workspace_id=context.workspace_id,
+            ) as conn:
                 cursor = conn.execute(limited_sql)
                 columns = [column[0] for column in (cursor.description or [])]
                 rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -1017,6 +1033,7 @@ class ToolCallingService:
         resolved_context = ToolContext(
             user_id=context.user_id,
             project_id=context.project_id,
+            workspace_id=context.workspace_id,
             dataset_table=resolved_dataset_table or context.dataset_table,
             role=context.role,
             department=context.department,
@@ -1026,7 +1043,11 @@ class ToolCallingService:
 
     def _fetch_session_tables(self, context: ToolContext) -> list[str]:
         try:
-            with self.dataset_service.session_manager.connection(context.user_id, context.project_id) as conn:
+            with self.dataset_service.session_manager.connection(
+                context.user_id,
+                context.project_id,
+                workspace_id=context.workspace_id,
+            ) as conn:
                 rows = conn.execute("SHOW TABLES").fetchall()
         except duckdb.Error as exc:
             raise ToolExecutionError(
@@ -1162,22 +1183,13 @@ class ToolCallingService:
         return set()
 
     def _effective_compiler(self, context: ToolContext) -> MetricCompiler:
-        """Return a MetricCompiler augmented with any LLM-inferred overlay for this dataset."""
-        # dataset_table is e.g. "dataset_<batch_id>"
-        batch_id = context.dataset_table.removeprefix("dataset_")
-        overlay = load_schema_overlay(
-            meta_dir=self.dataset_service.storage.meta_dir,
-            batch_id=batch_id,
-        )
-        if overlay is None:
-            return self.compiler
+        """Return the static semantic compiler.
 
-        overlay_registry = build_overlay_registry(overlay, entity_name=context.dataset_table)
-        if overlay_registry is None:
-            return self.compiler
-
-        merged = merge_registries(self.registry, overlay_registry)
-        return MetricCompiler(registry=merged)
+        Legacy upload-time schema overlays were part of the rule-based Excel
+        ingestion path and are no longer produced.
+        """
+        _ = context
+        return self.compiler
 
     def _allowed_columns_for_role(self, context: ToolContext) -> set[str]:
         dataset_profile = self._tool_describe_table(

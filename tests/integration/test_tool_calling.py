@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.chat import clear_chat_stream_service_cache
@@ -13,6 +11,7 @@ from apps.api.main import app
 from apps.api.semantic import clear_semantic_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
+from tests.agent_test_utils import upload_dataset
 from tests.auth_utils import auth_headers
 
 
@@ -30,70 +29,31 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_view_storage_service_cache()
 
 
-def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
-    dataframe = pd.DataFrame(rows)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-
 def _upload_dataset(client: TestClient) -> str:
-    upload_file = _excel_bytes(
-        [
-            {"employee id": "E-001", "department": "HR", "status": "active", "salary": 1000},
-            {"employee id": "E-002", "department": "HR", "status": "inactive", "salary": 1200},
-            {"employee id": "E-003", "department": "PM", "status": "active", "salary": 900},
-        ]
-    )
-
-    headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
-    response = client.post(
-        "/datasets/upload",
-        data={"user_id": "alice", "project_id": "north"},
-        headers=headers,
-        files=[
-            (
-                "files",
-                (
-                    "employees.xlsx",
-                    upload_file,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            )
+    return upload_dataset(
+        client,
+        rows=[
+            {"employee_id": "E-001", "department": "HR", "status": "active", "salary": 1000},
+            {"employee_id": "E-002", "department": "HR", "status": "inactive", "salary": 1200},
+            {"employee_id": "E-003", "department": "PM", "status": "active", "salary": 900},
         ],
+        user_id="alice",
+        project_id="north",
     )
-    assert response.status_code == 200
-    return response.json()["dataset_table"]
 
 
 def _upload_non_hr_dataset(client: TestClient) -> str:
-    upload_file = _excel_bytes(
-        [
-            {"employee id": "E-101", "department": "NTN中心", "status": "active", "salary": 1000},
-            {"employee id": "E-102", "department": "NTN中心", "status": "inactive", "salary": 1200},
-            {"employee id": "E-103", "department": "平台研发", "status": "active", "salary": 900},
-        ]
-    )
-
-    headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
-    response = client.post(
-        "/datasets/upload",
-        data={"user_id": "alice", "project_id": "north"},
-        headers=headers,
-        files=[
-            (
-                "files",
-                (
-                    "employees-no-hr.xlsx",
-                    upload_file,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            )
+    return upload_dataset(
+        client,
+        rows=[
+            {"employee_id": "E-101", "department": "NTN中心", "status": "active", "salary": 1000},
+            {"employee_id": "E-102", "department": "NTN中心", "status": "inactive", "salary": 1200},
+            {"employee_id": "E-103", "department": "平台研发", "status": "active", "salary": 900},
         ],
+        user_id="alice",
+        project_id="north",
+        filename="employees-no-hr.xlsx",
     )
-    assert response.status_code == 200
-    return response.json()["dataset_table"]
 
 
 def test_tool_calling_query_metrics_returns_structured_result(monkeypatch, tmp_path: Path) -> None:

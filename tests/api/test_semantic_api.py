@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.config import get_settings
 from apps.api.datasets import clear_dataset_service_cache
 from apps.api.main import app
 from apps.api.semantic import clear_semantic_cache
+from tests.agent_test_utils import upload_dataset
 from tests.auth_utils import auth_headers
 
 
@@ -22,14 +21,6 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
     clear_dataset_service_cache()
     clear_semantic_cache()
-
-
-def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
-    dataframe = pd.DataFrame(rows)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False)
-    return buffer.getvalue()
 
 
 def test_semantic_metrics_api_lists_metrics(monkeypatch, tmp_path: Path) -> None:
@@ -56,22 +47,16 @@ def test_semantic_metrics_api_lists_metrics(monkeypatch, tmp_path: Path) -> None
 def test_semantic_query_api_executes_metric_and_applies_security(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
-    upload_file = _excel_bytes(
-        [
-            {"employee id": "E-001", "department": "HR", "status": "active", "salary": 1000},
-            {"employee id": "E-002", "department": "HR", "status": "inactive", "salary": 1100},
-            {"employee id": "E-003", "department": "PM", "status": "active", "salary": 1200},
-        ]
-    )
-
     with TestClient(app) as client:
-        upload_headers = auth_headers(
+        dataset_table = upload_dataset(
             client,
+            rows=[
+                {"employee_id": "E-001", "department": "HR", "status": "active", "salary": 1000},
+                {"employee_id": "E-002", "department": "HR", "status": "inactive", "salary": 1100},
+                {"employee_id": "E-003", "department": "PM", "status": "active", "salary": 1200},
+            ],
             user_id="alice",
             project_id="north",
-            role="admin",
-            department="HR",
-            clearance=9,
         )
         query_headers = auth_headers(
             client,
@@ -81,25 +66,6 @@ def test_semantic_query_api_executes_metric_and_applies_security(monkeypatch, tm
             department="HR",
             clearance=1,
         )
-        upload = client.post(
-            "/datasets/upload",
-            data={"user_id": "alice", "project_id": "north"},
-            headers=upload_headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees.xlsx",
-                        upload_file,
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                ),
-            ],
-        )
-
-        assert upload.status_code == 200
-        dataset_table = upload.json()["dataset_table"]
-
         query_response = client.post(
             "/semantic/query",
             json={

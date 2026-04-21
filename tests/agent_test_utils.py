@@ -16,11 +16,10 @@ from apps.api.audit import clear_audit_logger_cache
 from apps.api.auth import clear_auth_cache
 from apps.api.chat import clear_chat_stream_service_cache
 from apps.api.config import get_settings
-from apps.api.datasets import clear_dataset_service_cache
+from apps.api.datasets import clear_dataset_service_cache, get_dataset_service
 from apps.api.semantic import clear_semantic_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
-from tests.auth_utils import auth_headers
 
 
 def set_agent_env(
@@ -74,31 +73,16 @@ def upload_dataset(
     clearance: int = 9,
     filename: str = "dataset.xlsx",
 ) -> str:
-    headers = auth_headers(
-        client,
-        user_id=user_id,
-        project_id=project_id,
-        role=role,
-        department=department,
-        clearance=clearance,
-    )
-    response = client.post(
-        "/datasets/upload",
-        data={"user_id": user_id, "project_id": project_id},
-        headers=headers,
-        files=[
-            (
-                "files",
-                (
-                    filename,
-                    excel_bytes(rows),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            )
-        ],
-    )
-    assert response.status_code == 200, response.text
-    return str(response.json()["dataset_table"])
+    _ = (client, role, department, clearance, filename)
+    batch_key = f"{abs(hash((user_id, project_id, filename))) & 0xFFFFFFFF:x}"
+    dataset_table = f"dataset_{batch_key}"
+    dataframe = pd.DataFrame(rows)
+    service = get_dataset_service(get_settings().upload_dir)
+    with service.session_manager.connection(user_id, project_id) as conn:
+        conn.register("seed_df", dataframe)
+        conn.execute(f'CREATE OR REPLACE TABLE "{dataset_table}" AS SELECT * FROM seed_df')
+        conn.unregister("seed_df")
+    return dataset_table
 
 
 def read_sse_events(response) -> tuple[list[dict[str, Any]], float | None]:

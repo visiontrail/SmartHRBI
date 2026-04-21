@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.audit import clear_audit_logger_cache
@@ -32,53 +30,14 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_view_storage_service_cache()
 
 
-def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
-    dataframe = pd.DataFrame(rows)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-
-def test_audit_log_captures_login_upload_query_and_denied_events(monkeypatch, tmp_path: Path) -> None:
+def test_audit_log_captures_login_and_denied_events(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         admin_headers = auth_headers(client, user_id="admin", project_id="north", role="admin", clearance=9)
 
-        upload = client.post(
-            "/datasets/upload",
-            data={"user_id": "admin", "project_id": "north"},
-            headers=admin_headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees.xlsx",
-                        _excel_bytes([{"Employee ID": "E-001", "Department": "HR", "Salary": 1000}]),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                )
-            ],
-        )
-        assert upload.status_code == 200
-
         viewer_headers = auth_headers(client, user_id="viewer", project_id="north", role="viewer", clearance=1)
-        denied = client.post(
-            "/datasets/upload",
-            data={"user_id": "viewer", "project_id": "north"},
-            headers=viewer_headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees-viewer.xlsx",
-                        _excel_bytes([{"Employee ID": "E-002", "Department": "PM", "Salary": 900}]),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                )
-            ],
-        )
+        denied = client.get("/audit/events", headers=viewer_headers)
         expect_error_code(denied, "RBAC_FORBIDDEN", status_code=403)
 
         events_response = client.get(
@@ -89,13 +48,12 @@ def test_audit_log_captures_login_upload_query_and_denied_events(monkeypatch, tm
         assert events_response.status_code == 200
 
         events_payload = events_response.json()
-        assert events_payload["count"] >= 4
+        assert events_payload["count"] >= 3
         events = events_payload["events"]
 
     actions = {item["action"] for item in events}
     assert "login" in actions
-    assert "upload" in actions
-    assert "datasets:upload" in actions
+    assert "audit:read" in actions
 
     denied_events = [item for item in events if item["status"] == "denied"]
     assert denied_events

@@ -145,12 +145,13 @@ ANTHROPIC_AUTH_TOKEN=
 ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-chat
 API_TIMEOUT_MS=600000
 CLAUDE_AGENT_SDK_ENABLED=true
-AGENTIC_INGESTION_ENABLED=false
-LEGACY_DATASET_UPLOAD_ENABLED=true
+AGENTIC_INGESTION_ENABLED=true
 AUTH_SECRET=replace-with-a-strong-secret
 UPLOAD_DIR=./data/uploads
 CORS_ALLOW_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 ```
+
+Excel 上传始终走 Agentic ingestion；`AGENTIC_INGESTION_ENABLED` 仅保留为兼容旧环境文件的配置项，不再关闭 `/ingestion/*`。
 
 前端关键变量：
 
@@ -171,7 +172,7 @@ NEXT_PUBLIC_DEFAULT_CLEARANCE=1
 NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide
 ```
 
-Agentic Query 通过 Claude Agent SDK 运行，但默认接入 DeepSeek 的 Anthropic 兼容接口；`AI_API_KEY` 会传给 SDK CLI 作为 `ANTHROPIC_API_KEY` 与 `ANTHROPIC_AUTH_TOKEN`，`ANTHROPIC_BASE_URL` 默认指向 `https://api.deepseek.com/anthropic`，`AI_MODEL` 默认使用 `deepseek-chat`。如果需要单独覆盖 Claude Code CLI 的 token，可填写 `ANTHROPIC_AUTH_TOKEN`。`MODEL_PROVIDER_URL` 仍保留给非 Agent 的 schema inference 等 OpenAI-compatible 兼容路径。
+Agentic Query 通过 Claude Agent SDK 运行，但默认接入 DeepSeek 的 Anthropic 兼容接口；`AI_API_KEY` 会传给 SDK CLI 作为 `ANTHROPIC_API_KEY` 与 `ANTHROPIC_AUTH_TOKEN`，`ANTHROPIC_BASE_URL` 默认指向 `https://api.deepseek.com/anthropic`，`AI_MODEL` 默认使用 `deepseek-chat`。如果需要单独覆盖 Claude Code CLI 的 token，可填写 `ANTHROPIC_AUTH_TOKEN`。
 
 ## Agentic Query
 
@@ -181,8 +182,7 @@ Agent 相关配置：
 
 ```env
 CLAUDE_AGENT_SDK_ENABLED=true
-AGENTIC_INGESTION_ENABLED=false
-LEGACY_DATASET_UPLOAD_ENABLED=true
+AGENTIC_INGESTION_ENABLED=true
 AGENT_MAX_TOOL_STEPS=20
 AGENT_MAX_SQL_ROWS=2000
 AGENT_MAX_SQL_SCAN_ROWS=10000
@@ -228,8 +228,10 @@ Agent 工具面限制在 BI 相关操作：
 | `POST` | `/auth/login` | 签发访问 token |
 | `POST` | `/auth/roles/{user_id}` | 管理用户角色覆盖 |
 | `GET` | `/audit/events` | 查询审计事件 |
-| `POST` | `/datasets/upload` | 上传 Excel 数据集 |
-| `GET` | `/datasets/{batch_id}/quality-report` | 获取上传质量报告 |
+| `POST` | `/ingestion/uploads` | 上传 Excel 并创建 Agentic ingestion job |
+| `POST` | `/ingestion/plan` | 由 Write Ingestion Agent 生成写入方案 |
+| `POST` | `/ingestion/approve` | 审批 Agent 写入方案 |
+| `POST` | `/ingestion/execute` | 执行已审批写入方案 |
 | `GET` | `/semantic/metrics` | 获取语义指标目录 |
 | `POST` | `/semantic/query` | 执行语义查询 |
 | `POST` | `/chat/tool-call` | 直接调用 BI 工具 |

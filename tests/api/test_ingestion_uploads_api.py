@@ -147,7 +147,7 @@ def test_ingestion_upload_creates_upload_and_job_records(monkeypatch, tmp_path: 
         assert str(job_row["status"]) == "uploaded"
 
 
-def test_ingestion_upload_respects_feature_flag(monkeypatch, tmp_path: Path) -> None:
+def test_ingestion_upload_ignores_disabled_feature_flag(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=False)
 
     with TestClient(app) as client:
@@ -167,7 +167,8 @@ def test_ingestion_upload_respects_feature_flag(monkeypatch, tmp_path: Path) -> 
             files=_upload_file_payload(),
         )
 
-    expect_error_code(response, "AGENTIC_INGESTION_DISABLED", status_code=404)
+    assert response.status_code == 200
+    assert response.json()["status"] == "uploaded"
 
 
 def test_ingestion_upload_workspace_role_guards(monkeypatch, tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { GenUIRegistry } from "../genui/registry";
 import { EmptyPanel, ErrorPanel } from "../genui/state-panels";
@@ -24,7 +24,6 @@ type Message = {
 
 type StreamStatus = "idle" | "streaming";
 type SaveStatus = "idle" | "saving";
-type UploadStatus = "idle" | "uploading";
 
 type StoredWorkbenchState = {
   version: 1;
@@ -51,7 +50,6 @@ const DEFAULT_CLEARANCE = 1;
 const DEFAULT_DATASET = "employees_wide";
 
 export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const restoredStateRef = useRef<StoredWorkbenchState | null | undefined>(undefined);
   if (restoredStateRef.current === undefined) {
     restoredStateRef.current = loadStoredWorkbenchState();
@@ -78,13 +76,6 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadBatchId, setUploadBatchId] = useState<string | null>(null);
-  const [uploadDiagnostics, setUploadDiagnostics] = useState<Record<string, unknown> | null>(null);
-  const [qualityReport, setQualityReport] = useState<Record<string, unknown> | null>(null);
-
   useEffect(() => {
     safeSaveToStorage<StoredWorkbenchState>(SESSION_STORAGE_KEY, {
       version: 1,
@@ -279,86 +270,6 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     }
   }
 
-  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
-    setUploadError(null);
-    setSelectedFiles(Array.from(event.target.files ?? []));
-  }
-
-  async function handleUploadFiles() {
-    if (selectedFiles.length === 0 || uploadStatus === "uploading") {
-      return;
-    }
-
-    setUploadStatus("uploading");
-    setUploadError(null);
-
-    try {
-      const authorizationHeader = await getAuthorizationHeader(apiBaseUrl, {
-        userId,
-        projectId,
-        role,
-        department,
-        clearance
-      });
-
-      const formData = new FormData();
-      formData.set("user_id", userId);
-      formData.set("project_id", projectId);
-      selectedFiles.forEach((file) => {
-        formData.append("files", file);
-      });
-
-      const uploadResponse = await fetch(`${apiBaseUrl}/datasets/upload`, {
-        method: "POST",
-        headers: authorizationHeader,
-        body: formData
-      });
-      const uploadPayload = await uploadResponse.json().catch(() => null);
-
-      if (!uploadResponse.ok) {
-        throw new Error(readApiErrorMessage(uploadPayload, `upload_failed_${uploadResponse.status}`));
-      }
-      if (!isRecord(uploadPayload)) {
-        throw new Error("upload_invalid_payload");
-      }
-
-      const nextDatasetTable = String(uploadPayload.dataset_table ?? "");
-      const nextBatchId = String(uploadPayload.batch_id ?? "");
-      const diagnostics = isRecord(uploadPayload.diagnostics) ? uploadPayload.diagnostics : null;
-      if (!nextDatasetTable || !nextBatchId) {
-        throw new Error("upload_missing_dataset_metadata");
-      }
-
-      setDatasetTable(nextDatasetTable);
-      setUploadBatchId(nextBatchId);
-      setUploadDiagnostics(diagnostics);
-
-      const qualityResponse = await fetch(`${apiBaseUrl}/datasets/${nextBatchId}/quality-report`, {
-        headers: authorizationHeader
-      });
-      const qualityPayload = await qualityResponse.json().catch(() => null);
-      if (!qualityResponse.ok) {
-        throw new Error(readApiErrorMessage(qualityPayload, `quality_report_failed_${qualityResponse.status}`));
-      }
-      if (!isRecord(qualityPayload)) {
-        throw new Error("quality_report_invalid_payload");
-      }
-
-      setQualityReport(qualityPayload);
-      appendAssistantMessage(
-        `Uploaded ${selectedFiles.length} Excel file(s). Active dataset table switched to ${nextDatasetTable}.`
-      );
-      setSelectedFiles([]);
-      if (uploadInputRef.current) {
-        uploadInputRef.current.value = "";
-      }
-    } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "上传失败");
-    } finally {
-      setUploadStatus("idle");
-    }
-  }
-
   function appendAssistantMessage(text: string) {
     setMessages((previous) => [...previous, { id: makeRequestId(), role: "assistant", text }]);
   }
@@ -380,35 +291,6 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
     }
     return "Idle";
   }, [streamStatus]);
-
-  const selectedFilesLabel = useMemo(() => {
-    if (selectedFiles.length === 0) {
-      return "尚未选择文件";
-    }
-    if (selectedFiles.length === 1) {
-      return selectedFiles[0]?.name ?? "1 file selected";
-    }
-    return `已选择 ${selectedFiles.length} 个文件`;
-  }, [selectedFiles]);
-
-  const uploadSummary = useMemo(() => {
-    if (!isRecord(qualityReport)) {
-      return null;
-    }
-
-    const summary = isRecord(qualityReport.summary) ? qualityReport.summary : null;
-    const blockingIssues = Array.isArray(qualityReport.blocking_issues) ? qualityReport.blocking_issues : [];
-    const canPublish = Boolean(qualityReport.can_publish_to_semantic_layer);
-    const diagnosticsRowCount = Number(uploadDiagnostics?.result_row_count ?? 0);
-    const diagnosticsColumnCount = Number(uploadDiagnostics?.result_column_count ?? 0);
-
-    return {
-      rowCount: Number(summary?.row_count ?? diagnosticsRowCount ?? 0),
-      columnCount: Number(summary?.column_count ?? diagnosticsColumnCount ?? 0),
-      issueCount: blockingIssues.length,
-      canPublish
-    };
-  }, [qualityReport, uploadDiagnostics]);
 
   return (
     <main className="workspace">
@@ -477,40 +359,9 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
             <section className="upload-panel">
               <div className="upload-panel__copy">
                 <h3>Excel Upload</h3>
-                <p>上传 `.xlsx` 后会自动创建数据表，并回填到当前会话的 `Dataset Table`。</p>
+                <p>上传 `.xlsx` 请使用聊天输入框的附件入口。文件会进入 Agentic ingestion，先生成写入方案，再经审批执行。</p>
               </div>
-              <input
-                ref={uploadInputRef}
-                aria-label="Excel Upload"
-                type="file"
-                accept=".xlsx"
-                multiple
-                onChange={handleFileSelection}
-              />
-              <div className="upload-panel__actions">
-                <button type="button" onClick={handleUploadFiles} disabled={!selectedFiles.length || uploadStatus === "uploading"}>
-                  {uploadStatus === "uploading" ? "Uploading..." : "Upload Excel"}
-                </button>
-                <p className="muted">{selectedFilesLabel}</p>
-              </div>
-              <p className="upload-panel__hint">限制：单文件 10MB，单次最多 20 个 `.xlsx` 文件。</p>
-              {uploadError ? <p className="upload-error">{uploadError}</p> : null}
-              {uploadBatchId ? (
-                <div className="upload-summary" data-testid="upload-summary">
-                  <p>
-                    Batch ID: <strong>{uploadBatchId}</strong>
-                  </p>
-                  <p>
-                    Dataset Table: <strong>{datasetTable}</strong>
-                  </p>
-                  {uploadSummary ? (
-                    <p>
-                      Rows {uploadSummary.rowCount}, Columns {uploadSummary.columnCount}, Blocking issues {uploadSummary.issueCount},
-                      Semantic layer {uploadSummary.canPublish ? "ready" : "blocked"}.
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
+              <p className="upload-panel__hint">旧的自动解析并直接写表流程已关闭。</p>
             </section>
           </section>
 
@@ -592,21 +443,6 @@ function makeRequestId(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readApiErrorMessage(payload: unknown, fallback: string): string {
-  if (!isRecord(payload)) {
-    return fallback;
-  }
-
-  const detail = isRecord(payload.detail) ? payload.detail : null;
-  const detailMessage = detail ? String(detail.message ?? "") : "";
-  if (detailMessage) {
-    return detailMessage;
-  }
-
-  const payloadMessage = String(payload.message ?? "");
-  return payloadMessage || fallback;
 }
 
 function loadStoredWorkbenchState(): StoredWorkbenchState | null {

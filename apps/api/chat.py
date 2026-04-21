@@ -235,6 +235,7 @@ class ChatStreamService:
                 request_id=request.request_id,
                 user_id=request.user_id,
                 project_id=request.project_id,
+                workspace_id=request.workspace_id,
                 dataset_table=request.dataset_table,
                 message=request.message,
                 role=request.role,

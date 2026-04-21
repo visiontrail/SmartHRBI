@@ -41,22 +41,6 @@ test("covers upload -> query -> save -> share rehydration flow", async ({ page }
       return;
     }
 
-    if (url.pathname === "/datasets/upload" && method === "POST") {
-      await route.fulfill({
-        status: 200,
-        headers: jsonHeaders,
-        body: JSON.stringify({
-          batch_id: "batch-e2e",
-          session_id: "session-e2e",
-          dataset_table: "dataset_e2e",
-          file_count: 1,
-          duration_ms: 25,
-          diagnostics: { merged_columns: ["employee_id", "department", "status"] }
-        })
-      });
-      return;
-    }
-
     if (url.pathname === "/chat/stream" && method === "POST") {
       await route.fulfill({
         status: 200,
@@ -164,32 +148,7 @@ test("covers upload -> query -> save -> share rehydration flow", async ({ page }
 
   await page.goto("/");
 
-  const datasetTable = await page.evaluate(async () => {
-    const payload = new Blob(["dummy"], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    });
-    const form = new FormData();
-    form.append("user_id", "demo-user");
-    form.append("project_id", "demo-project");
-    form.append(
-      "files",
-      new File([payload], "employees.xlsx", {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      })
-    );
-
-    const response = await fetch("http://127.0.0.1:8000/datasets/upload", {
-      method: "POST",
-      body: form
-    });
-
-    if (!response.ok) {
-      throw new Error(`upload_failed_${response.status}`);
-    }
-
-    const body = (await response.json()) as { dataset_table: string };
-    return body.dataset_table;
-  });
+  const datasetTable = "employee_roster";
 
   await page.getByLabel("Dataset Table").fill(datasetTable);
 

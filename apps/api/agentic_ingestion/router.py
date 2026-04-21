@@ -7,9 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..auth import AuthIdentity, require_permission
 from ..audit import get_audit_logger
-from ..config import get_settings
 from ..workspaces import WorkspaceError, get_workspace_service
-from .feature_flags import ensure_agentic_ingestion_enabled
 from .models import (
     IngestionApproveRequest,
     IngestionExecuteRequest,
@@ -26,9 +24,6 @@ runtime = WriteIngestionAgentRuntime()
 
 @router.get("/healthz")
 async def ingestion_healthz() -> IngestionHealth:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
-
     return IngestionHealth(stage=runtime.stage, message=runtime.health_summary())
 
 
@@ -38,8 +33,6 @@ async def create_ingestion_upload(
     files: list[UploadFile] = File(...),
     identity: AuthIdentity = Depends(require_permission("datasets:upload")),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
     _assert_workspace_role(workspace_id=workspace_id, identity=identity, minimum_role="editor")
 
     service = get_ingestion_upload_service()
@@ -58,8 +51,6 @@ async def create_ingestion_plan(
     request: IngestionPlanRequest,
     identity: AuthIdentity = Depends(require_permission("datasets:upload")),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
     _assert_workspace_role(
         workspace_id=request.workspace_id,
         identity=identity,
@@ -85,8 +76,6 @@ async def confirm_ingestion_setup(
     request: IngestionSetupConfirmRequest,
     identity: AuthIdentity = Depends(require_permission("datasets:upload")),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
     _assert_workspace_role(
         workspace_id=request.workspace_id,
         identity=identity,
@@ -113,8 +102,6 @@ async def approve_ingestion_proposal(
     request: IngestionApproveRequest,
     identity: AuthIdentity = Depends(require_permission("datasets:upload")),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
     _assert_workspace_role(
         workspace_id=request.workspace_id,
         identity=identity,
@@ -164,8 +151,6 @@ async def execute_ingestion_plan(
     request: IngestionExecuteRequest,
     identity: AuthIdentity = Depends(require_permission("datasets:upload")),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ensure_agentic_ingestion_enabled(settings.agentic_ingestion_enabled)
     _assert_workspace_role(
         workspace_id=request.workspace_id,
         identity=identity,

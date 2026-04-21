@@ -216,71 +216,11 @@ describe("Chat workbench streaming UI", () => {
     );
   });
 
-  it("uploads excel files and switches the active dataset table", async () => {
-    fetchMock
-      .mockResolvedValueOnce(createLoginResponse())
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            batch_id: "batch-1",
-            dataset_table: "dataset_batch_1",
-            file_count: 1,
-            diagnostics: {
-              result_row_count: 12,
-              result_column_count: 4
-            }
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            batch_id: "batch-1",
-            summary: {
-              row_count: 12,
-              column_count: 4
-            },
-            blocking_issues: [],
-            can_publish_to_semantic_layer: true
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
-
+  it("does not expose the legacy direct Excel upload flow", async () => {
     render(<ChatWorkbench apiBaseUrl="http://localhost:8000" />);
 
-    const uploadInput = screen.getByLabelText("Excel Upload");
-    const file = new File(["sheet"], "employees.xlsx", {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    });
-
-    await userEvent.upload(uploadInput, file);
-    await userEvent.click(screen.getByRole("button", { name: "Upload Excel" }));
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("dataset_batch_1")).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("upload-summary")).toHaveTextContent("Semantic layer ready");
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "http://localhost:8000/datasets/upload",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer token-123"
-        }),
-        body: expect.any(FormData)
-      })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "http://localhost:8000/datasets/batch-1/quality-report",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer token-123"
-        })
-      })
-    );
+    expect(screen.getByText("旧的自动解析并直接写表流程已关闭。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upload Excel" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Excel Upload")).not.toBeInTheDocument();
   });
 });

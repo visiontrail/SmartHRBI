@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.audit import clear_audit_logger_cache
@@ -14,6 +12,7 @@ from apps.api.main import app
 from apps.api.semantic import clear_semantic_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
+from tests.agent_test_utils import upload_dataset
 from tests.auth_utils import auth_headers, expect_error_code
 
 
@@ -32,37 +31,16 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_view_storage_service_cache()
 
 
-def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
-    dataframe = pd.DataFrame(rows)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-
 def _upload_dataset(client: TestClient) -> str:
-    response = client.post(
-        "/datasets/upload",
-        data={"user_id": "alice", "project_id": "north"},
-        headers=auth_headers(client, user_id="alice", project_id="north", role="admin", clearance=9),
-        files=[
-            (
-                "files",
-                (
-                    "employees.xlsx",
-                    _excel_bytes(
-                        [
-                            {"employee id": "E-001", "department": "HR", "status": "active", "salary": 1000},
-                            {"employee id": "E-002", "department": "PM", "status": "active", "salary": 1500},
-                        ]
-                    ),
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ),
-            )
+    return upload_dataset(
+        client,
+        rows=[
+            {"employee_id": "E-001", "department": "HR", "status": "active", "salary": 1000},
+            {"employee_id": "E-002", "department": "PM", "status": "active", "salary": 1500},
         ],
+        user_id="alice",
+        project_id="north",
     )
-    assert response.status_code == 200
-    return str(response.json()["dataset_table"])
 
 
 def test_viewer_querying_salary_metric_is_blocked_without_field_leak(monkeypatch, tmp_path: Path) -> None:

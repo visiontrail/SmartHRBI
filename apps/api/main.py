@@ -3,13 +3,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from .agentic_ingestion import router as ingestion_router
-from .agentic_ingestion.feature_flags import ensure_legacy_dataset_upload_enabled
 from .audit import get_audit_logger
 from .auth import (
     AuthIdentity,
@@ -25,7 +24,7 @@ from .auth import (
 from .chat import ChatStreamRequest, get_chat_stream_service
 from .config import get_settings
 from .data_policy import forbidden_sensitive_columns, redact_rows, redact_structure
-from .datasets import DatasetUploadError, get_dataset_service
+from .datasets import get_dataset_service
 from .security import (
     AccessContext,
     QueryAccessError,
@@ -78,6 +77,7 @@ class SemanticFilterInput(BaseModel):
 class SemanticQueryRequest(BaseModel):
     user_id: str
     project_id: str
+    workspace_id: str | None = None
     dataset_table: str
     metric: str | None = None
     intent: str | None = None
@@ -149,9 +149,8 @@ async def on_startup() -> None:
         settings.agent_timeout_seconds,
     )
     logger.info(
-        "ingestion_feature_flags agentic_ingestion_enabled=%s legacy_dataset_upload_enabled=%s",
+        "agentic_ingestion_forced_enabled=true configured_flag=%s",
         settings.agentic_ingestion_enabled,
-        settings.legacy_dataset_upload_enabled,
     )
 
 
@@ -244,84 +243,6 @@ async def list_audit_events(
     return {"count": len(events), "events": events}
 
 
-@app.post("/datasets/upload")
-async def upload_datasets(
-    user_id: str = Form(...),
-    project_id: str = Form(...),
-    files: list[UploadFile] = File(...),
-    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
-) -> dict[str, object]:
-    ensure_scope(identity, user_id=user_id, project_id=project_id)
-    settings = get_settings()
-    ensure_legacy_dataset_upload_enabled(settings.legacy_dataset_upload_enabled)
-    service = get_dataset_service(
-        settings.upload_dir,
-        ai_api_key=settings.ai_api_key,
-        ai_model=settings.ai_model,
-        ai_base_url=settings.model_provider_url,
-        ai_timeout=settings.ai_timeout_seconds,
-    )
-    audit = get_audit_logger()
-
-    try:
-        result = await service.upload_files(user_id=user_id, project_id=project_id, files=files)
-    except DatasetUploadError as exc:
-        audit.log(
-            event_type="dataset",
-            action="upload",
-            status="failed",
-            user_id=user_id,
-            project_id=project_id,
-            detail={"code": exc.code},
-        )
-        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
-
-    audit.log(
-        event_type="dataset",
-        action="upload",
-        status="success",
-        user_id=user_id,
-        project_id=project_id,
-        detail={"batch_id": result["batch_id"], "file_count": result["file_count"]},
-    )
-    return result
-
-
-@app.get("/datasets/{batch_id}/quality-report")
-async def get_quality_report(
-    batch_id: str,
-    identity: AuthIdentity = Depends(require_permission("datasets:read")),
-) -> dict[str, object]:
-    settings = get_settings()
-    service = get_dataset_service(settings.upload_dir)
-
-    try:
-        metadata = service.storage.load_metadata(batch_id)
-    except DatasetUploadError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
-
-    owner_project_id = str(metadata.get("project_id", ""))
-    if identity.role != "admin" and owner_project_id != identity.project_id:
-        get_audit_logger().log(
-            event_type="authorization",
-            action="dataset:quality_report",
-            status="denied",
-            severity="ALERT",
-            user_id=identity.user_id,
-            project_id=identity.project_id,
-            detail={"batch_id": batch_id},
-        )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "RBAC_FORBIDDEN",
-                "message": "You do not have permission to access this resource",
-            },
-        )
-
-    return metadata["quality_report"]
-
-
 @app.get("/semantic/metrics")
 async def list_semantic_metrics(
     identity: AuthIdentity = Depends(require_permission("semantic:metrics")),
@@ -338,6 +259,16 @@ async def semantic_query(
     identity: AuthIdentity = Depends(require_permission("semantic:query")),
 ) -> dict[str, object]:
     ensure_scope(identity, user_id=request.user_id, project_id=request.project_id)
+    workspace_id = (request.workspace_id or "").strip() or None
+    if workspace_id is not None:
+        try:
+            get_workspace_service().assert_workspace_access(
+                workspace_id=workspace_id,
+                user_id=identity.user_id,
+                minimum_role="viewer",
+            )
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
     settings = get_settings()
     registry = get_semantic_registry()
@@ -387,7 +318,11 @@ async def semantic_query(
         raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
 
     try:
-        with dataset_service.session_manager.connection(identity.user_id, identity.project_id) as conn:
+        with dataset_service.session_manager.connection(
+            identity.user_id,
+            identity.project_id,
+            workspace_id=workspace_id,
+        ) as conn:
             cursor = conn.execute(secure_sql)
             columns = [column[0] for column in (cursor.description or [])]
             rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -434,11 +369,22 @@ async def chat_tool_call(
     identity: AuthIdentity = Depends(require_permission("chat:tool")),
 ) -> dict[str, object]:
     ensure_scope(identity, user_id=request.user_id, project_id=request.project_id)
+    workspace_id = (request.workspace_id or "").strip() or None
+    if workspace_id is not None:
+        try:
+            get_workspace_service().assert_workspace_access(
+                workspace_id=workspace_id,
+                user_id=identity.user_id,
+                minimum_role="viewer",
+            )
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
     enforced_request = request.model_copy(
         update={
             "user_id": identity.user_id,
             "project_id": identity.project_id,
+            "workspace_id": workspace_id,
             "role": identity.role,
             "department": identity.department,
             "clearance": identity.clearance,

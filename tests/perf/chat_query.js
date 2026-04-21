@@ -1,4 +1,3 @@
-import encoding from "k6/encoding";
 import exec from "k6/execution";
 import http from "k6/http";
 import { Rate, Trend } from "k6/metrics";
@@ -7,6 +6,8 @@ import { check, sleep } from "k6";
 const BASE_URL = __ENV.API_BASE_URL || "http://127.0.0.1:8000";
 const WORKLOAD_USER = __ENV.K6_USER_ID || "perf-user";
 const WORKLOAD_PROJECT = __ENV.K6_PROJECT_ID || "perf-project";
+const WORKLOAD_WORKSPACE = __ENV.K6_WORKSPACE_ID || "";
+const WORKLOAD_DATASET_TABLE = __ENV.K6_DATASET_TABLE || "";
 
 const QUERY_DURATION = new Trend("chat_query_duration", true);
 const QUERY_FAILED = new Rate("chat_query_failed");
@@ -74,37 +75,14 @@ export function setup() {
     throw new Error(`Login failed: status=${loginResponse.status} body=${loginResponse.body}`);
   }
 
-  const token = String(loginResponse.json("access_token"));
-  const workbookBytes = encoding.b64decode(PERF_XLSX_BASE64, "std");
-
-  const uploadResponse = http.post(
-    `${BASE_URL}/datasets/upload`,
-    {
-      user_id: WORKLOAD_USER,
-      project_id: WORKLOAD_PROJECT,
-      files: http.file(
-        workbookBytes,
-        "perf_employees.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      )
-    },
-    {
-      headers: authHeaders(token)
-    }
-  );
-
-  const uploadOk = check(uploadResponse, {
-    "dataset upload succeeded": (res) => res.status === 200,
-    "upload response contains dataset table": (res) => Boolean(res.json("dataset_table"))
-  });
-
-  if (!uploadOk) {
-    throw new Error(`Upload failed: status=${uploadResponse.status} body=${uploadResponse.body}`);
+  if (!WORKLOAD_DATASET_TABLE) {
+    throw new Error("K6_DATASET_TABLE must point at a table created through Agentic ingestion before running perf");
   }
 
   return {
-    token,
-    datasetTable: String(uploadResponse.json("dataset_table"))
+    token: String(loginResponse.json("access_token")),
+    workspaceId: WORKLOAD_WORKSPACE,
+    datasetTable: WORKLOAD_DATASET_TABLE
   };
 }
 
@@ -115,6 +93,7 @@ export default function (setupData) {
     JSON.stringify({
       user_id: WORKLOAD_USER,
       project_id: WORKLOAD_PROJECT,
+      workspace_id: setupData.workspaceId || null,
       dataset_table: setupData.datasetTable,
       message: "show headcount by department",
       request_id: `${scenario}-${__VU}-${__ITER}`

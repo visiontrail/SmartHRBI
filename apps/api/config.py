@@ -30,11 +30,7 @@ class Settings(BaseSettings):
     )
     api_timeout_ms: int = Field(default=600000, alias="API_TIMEOUT_MS")
     claude_agent_sdk_enabled: bool = Field(default=True, alias="CLAUDE_AGENT_SDK_ENABLED")
-    agentic_ingestion_enabled: bool = Field(default=False, alias="AGENTIC_INGESTION_ENABLED")
-    legacy_dataset_upload_enabled: bool = Field(
-        default=True,
-        alias="LEGACY_DATASET_UPLOAD_ENABLED",
-    )
+    agentic_ingestion_enabled: bool = Field(default=True, alias="AGENTIC_INGESTION_ENABLED")
     agent_max_tool_steps: int = Field(default=6, alias="AGENT_MAX_TOOL_STEPS")
     agent_max_sql_rows: int = Field(default=200, alias="AGENT_MAX_SQL_ROWS")
     agent_max_sql_scan_rows: int = Field(default=10000, alias="AGENT_MAX_SQL_SCAN_ROWS")

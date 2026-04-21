@@ -54,7 +54,6 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-chat",
                 "API_TIMEOUT_MS=600000",
                 "AGENTIC_INGESTION_ENABLED=true",
-                "LEGACY_DATASET_UPLOAD_ENABLED=false",
                 "AUTH_SECRET=secret",
                 "LOG_LEVEL=INFO",
                 "UPLOAD_DIR=./uploads",
@@ -91,7 +90,6 @@ def test_optional_ai_settings_are_loaded_from_env_file(monkeypatch, tmp_path) ->
     assert settings.anthropic_default_haiku_model == "deepseek-chat"
     assert settings.api_timeout_ms == 600000
     assert settings.agentic_ingestion_enabled is True
-    assert settings.legacy_dataset_upload_enabled is False
 
 
 def test_agent_engine_requires_claude_agent_sdk_toggle(monkeypatch, tmp_path) -> None:

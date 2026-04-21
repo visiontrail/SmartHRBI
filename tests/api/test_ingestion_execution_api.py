@@ -266,7 +266,7 @@ def test_ingestion_approve_workspace_role_guard(monkeypatch, tmp_path: Path) -> 
     expect_error_code(approve_response, "WORKSPACE_FORBIDDEN", status_code=403)
 
 
-def test_ingestion_approve_respects_feature_flag(monkeypatch, tmp_path: Path) -> None:
+def test_ingestion_approve_ignores_disabled_feature_flag(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=False)
 
     with TestClient(app) as client:
@@ -283,4 +283,4 @@ def test_ingestion_approve_respects_feature_flag(monkeypatch, tmp_path: Path) ->
             headers=owner_headers,
         )
 
-    expect_error_code(response, "AGENTIC_INGESTION_DISABLED", status_code=404)
+    expect_error_code(response, "INGESTION_JOB_NOT_FOUND", status_code=404)

@@ -149,25 +149,87 @@ def main() -> int:
 
         auth_headers = {"Authorization": f"Bearer {token}"}
 
+        workspace_response = client.post(
+            f"{api_base_url}/workspaces",
+            headers=auth_headers,
+            json={"name": f"Smoke Workspace {int(time.time())}"},
+        )
+        workspace_response.raise_for_status()
+        workspace_id = str(workspace_response.json().get("workspace_id", ""))
+        if not workspace_id:
+            raise RuntimeError("workspace response missing workspace_id")
+
         with tempfile.TemporaryDirectory(prefix="smarthrbi-smoke-") as tmp_dir:
-            files = build_excel_files(Path(tmp_dir))
-            upload_files = [
-                ("files", (file_path.name, file_path.read_bytes(), XLSX_MIME))
-                for file_path in files
-            ]
+            file_path = build_excel_files(Path(tmp_dir))[0]
             upload_response = client.post(
-                f"{api_base_url}/datasets/upload",
+                f"{api_base_url}/ingestion/uploads",
                 headers=auth_headers,
-                data={"user_id": args.user_id, "project_id": args.project_id},
-                files=upload_files,
+                data={"workspace_id": workspace_id},
+                files=[("files", (file_path.name, file_path.read_bytes(), XLSX_MIME))],
             )
             upload_response.raise_for_status()
             upload_payload = upload_response.json()
 
-        dataset_table = str(upload_payload.get("dataset_table", ""))
-        batch_id = str(upload_payload.get("batch_id", ""))
-        if not dataset_table or not batch_id:
-            raise RuntimeError("upload response missing dataset_table or batch_id")
+        job_id = str(upload_payload.get("job_id", ""))
+        if not job_id:
+            raise RuntimeError("upload response missing job_id")
+
+        plan_response = client.post(
+            f"{api_base_url}/ingestion/plan",
+            headers=auth_headers,
+            json={
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "conversation_id": "smoke-conversation",
+                "message": "ingest smoke workbook",
+            },
+        )
+        plan_response.raise_for_status()
+        plan_payload = plan_response.json()
+        if plan_payload.get("status") == "awaiting_catalog_setup":
+            setup_response = client.post(
+                f"{api_base_url}/ingestion/setup/confirm",
+                headers=auth_headers,
+                json={
+                    "workspace_id": workspace_id,
+                    "job_id": job_id,
+                    "conversation_id": "smoke-conversation",
+                    "message": "confirm smoke catalog setup",
+                    "setup": plan_payload["suggested_catalog_seed"],
+                },
+            )
+            setup_response.raise_for_status()
+            plan_payload = setup_response.json()
+
+        if plan_payload.get("status") != "awaiting_user_approval":
+            raise RuntimeError(f"unexpected ingestion plan status: {plan_payload}")
+
+        proposal = plan_payload["proposal"]
+        proposal_id = str(plan_payload.get("proposal_id", ""))
+        approved_action = str(proposal.get("recommended_action", "new_table"))
+        approve_response = client.post(
+            f"{api_base_url}/ingestion/approve",
+            headers=auth_headers,
+            json={
+                "workspace_id": workspace_id,
+                "job_id": job_id,
+                "proposal_id": proposal_id,
+                "approved_action": approved_action,
+                "user_overrides": {"time_grain": proposal.get("time_grain", "none")},
+            },
+        )
+        approve_response.raise_for_status()
+
+        execute_response = client.post(
+            f"{api_base_url}/ingestion/execute",
+            headers=auth_headers,
+            json={"workspace_id": workspace_id, "job_id": job_id, "proposal_id": proposal_id},
+        )
+        execute_response.raise_for_status()
+        receipt = execute_response.json()["receipt"]
+        dataset_table = str(receipt.get("target_table", ""))
+        if not dataset_table:
+            raise RuntimeError("ingestion receipt missing target_table")
 
         semantic_response = client.post(
             f"{api_base_url}/semantic/query",
@@ -175,6 +237,7 @@ def main() -> int:
             json={
                 "user_id": args.user_id,
                 "project_id": args.project_id,
+                "workspace_id": workspace_id,
                 "dataset_table": dataset_table,
                 "metric": "headcount_total",
                 "group_by": ["department"],
@@ -194,6 +257,7 @@ def main() -> int:
             json={
                 "user_id": args.user_id,
                 "project_id": args.project_id,
+                "workspace_id": workspace_id,
                 "dataset_table": dataset_table,
                 "message": "headcount by department",
                 "conversation_id": "smoke-conversation",
@@ -227,6 +291,7 @@ def main() -> int:
             json={
                 "user_id": args.user_id,
                 "project_id": args.project_id,
+                "workspace_id": workspace_id,
                 "dataset_table": dataset_table,
                 "role": args.role,
                 "department": "HR",
@@ -260,7 +325,8 @@ def main() -> int:
             raise RuntimeError("share payload view_id mismatch")
 
         summary = {
-            "batch_id": batch_id,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
             "dataset_table": dataset_table,
             "semantic_rows": semantic_payload.get("row_count", 0),
             "view_id": view_id,

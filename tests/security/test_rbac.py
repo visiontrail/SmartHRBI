@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from apps.api.audit import clear_audit_logger_cache
@@ -32,15 +30,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
     clear_view_storage_service_cache()
 
 
-def _excel_bytes(rows: list[dict[str, object]]) -> bytes:
-    dataframe = pd.DataFrame(rows)
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-
-def test_viewer_cannot_upload_dataset(monkeypatch, tmp_path: Path) -> None:
+def test_legacy_dataset_upload_route_is_removed_for_all_roles(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
@@ -49,19 +39,11 @@ def test_viewer_cannot_upload_dataset(monkeypatch, tmp_path: Path) -> None:
             "/datasets/upload",
             data={"user_id": "alice", "project_id": "north"},
             headers=headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees.xlsx",
-                        _excel_bytes([{"Employee ID": "E-001", "Department": "HR"}]),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                )
-            ],
+            files=[("files", ("employees.xlsx", b"not-used", "application/octet-stream"))],
         )
 
-    expect_error_code(response, "RBAC_FORBIDDEN", status_code=403)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not Found"
 
 
 def test_role_change_takes_effect_immediately_for_existing_token(monkeypatch, tmp_path: Path) -> None:
@@ -71,23 +53,6 @@ def test_role_change_takes_effect_immediately_for_existing_token(monkeypatch, tm
         user_headers = auth_headers(client, user_id="bob", project_id="north", role="pm", clearance=5)
         admin_headers = auth_headers(client, user_id="admin", project_id="north", role="admin", clearance=9)
 
-        first_upload = client.post(
-            "/datasets/upload",
-            data={"user_id": "bob", "project_id": "north"},
-            headers=user_headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees-a.xlsx",
-                        _excel_bytes([{"Employee ID": "E-001", "Department": "HR"}]),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                )
-            ],
-        )
-        assert first_upload.status_code == 200
-
         update_role = client.post(
             "/auth/roles/bob",
             json={"role": "viewer", "department": "HR", "clearance": 1},
@@ -95,20 +60,10 @@ def test_role_change_takes_effect_immediately_for_existing_token(monkeypatch, tm
         )
         assert update_role.status_code == 200
 
-        second_upload = client.post(
-            "/datasets/upload",
-            data={"user_id": "bob", "project_id": "north"},
+        denied = client.post(
+            "/auth/roles/alice",
+            json={"role": "admin", "department": "HR", "clearance": 9},
             headers=user_headers,
-            files=[
-                (
-                    "files",
-                    (
-                        "employees-b.xlsx",
-                        _excel_bytes([{"Employee ID": "E-002", "Department": "PM"}]),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                )
-            ],
         )
 
-    expect_error_code(second_upload, "RBAC_FORBIDDEN", status_code=403)
+    expect_error_code(denied, "RBAC_FORBIDDEN", status_code=403)
