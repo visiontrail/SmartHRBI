@@ -74,8 +74,9 @@ INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "get_workspace_catalog",
         "description": (
-            "List workspace catalog entries that describe known writable targets, "
-            "business types, write modes, primary keys, and match columns."
+            "List workspace catalog entries that describe business table intents, "
+            "human labels, natural-language purpose descriptions, and any known write hints. "
+            "Some entries may not have schema details yet; infer them from the upload when needed."
         ),
         "parameters": {
             "type": "object",
@@ -112,7 +113,10 @@ INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "describe_table_schema",
-        "description": "Describe one catalog target's configured writable schema contract.",
+        "description": (
+            "Describe one catalog target. This may contain only business-purpose metadata "
+            "if schema has not been inferred yet."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -201,8 +205,8 @@ INGESTION_EXECUTION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "get_workspace_catalog",
         "description": (
-            "List workspace catalog entries that describe known writable targets, "
-            "business types, write modes, primary keys, and match columns."
+            "List workspace catalog entries that describe business table intents, "
+            "purpose descriptions, and any inferred write hints."
         ),
         "parameters": {
             "type": "object",
@@ -215,7 +219,10 @@ INGESTION_EXECUTION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "describe_table_schema",
-        "description": "Describe one catalog target's configured writable schema contract.",
+        "description": (
+            "Describe one catalog target. Some catalogs start as business-only intents and "
+            "gain schema hints after previous uploads."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -330,17 +337,24 @@ Use the provided tools to inspect the upload, workspace catalog, existing target
 proposed diff. Then return structured JSON describing your decision.
 
 Allowed decisions:
-- awaiting_catalog_setup: the workspace catalog lacks a writable target for this upload.
-  Provide setup_questions and suggested_catalog_seed. Include business_type, table_name,
-  write_mode, time_grain, primary_keys, match_columns in suggested_catalog_seed.
+- awaiting_catalog_setup: the workspace catalog lacks a suitable table intent for this upload.
+  Provide setup_questions and suggested_catalog_seed. The user should only need to confirm
+  the table's business-facing label and natural-language purpose. Include table_name,
+  human_label, and description in suggested_catalog_seed. You may include business_type,
+  write_mode, or time_grain as internal hints, but do not require the user to choose
+  primary keys, match columns, or any technical schema fields. Leave primary_keys and
+  match_columns empty unless you are highly confident and the UI does not need to ask.
 - awaiting_user_approval: you have found a matching catalog target and can produce a
   concrete write proposal. Include proposal with business_type, confidence,
   recommended_action, candidate_actions, target_table, match_columns, column_mapping,
   diff_preview, risks, explanation, and sql_draft.
 
+If catalog entries only contain business-purpose descriptions and no schema hints, use the
+upload itself to infer the likely keys, match columns, and write mode.
+
 column_mapping must map every upload column header to its target column name.
-For Chinese headers, look at the catalog match_columns and catalog schema to identify
-which Chinese header corresponds to which target column (e.g., "工号" → "employee_id").
+For Chinese headers, look at the catalog purpose, match_columns, and any known schema hints
+to identify which Chinese header corresponds to which target column (e.g., "工号" → "employee_id").
 Include ALL upload columns in column_mapping even if only guessed.
 
 Tool order for an existing-table proposal:
@@ -1188,6 +1202,15 @@ class WriteIngestionAgentRuntime:
                     finished_at,
                 ),
             )
+            if execution_status == "succeeded":
+                self._sync_catalog_entry_from_execution(
+                    conn=conn,
+                    workspace_id=normalized_workspace_id,
+                    table_name=target_table,
+                    requested_by=normalized_executed_by,
+                    proposal_payload=proposal_payload,
+                    approved_action=approved_action,
+                )
             final_job_status = "succeeded" if execution_status == "succeeded" else "failed"
             self._set_job_status(
                 conn=conn,
@@ -2375,64 +2398,44 @@ class WriteIngestionAgentRuntime:
             if not SAFE_IDENTIFIER_RE.match(table_name):
                 table_name = self._normalize_identifier(table_name) or "employee_roster"
 
-            match_columns = [
-                str(item).strip().lower()
-                for item in (schema.get("match_columns") if isinstance(schema.get("match_columns"), list) else [])
-                if str(item).strip()
-            ]
-            if not match_columns and normalized_columns:
-                match_columns = [normalized_columns[0]]
+            human_label = str(schema.get("human_label") or table_name.replace("_", " ").title()).strip()
+            if not human_label:
+                human_label = table_name.replace("_", " ").title()
 
-            primary_keys = [
-                str(item).strip().lower()
-                for item in (schema.get("primary_keys") if isinstance(schema.get("primary_keys"), list) else [])
-                if str(item).strip()
-            ]
-            if not primary_keys:
-                primary_keys = list(match_columns)
-
-            write_mode = str(schema.get("write_mode") or "update_existing").strip()
+            write_mode = str(schema.get("write_mode") or "new_table").strip()
             if write_mode not in {"update_existing", "time_partitioned_new_table", "new_table"}:
-                write_mode = "update_existing"
+                write_mode = "new_table"
             time_grain = str(schema.get("time_grain") or "none").strip()
             if time_grain not in {"none", "month", "quarter", "year"}:
                 time_grain = "none"
 
-            setup_questions = [
-                {
-                    "question_id": "business_type",
-                    "title": "Select business type",
-                    "options": ["roster", "project_progress", "attendance", "other"],
-                },
-                {
-                    "question_id": "write_mode",
-                    "title": "Select write mode",
-                    "options": ["update_existing", "time_partitioned_new_table", "new_table"],
-                },
-                {
-                    "question_id": "match_columns",
-                    "title": "Select match columns",
-                    "options": upload_columns[:12],
-                },
-            ]
+            purpose_hint = str(schema.get("description") or "").strip()
+            if not purpose_hint:
+                source_columns = "、".join(upload_columns[:6]) if upload_columns else "当前上传数据"
+                purpose_hint = f"Use this table for uploads containing {source_columns}."
+
             try:
                 return IngestionAgentPlanOutput.model_validate(
                     {
                         "status": "awaiting_catalog_setup",
                         "agent_guess": agent_guess_payload,
-                        "setup_questions": setup_questions,
+                        "setup_questions": [
+                            {
+                                "question_id": "description",
+                                "title": "Describe what this table should be used for",
+                                "options": [],
+                            }
+                        ],
                         "suggested_catalog_seed": {
                             "business_type": business_type,
                             "table_name": table_name,
-                            "human_label": table_name.replace("_", " ").title(),
+                            "human_label": human_label,
                             "write_mode": write_mode,
                             "time_grain": time_grain,
-                            "primary_keys": primary_keys,
-                            "match_columns": match_columns,
+                            "primary_keys": [],
+                            "match_columns": [],
                             "is_active_target": True,
-                            "description": (
-                                "Recovered from AskUserQuestion fallback after SDK timeout."
-                            ),
+                            "description": purpose_hint,
                         },
                         "human_approval": human_approval_payload,
                     }
@@ -3989,6 +3992,82 @@ class WriteIngestionAgentRuntime:
         )
         return proposal_id
 
+    def _sync_catalog_entry_from_execution(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        table_name: str,
+        requested_by: str,
+        proposal_payload: IngestionProposalPayload,
+        approved_action: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM table_catalog
+            WHERE workspace_id = ? AND table_name = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, table_name),
+        ).fetchone()
+        if row is None:
+            return
+
+        catalog_id = str(row["id"])
+        business_type = proposal_payload.business_type
+        primary_keys = _decode_json_list(row["primary_keys"])
+        match_columns = self._dedupe_preserve_order(list(proposal_payload.match_columns))
+        if not primary_keys:
+            primary_keys = list(match_columns)
+
+        write_mode = approved_action.strip().lower()
+        if write_mode not in {"update_existing", "time_partitioned_new_table", "new_table", "append_only"}:
+            write_mode = str(row["write_mode"])
+
+        time_grain = proposal_payload.time_grain
+        now = _utc_now()
+        is_active_target = bool(row["is_active_target"])
+        if business_type != "other":
+            conn.execute(
+                """
+                UPDATE table_catalog
+                SET is_active_target = 0, updated_by = ?, updated_at = ?
+                WHERE workspace_id = ? AND business_type = ? AND id != ?
+                """,
+                (requested_by, now, workspace_id, business_type, catalog_id),
+            )
+            is_active_target = True
+
+        conn.execute(
+            """
+            UPDATE table_catalog
+            SET
+                business_type = ?,
+                write_mode = ?,
+                time_grain = ?,
+                primary_keys = ?,
+                match_columns = ?,
+                is_active_target = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (
+                business_type,
+                write_mode,
+                time_grain,
+                json.dumps(primary_keys, ensure_ascii=False),
+                json.dumps(match_columns, ensure_ascii=False),
+                int(is_active_target),
+                requested_by,
+                now,
+                catalog_id,
+                workspace_id,
+            ),
+        )
+
     def _set_job_status(
         self,
         *,
@@ -4028,29 +4107,8 @@ class WriteIngestionAgentRuntime:
         time_grain = setup_seed.time_grain
         description = setup_seed.description
 
-        primary_keys = list(setup_seed.primary_keys)
-        match_columns = list(setup_seed.match_columns)
-        if not primary_keys and match_columns:
-            primary_keys = list(match_columns)
-        if not match_columns and primary_keys:
-            match_columns = list(primary_keys)
-
-        if not primary_keys and not match_columns:
-            candidate_columns = [
-                self._normalize_identifier(str(value))
-                for value in upload_info.get("column_summary", {}).get("all_columns", [])
-            ]
-            candidate_columns = [value for value in candidate_columns if value]
-            if candidate_columns:
-                primary_keys = [candidate_columns[0]]
-                match_columns = [candidate_columns[0]]
-
-        if not primary_keys and not match_columns:
-            raise IngestionPlanningError(
-                code="SETUP_MATCH_COLUMNS_REQUIRED",
-                message="At least one primary key or match column is required",
-                status_code=422,
-            )
+        primary_keys = self._dedupe_preserve_order(list(setup_seed.primary_keys))
+        match_columns = self._dedupe_preserve_order(list(setup_seed.match_columns))
 
         if setup_seed.is_active_target:
             conn.execute(
@@ -4282,6 +4340,8 @@ class WriteIngestionAgentRuntime:
         target_catalog = self._serialize_catalog_entry(row)
         return {
             "table_name": target_catalog["table_name"],
+            "human_label": target_catalog["human_label"],
+            "description": target_catalog["description"],
             "business_type": target_catalog["business_type"],
             "primary_keys": list(target_catalog["primary_keys"]),
             "match_columns": list(target_catalog["match_columns"]),
@@ -4513,6 +4573,7 @@ class WriteIngestionAgentRuntime:
             "workspace_id": str(row["workspace_id"]),
             "table_name": str(row["table_name"]),
             "human_label": str(row["human_label"]),
+            "description": str(row["description"]),
             "business_type": str(row["business_type"]),
             "write_mode": str(row["write_mode"]),
             "time_grain": str(row["time_grain"]),

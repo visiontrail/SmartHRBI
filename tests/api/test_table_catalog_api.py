@@ -139,6 +139,39 @@ def test_table_catalog_crud_and_active_target(monkeypatch, tmp_path: Path) -> No
         assert final_list_response.json()["entries"][0]["id"] == first_entry["id"]
 
 
+def test_table_catalog_create_accepts_business_intent_only(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin", clearance=9)
+
+        workspace_response = client.post(
+            "/workspaces",
+            json={"name": "Intent Only Catalog"},
+            headers=owner_headers,
+        )
+        assert workspace_response.status_code == 200
+        workspace_id = workspace_response.json()["workspace_id"]
+
+        create_response = client.post(
+            f"/workspaces/{workspace_id}/catalog",
+            headers=owner_headers,
+            json={
+                "table_name": "employee_master",
+                "human_label": "Employee Master",
+                "description": "Stores the employee master sheet used for workforce analysis.",
+            },
+        )
+        assert create_response.status_code == 200
+        entry = create_response.json()["entry"]
+        assert entry["business_type"] == "other"
+        assert entry["write_mode"] == "new_table"
+        assert entry["primary_keys"] == []
+        assert entry["match_columns"] == []
+        assert entry["is_active_target"] is False
+        assert entry["description"] == "Stores the employee master sheet used for workforce analysis."
+
+
 def test_table_catalog_workspace_role_checks(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 

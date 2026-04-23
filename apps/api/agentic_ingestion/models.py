@@ -54,10 +54,10 @@ class IngestionPlanRequest(BaseModel):
 
 
 class IngestionCatalogSetupSeed(BaseModel):
-    business_type: Literal["roster", "project_progress", "attendance", "other"]
+    business_type: Literal["roster", "project_progress", "attendance", "other"] = "other"
     table_name: str = Field(min_length=1, max_length=128)
     human_label: str = Field(min_length=1, max_length=120)
-    write_mode: Literal["update_existing", "time_partitioned_new_table", "new_table"]
+    write_mode: Literal["update_existing", "time_partitioned_new_table", "new_table"] = "new_table"
     time_grain: Literal["none", "month", "quarter", "year"] = "none"
     primary_keys: list[str] = Field(default_factory=list)
     match_columns: list[str] = Field(default_factory=list)

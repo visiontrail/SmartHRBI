@@ -106,18 +106,16 @@ def _mock_run_planning_agent_loop(
     }
     entries = list(catalog.get("entries", []))
     if not entries:
-        first_columns = list(upload_info["column_summary"].get("all_columns", []))[:3]
-        match_columns = [_normalize_identifier(first_columns[0])] if first_columns else ["employee_id"]
         seed = {
             "business_type": "roster",
             "table_name": "employee_roster",
             "human_label": "Employee Roster",
-            "write_mode": "update_existing",
+            "write_mode": "new_table",
             "time_grain": "none",
-            "primary_keys": match_columns,
-            "match_columns": match_columns,
+            "primary_keys": [],
+            "match_columns": [],
             "is_active_target": True,
-            "description": "Mock agent seed from upload inspection.",
+            "description": "Stores roster-style Excel uploads for workforce analysis.",
         }
         output = IngestionAgentPlanOutput.model_validate(
             {
@@ -125,20 +123,10 @@ def _mock_run_planning_agent_loop(
                 "agent_guess": agent_guess,
                 "setup_questions": [
                     {
-                        "question_id": "business_type",
-                        "title": "这份数据属于哪类业务？",
-                        "options": ["roster", "project_progress", "attendance", "other"],
-                    },
-                    {
-                        "question_id": "write_mode",
-                        "title": "默认写入方式是什么？",
-                        "options": ["update_existing", "time_partitioned_new_table", "new_table"],
-                    },
-                    {
-                        "question_id": "match_columns",
-                        "title": "用于匹配更新的主键列是什么？",
-                        "options": first_columns,
-                    },
+                        "question_id": "description",
+                        "title": "这张表主要用于什么？",
+                        "options": [],
+                    }
                 ],
                 "suggested_catalog_seed": seed,
                 "human_approval": {
@@ -169,7 +157,12 @@ def _mock_run_planning_agent_loop(
     action = str(target.get("write_mode") or "update_existing")
     if action not in {"update_existing", "time_partitioned_new_table", "new_table"}:
         action = "update_existing"
-    match_columns = list(target.get("match_columns") or target.get("primary_keys") or ["employee_id"])
+    match_columns = list(target.get("match_columns") or target.get("primary_keys") or [])
+    if action == "update_existing" and not match_columns:
+        upload_columns = list(upload_info["column_summary"].get("all_columns", []))
+        first_column = _normalize_identifier(str(upload_columns[0])) if upload_columns else ""
+        if first_column:
+            match_columns = [first_column]
     diff_preview = self._run_tool(  # noqa: SLF001
         conn=conn,
         job_id=job_id,

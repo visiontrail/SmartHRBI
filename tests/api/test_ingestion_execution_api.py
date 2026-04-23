@@ -236,6 +236,79 @@ def test_ingestion_approve_and_execute_persist_receipt(monkeypatch, tmp_path: Pa
     assert count > 0
 
 
+def test_execute_syncs_catalog_after_business_intent_import(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Catalog Sync Workspace")
+
+        catalog_response = client.post(
+            f"/workspaces/{workspace_id}/catalog",
+            headers=owner_headers,
+            json={
+                "table_name": "employee_roster",
+                "human_label": "Employee Roster",
+                "description": "Stores employee master uploads.",
+            },
+        )
+        assert catalog_response.status_code == 200
+
+        upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
+        plan_response = client.post(
+            "/ingestion/plan",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "message": "导入花名册",
+            },
+            headers=owner_headers,
+        )
+        assert plan_response.status_code == 200
+        plan_payload = plan_response.json()
+        assert plan_payload["status"] == "awaiting_user_approval"
+
+        approve_response = client.post(
+            "/ingestion/approve",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "proposal_id": plan_payload["proposal_id"],
+                "approved_action": "new_table",
+            },
+            headers=owner_headers,
+        )
+        assert approve_response.status_code == 200
+
+        execute_response = client.post(
+            "/ingestion/execute",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "proposal_id": plan_payload["proposal_id"],
+            },
+            headers=owner_headers,
+        )
+
+    assert execute_response.status_code == 200
+
+    db_path = tmp_path / "workspace-state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        catalog_row = conn.execute(
+            """
+            SELECT business_type, write_mode, is_active_target
+            FROM table_catalog
+            WHERE workspace_id = ? AND table_name = ?
+            """,
+            (workspace_id, "employee_roster"),
+        ).fetchone()
+        assert catalog_row is not None
+        assert str(catalog_row["business_type"]) == "roster"
+        assert str(catalog_row["write_mode"]) == "new_table"
+        assert int(catalog_row["is_active_target"]) == 1
+
+
 def test_ingestion_execute_handles_numeric_timestamp_values(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
 

@@ -9,41 +9,44 @@ const DEFAULT_SEED = {
   businessType: "roster" as const,
   tableName: "employee_roster",
   humanLabel: "Employee Roster",
-  writeMode: "update_existing" as const,
+  writeMode: "new_table" as const,
   timeGrain: "none" as const,
-  primaryKeys: ["employee_id"],
-  matchColumns: ["employee_id"],
+  primaryKeys: [],
+  matchColumns: [],
   isActiveTarget: true,
-  description: "seed",
+  description: "Stores employee master uploads.",
 };
 
 describe("IngestionSetupCard", () => {
-  it("submits normalized setup seed", async () => {
+  it("submits business-facing setup and preserves hidden technical defaults", async () => {
     const onConfirm = vi.fn();
     render(<IngestionSetupCard initialSeed={DEFAULT_SEED} onConfirm={onConfirm} />);
 
-    await userEvent.clear(screen.getByLabelText("Table Name"));
-    await userEvent.type(screen.getByLabelText("Table Name"), "  Employee_Roster_2026  ");
+    await userEvent.clear(screen.getByLabelText("Human Label"));
+    await userEvent.type(screen.getByLabelText("Human Label"), "  Employee Master  ");
+    await userEvent.clear(screen.getByLabelText("Table Purpose"));
+    await userEvent.type(screen.getByLabelText("Table Purpose"), "  Stores workforce master data.  ");
     await userEvent.click(screen.getByRole("button", { name: "Apply Setup" }));
 
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        tableName: "employee_roster_2026",
-        primaryKeys: ["employee_id"],
-        matchColumns: ["employee_id"],
+        tableName: "employee_roster",
+        humanLabel: "Employee Master",
+        description: "Stores workforce master data.",
+        primaryKeys: [],
+        matchColumns: [],
       })
     );
   });
 
-  it("shows validation error when no key columns are configured", async () => {
+  it("shows validation error when human label is empty", async () => {
     const onConfirm = vi.fn();
     render(
       <IngestionSetupCard
         initialSeed={{
           ...DEFAULT_SEED,
-          primaryKeys: [],
-          matchColumns: [],
+          humanLabel: "",
         }}
         onConfirm={onConfirm}
       />
@@ -52,8 +55,6 @@ describe("IngestionSetupCard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Apply Setup" }));
 
     expect(onConfirm).not.toHaveBeenCalled();
-    expect(
-      screen.getByText("At least one primary key or match column is required.")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Human label is required.")).toBeInTheDocument();
   });
 });

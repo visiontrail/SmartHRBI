@@ -185,6 +185,42 @@ def test_setup_confirm_creates_catalog_and_returns_proposal(monkeypatch, tmp_pat
         assert "proposal_generated" in event_types
 
 
+def test_setup_confirm_accepts_business_intent_only_seed(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin")
+        workspace_id = _create_workspace(client, owner_headers, name="Intent Only Setup Workspace")
+        upload_payload = _create_upload(client, owner_headers, workspace_id=workspace_id)
+        setup_required_payload = _create_setup_required_plan(
+            client,
+            owner_headers,
+            workspace_id=workspace_id,
+            job_id=upload_payload["job_id"],
+        )
+        seed = setup_required_payload["suggested_catalog_seed"]
+        assert isinstance(seed, dict)
+        seed["primary_keys"] = []
+        seed["match_columns"] = []
+        seed["write_mode"] = "new_table"
+
+        confirm_response = client.post(
+            "/ingestion/setup/confirm",
+            json={
+                "workspace_id": workspace_id,
+                "job_id": upload_payload["job_id"],
+                "setup": seed,
+            },
+            headers=owner_headers,
+        )
+
+    assert confirm_response.status_code == 200
+    payload = confirm_response.json()
+    assert payload["status"] == "awaiting_user_approval"
+    assert payload["setup"]["catalog_entry"]["primary_keys"] == []
+    assert payload["setup"]["catalog_entry"]["match_columns"] == []
+
+
 def test_setup_confirm_prevents_repeat_setup_for_same_business_type(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path, ingestion_enabled=True)
 

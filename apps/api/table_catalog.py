@@ -41,17 +41,17 @@ class TableCatalogError(Exception):
 class TableCatalogEntryCreateRequest(BaseModel):
     table_name: str = Field(min_length=1, max_length=128)
     human_label: str = Field(min_length=1, max_length=120)
-    business_type: Literal["roster", "project_progress", "attendance", "other"]
+    business_type: Literal["roster", "project_progress", "attendance", "other"] = "other"
     write_mode: Literal[
         "update_existing",
         "time_partitioned_new_table",
         "new_table",
         "append_only",
-    ]
+    ] = "new_table"
     time_grain: Literal["none", "month", "quarter", "year"] = "none"
     primary_keys: list[str] = Field(default_factory=list)
     match_columns: list[str] = Field(default_factory=list)
-    is_active_target: bool = True
+    is_active_target: bool = False
     description: str = Field(default="", max_length=1000)
 
     @field_validator("table_name")
