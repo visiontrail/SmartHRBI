@@ -1766,9 +1766,24 @@ class WriteIngestionAgentRuntime:
                 tool_trace_sink=tool_trace_snapshot,
             )
 
+        _OUTPUT_MISSING_CODES = frozenset({
+            "AGENT_STRUCTURED_OUTPUT_MISSING",
+            "AGENT_STRUCTURED_OUTPUT_INVALID",
+            "AGENT_PROPOSAL_REQUIRED",
+        })
+
         try:
             return anyio.run(runner)
-        except IngestionPlanningError:
+        except IngestionPlanningError as exc:
+            if exc.code in _OUTPUT_MISSING_CODES:
+                recovered = self._recover_proposal_from_tool_trace(tool_trace=tool_trace_snapshot)
+                if recovered is not None:
+                    logger.warning(
+                        "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=%s",
+                        job_id,
+                        exc.code.lower(),
+                    )
+                    return recovered, tool_trace_snapshot
             raise
         except TimeoutError as exc:
             recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace_snapshot)
@@ -2506,6 +2521,145 @@ class WriteIngestionAgentRuntime:
             "explanation": (
                 "Recovered a proposal from tool trace because the agent did not return "
                 "structured output before timeout."
+            ),
+            "sql_draft": str(sql_payload.get("sql_draft") or "").strip(),
+            "requires_catalog_setup": False,
+        }
+        try:
+            return IngestionAgentPlanOutput.model_validate(
+                {
+                    "status": "awaiting_user_approval",
+                    "agent_guess": agent_guess_payload,
+                    "proposal": proposal_payload,
+                    "human_approval": human_approval_payload,
+                }
+            )
+        except Exception:
+            return None
+
+    def _recover_proposal_from_tool_trace(
+        self,
+        *,
+        tool_trace: list[dict[str, Any]],
+    ) -> IngestionAgentPlanOutput | None:
+        """Recover a proposal from tool trace when the agent called generate_write_sql_draft
+        but did not produce valid structured output (e.g. non-Claude LLM ignoring json_schema)."""
+        draft_trace = self._latest_tool_trace_item(
+            tool_trace,
+            names={"generate_write_sql_draft"},
+        )
+        if draft_trace is None:
+            return None
+
+        schema = self._latest_tool_result(tool_trace, "describe_table_schema")
+        upload_info = self._latest_tool_result(tool_trace, "inspect_upload")
+        column_summary = upload_info.get("column_summary") if isinstance(upload_info.get("column_summary"), dict) else {}
+        raw_columns = column_summary.get("all_columns") if isinstance(column_summary.get("all_columns"), list) else []
+        upload_columns = [str(item).strip() for item in raw_columns if str(item).strip()]
+        normalized_columns: list[str] = []
+        for raw_column in upload_columns:
+            candidate = self._normalize_identifier(raw_column)
+            if candidate and candidate not in normalized_columns:
+                normalized_columns.append(candidate)
+
+        business_type = str(schema.get("business_type") or "other").strip()
+        if business_type not in {"roster", "project_progress", "attendance", "other"}:
+            business_type = "other"
+        agent_guess_payload = {
+            "business_type": business_type,
+            "confidence": 0.55,
+            "reasoning": (
+                "Recovered from tool trace because the agent completed all tools "
+                "but did not return valid structured output."
+            ),
+        }
+
+        allowed_options = list(DEFAULT_ACTION_OPTIONS)
+        human_approval_payload = {
+            "required": True,
+            "mechanism": "frontend_approval_card",
+            "stage": "proposal_approval",
+            "question": "Please review the proposed ingestion action.",
+            "options": allowed_options,
+            "recommended_option": "update_existing",
+        }
+
+        diff_preview_result = self._latest_tool_result(tool_trace, "build_diff_preview")
+        draft_arguments = draft_trace.get("arguments") if isinstance(draft_trace.get("arguments"), dict) else {}
+        sql_payload = self._latest_tool_result(tool_trace, "generate_write_sql_draft")
+
+        target_table = str(draft_arguments.get("target_table") or schema.get("table_name") or "").strip().lower()
+        if target_table and not SAFE_IDENTIFIER_RE.match(target_table):
+            target_table = self._normalize_identifier(target_table)
+        if not target_table:
+            target_table = None
+
+        candidate_actions = list(DEFAULT_ACTION_OPTIONS) + ["cancel"]
+        action_mode = str(draft_arguments.get("action_mode") or "update_existing").strip()
+        recommended_action = action_mode if action_mode in candidate_actions else "update_existing"
+
+        match_columns: list[str] = []
+        for item in (
+            draft_arguments.get("match_columns")
+            if isinstance(draft_arguments.get("match_columns"), list)
+            else []
+        ):
+            normalized = self._normalize_identifier(str(item))
+            if normalized and normalized not in match_columns:
+                match_columns.append(normalized)
+        if not match_columns:
+            for item in (
+                schema.get("match_columns")
+                if isinstance(schema.get("match_columns"), list)
+                else []
+            ):
+                normalized = self._normalize_identifier(str(item))
+                if normalized and normalized not in match_columns:
+                    match_columns.append(normalized)
+        if not match_columns and normalized_columns:
+            match_columns = [normalized_columns[0]]
+
+        time_grain = str(schema.get("time_grain") or "none").strip()
+        if time_grain not in {"none", "month", "quarter", "year"}:
+            time_grain = "none"
+
+        def _as_non_negative_int(value: Any) -> int:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        column_mapping: dict[str, str] = {}
+        for index, raw_column in enumerate(upload_columns):
+            normalized = self._normalize_identifier(raw_column) or f"c_{index + 1}"
+            column_mapping[raw_column] = normalized
+
+        proposal_payload = {
+            "business_type": business_type,
+            "confidence": 0.6,
+            "recommended_action": recommended_action,
+            "candidate_actions": candidate_actions,
+            "target_table": target_table,
+            "time_grain": time_grain,
+            "match_columns": match_columns,
+            "column_mapping": column_mapping,
+            "diff_preview": {
+                "predicted_insert_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_insert_count")
+                ),
+                "predicted_update_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_update_count")
+                ),
+                "predicted_conflict_count": _as_non_negative_int(
+                    diff_preview_result.get("predicted_conflict_count")
+                ),
+            },
+            "risks": [
+                "Proposal recovered from tool trace; verify column mapping before approving."
+            ],
+            "explanation": (
+                "Proposal recovered from tool trace because the agent completed all tools "
+                "but did not return valid structured output. Review carefully before approving."
             ),
             "sql_draft": str(sql_payload.get("sql_draft") or "").strip(),
             "requires_catalog_setup": False,
