@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { GlobalSidebar } from "./global-sidebar";
 import { WorkspaceOnboardingGate } from "./workspace-onboarding-gate";
 import { ChatPanel } from "@/components/chat/chat-panel";
+import { WorkspaceCatalogPage } from "@/components/workspace/workspace-catalog-page";
 import { WorkspacePanel } from "@/components/workspace/workspace-panel";
 import { useUIStore } from "@/stores/ui-store";
 import { useChatSessions } from "@/hooks/use-chat";
@@ -45,6 +46,9 @@ export function AppShell() {
         } else if (e.key === "3") {
           e.preventDefault();
           useUIStore.getState().setActivePanel("both");
+        } else if (e.key === "4") {
+          e.preventDefault();
+          useUIStore.getState().setActivePanel("catalog");
         } else if (e.key === "b") {
           e.preventDefault();
           useUIStore.getState().toggleChatSidebar();
@@ -77,6 +81,12 @@ export function AppShell() {
       {chatSidebarOpen && <GlobalSidebar />}
 
       <div className="flex flex-1 min-w-0 overflow-hidden">
+        {activePanel === "catalog" && (
+          <div className="flex flex-1 flex-col overflow-hidden bg-parchment">
+            <WorkspaceCatalogPage />
+          </div>
+        )}
+
         {(activePanel === "chat" || activePanel === "both") && (
           <div
             className={cn(

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ActivePanel = "chat" | "workspace" | "both";
+export type ActivePanel = "chat" | "workspace" | "both" | "catalog";
 
 type UIState = {
   activePanel: ActivePanel;

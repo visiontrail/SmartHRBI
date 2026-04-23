@@ -7,6 +7,8 @@ import {
   PanelLeftClose,
   Trash2,
   BarChart3,
+  Columns2,
+  Table2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -44,6 +46,7 @@ export function GlobalSidebar() {
   const handleNewChat = () => {
     createSession.mutate(undefined);
     if (activePanel === "workspace") setActivePanel("both");
+    if (activePanel === "catalog") setActivePanel("chat");
   };
 
   const handleNewWorkspace = () => {
@@ -54,6 +57,7 @@ export function GlobalSidebar() {
   const handleSelectSession = (sessionId: string) => {
     setActiveSession(sessionId);
     if (activePanel === "workspace") setActivePanel("both");
+    if (activePanel === "catalog") setActivePanel("chat");
   };
 
   const handleSelectWorkspace = (workspaceId: string) => {
@@ -78,6 +82,33 @@ export function GlobalSidebar() {
           <TooltipContent>{t("sidebar.hideSidebar")}</TooltipContent>
         </Tooltip>
       </div>
+
+      <nav className="grid grid-cols-4 gap-1 border-b border-border-cream px-3 py-2">
+        <PanelButton
+          active={activePanel === "chat"}
+          label={t("sidebar.panel.chat")}
+          onClick={() => setActivePanel("chat")}
+          icon={<MessageSquare className="h-4 w-4" />}
+        />
+        <PanelButton
+          active={activePanel === "workspace"}
+          label={t("sidebar.panel.canvas")}
+          onClick={() => setActivePanel("workspace")}
+          icon={<LayoutDashboard className="h-4 w-4" />}
+        />
+        <PanelButton
+          active={activePanel === "both"}
+          label={t("sidebar.panel.split")}
+          onClick={() => setActivePanel("both")}
+          icon={<Columns2 className="h-4 w-4" />}
+        />
+        <PanelButton
+          active={activePanel === "catalog"}
+          label={t("sidebar.panel.catalog")}
+          onClick={() => setActivePanel("catalog")}
+          icon={<Table2 className="h-4 w-4" />}
+        />
+      </nav>
 
       <ScrollArea className="flex-1">
         <div className="pl-3 pr-5 py-3">
@@ -197,6 +228,40 @@ export function GlobalSidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+function PanelButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-pressed={active}
+          onClick={onClick}
+          className={cn(
+            "flex h-9 items-center justify-center rounded-comfortable border transition-colors",
+            active
+              ? "border-ring-warm bg-warm-sand text-terracotta shadow-ring-warm"
+              : "border-transparent text-stone-gray hover:border-border-cream hover:bg-parchment hover:text-near-black"
+          )}
+        >
+          {icon}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
