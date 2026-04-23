@@ -494,12 +494,30 @@ class TableCatalogService:
                 status_code=500,
             ) from exc
 
+        column_labels: dict[str, str] = {}
+        with self._lock, self._connect() as sqlite_conn:
+            label_row = sqlite_conn.execute(
+                """
+                SELECT proposal_json FROM ingestion_proposals
+                WHERE workspace_id = ? AND target_table = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (workspace_id, table_name),
+            ).fetchone()
+            if label_row is not None:
+                try:
+                    mapping = json.loads(label_row["proposal_json"]).get("column_mapping", {})
+                    column_labels = {v: k for k, v in mapping.items()}
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    pass
+
         typed_columns = [
             {
                 "name": str(item[1]),
                 "type": str(item[2]),
                 "nullable": not bool(item[3]),
                 "primary_key": bool(item[5]),
+                "label": column_labels.get(str(item[1])),
             }
             for item in column_rows
         ]

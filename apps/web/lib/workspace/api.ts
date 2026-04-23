@@ -323,6 +323,7 @@ function mapTableCatalogDataColumn(value: Record<string, unknown>): TableCatalog
     type: asString(value.type),
     nullable: Boolean(value.nullable),
     primaryKey: Boolean(value.primary_key),
+    label: asOptionalString(value.label),
   };
 }
 

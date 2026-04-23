@@ -249,10 +249,12 @@ export function WorkspaceCatalogReadonly({
                             className="min-w-36 whitespace-nowrap border-b border-r border-border-cream px-3 py-2 align-top"
                           >
                             <span className="block text-label font-medium text-near-black">
-                              {column.name}
+                              {column.label ?? column.name}
                             </span>
                             <span className="block pt-0.5 text-[11px] uppercase text-stone-gray">
-                              {column.type || t("workspace.catalog.dataPreviewUnknownType")}
+                              {column.label
+                                ? `${column.name} · ${column.type || t("workspace.catalog.dataPreviewUnknownType")}`
+                                : (column.type || t("workspace.catalog.dataPreviewUnknownType"))}
                             </span>
                           </th>
                         ))}

@@ -78,6 +78,7 @@ export type TableCatalogDataColumn = {
   type: string;
   nullable: boolean;
   primaryKey: boolean;
+  label?: string;
 };
 
 export type TableCatalogDataPreview = {
