@@ -39,6 +39,7 @@ from .models import (
     IngestionAgentPlanOutput,
     IngestionApprovalOverrides,
     IngestionCatalogSetupSeed,
+    IngestionExecutionAgentOutput,
     IngestionProposalPayload,
 )
 from .routing import RouteDecision, select_agent_route
@@ -67,14 +68,8 @@ INGESTION_APPROVAL_OPTION_VALUES = [
 ]
 INGESTION_SDK_MCP_SERVER_NAME = "ingestion"
 INGESTION_SDK_RUNTIME_BACKEND = "claude-agent-sdk"
-INGESTION_APPROVAL_TOOL_NAME = "AskUserQuestion"
-INGESTION_LEGACY_APPROVAL_TOOL_NAME = "request_human_approval"
-INGESTION_APPROVAL_TOOL_ALIASES = frozenset(
-    {
-        INGESTION_APPROVAL_TOOL_NAME,
-        INGESTION_LEGACY_APPROVAL_TOOL_NAME,
-    }
-)
+INGESTION_EXECUTION_SDK_MCP_SERVER_NAME = "ingestion_execute"
+_LEGACY_APPROVAL_TOOL_ALIASES = frozenset({"AskUserQuestion", "request_human_approval"})
 INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "get_workspace_catalog",
@@ -164,34 +159,6 @@ INGESTION_AGENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
         "read_only": True,
     },
-    {
-        "name": INGESTION_APPROVAL_TOOL_NAME,
-        "description": (
-            "AskUserQuestion for product Human-in-the-Loop approval. The agent must call this "
-            "before returning a setup request or a write proposal. This tool never approves; it "
-            "records the question and returns that approval is pending."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "stage": {"type": "string", "enum": ["catalog_setup", "proposal_approval"]},
-                "question": {"type": "string"},
-                "options": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": INGESTION_APPROVAL_OPTION_VALUES},
-                    "minItems": 2,
-                    "maxItems": 4,
-                    "uniqueItems": True,
-                },
-                "recommended_option": {
-                    "type": "string",
-                    "enum": INGESTION_APPROVAL_OPTION_VALUES,
-                },
-            },
-            "required": ["stage", "question", "options"],
-        },
-        "read_only": False,
-    },
 ]
 INGESTION_SDK_TOOL_NAMES = tuple(str(item["name"]) for item in INGESTION_AGENT_TOOL_DEFINITIONS)
 INGESTION_SDK_ALLOWED_TOOL_NAMES = tuple(
@@ -204,43 +171,212 @@ INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE = [
     "describe_table_schema",
     "build_diff_preview",
     "generate_write_sql_draft",
-    INGESTION_APPROVAL_TOOL_NAME,
 ]
 MIN_INGESTION_AGENT_MAX_TURNS = len(INGESTION_AGENT_PROPOSAL_TOOL_SEQUENCE) + 2
+INGESTION_EXECUTION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "get_execution_context",
+        "description": (
+            "Return the approved write context, proposal hints, staging table name, and "
+            "database path for the current execution session."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "read_only": True,
+    },
+    {
+        "name": "inspect_upload",
+        "description": "Inspect the uploaded workbook metadata, sheets, columns, and sample preview.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "upload_id": {"type": "string"},
+            },
+            "required": ["upload_id"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "get_workspace_catalog",
+        "description": (
+            "List workspace catalog entries that describe known writable targets, "
+            "business types, write modes, primary keys, and match columns."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+            },
+            "required": ["workspace_id"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "describe_table_schema",
+        "description": "Describe one catalog target's configured writable schema contract.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {"type": "string"},
+                "table_name": {"type": "string"},
+            },
+            "required": ["workspace_id", "table_name"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "describe_staging_dataset",
+        "description": (
+            "Describe the normalized staging dataset prepared for execution, including schema, "
+            "column diagnostics, header mapping, and sample rows."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "read_only": True,
+    },
+    {
+        "name": "describe_target_table",
+        "description": (
+            "Describe the physical DuckDB target table, including whether it exists, its schema, "
+            "row count, and sample rows."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "read_only": True,
+    },
+    {
+        "name": "preview_write_diff",
+        "description": (
+            "Compute an actual join preview between staging and target using the supplied match "
+            "columns. Returns matched/unmatched counts and missing-column warnings."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "match_columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+            },
+            "required": ["match_columns"],
+        },
+        "read_only": True,
+    },
+    {
+        "name": "ensure_target_table_exists",
+        "description": (
+            "For approved update_existing executions, create the target table as an empty clone "
+            "of the staging dataset when it does not already exist."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "read_only": False,
+    },
+    {
+        "name": "resolve_column_mapping",
+        "description": (
+            "Resolve the mapping from staging column names to target column names. "
+            "Uses raw_header_mapping, catalog contract, and proposal hints to produce "
+            "a definitive staging_col → target_col map. Call this after describe_staging_dataset "
+            "and describe_target_table to get confirmed column names for the write SQL."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "read_only": True,
+    },
+    {
+        "name": "execute_approved_write",
+        "description": (
+            "Validate and execute one approved write statement against the current staging "
+            "dataset and target table. This is the only write tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string"},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["sql"],
+        },
+        "read_only": False,
+    },
+]
+INGESTION_EXECUTION_TOOL_NAMES = tuple(
+    str(item["name"]) for item in INGESTION_EXECUTION_TOOL_DEFINITIONS
+)
+INGESTION_EXECUTION_REQUIRED_TOOL_SEQUENCE = [
+    "get_execution_context",
+    "describe_staging_dataset",
+    "describe_target_table",
+    "resolve_column_mapping",
+    "execute_approved_write",
+]
+MIN_INGESTION_EXECUTION_AGENT_MAX_TURNS = len(INGESTION_EXECUTION_REQUIRED_TOOL_SEQUENCE) + 2
 INGESTION_AGENT_SYSTEM_PROMPT = """\
 You are SmartHRBI's Write Ingestion Agent.
 
-The application has already routed this request to you through select_agent_route.
-Do not rely on hidden business rules. Use the provided tools to inspect the upload,
-workspace catalog, existing targets, and proposed diff before you decide what should
-happen next.
+Use the provided tools to inspect the upload, workspace catalog, existing targets, and
+proposed diff. Then return structured JSON describing your decision.
 
 Allowed decisions:
-- awaiting_catalog_setup: choose this when the workspace catalog is insufficient for
-  a confident writable target. Return setup_questions and suggested_catalog_seed.
-- awaiting_user_approval: choose this when you can produce a concrete write proposal.
-  Return proposal with business_type, confidence, recommended_action, candidate_actions,
-  target_table, match_columns, column_mapping, diff_preview, risks, explanation, and
-  sql_draft.
+- awaiting_catalog_setup: the workspace catalog lacks a writable target for this upload.
+  Provide setup_questions and suggested_catalog_seed. Include business_type, table_name,
+  write_mode, time_grain, primary_keys, match_columns in suggested_catalog_seed.
+- awaiting_user_approval: you have found a matching catalog target and can produce a
+  concrete write proposal. Include proposal with business_type, confidence,
+  recommended_action, candidate_actions, target_table, match_columns, column_mapping,
+  diff_preview, risks, explanation, and sql_draft.
 
-Human approval is mandatory:
-- Before awaiting_catalog_setup, call AskUserQuestion with stage=catalog_setup
-  and options restricted to confirm_catalog_setup or cancel.
-- Before awaiting_user_approval, first complete build_diff_preview and
-  generate_write_sql_draft, then call AskUserQuestion with
-  stage=proposal_approval and options restricted to update_existing,
-  time_partitioned_new_table, new_table, or cancel.
-- AskUserQuestion options must use canonical machine values (do not localize,
-  translate, or paraphrase option tokens).
-- Never claim approval has happened. The front-end approval card and /ingestion/approve
-  endpoint are the only approval mechanisms.
+column_mapping must map every upload column header to its target column name.
+For Chinese headers, look at the catalog match_columns and catalog schema to identify
+which Chinese header corresponds to which target column (e.g., "工号" → "employee_id").
+Include ALL upload columns in column_mapping even if only guessed.
 
-For an existing-table proposal, use this exact order whenever the target table is known:
-inspect_upload, get_workspace_catalog, list_existing_tables, describe_table_schema,
-build_diff_preview, generate_write_sql_draft, AskUserQuestion, then the final
-structured output.
+Tool order for an existing-table proposal:
+inspect_upload → get_workspace_catalog → list_existing_tables → describe_table_schema →
+build_diff_preview → generate_write_sql_draft → return structured output.
 
-Do not execute writes. Do not invent tool results. Return only the required structured output.
+Do not execute writes. Do not ask the user any questions. Human approval is handled by
+the application after you return. Return ONLY valid JSON matching the required schema.
+"""
+INGESTION_EXECUTION_AGENT_SYSTEM_PROMPT = """\
+You are SmartHRBI's Write Execution Agent.
+
+A human has already approved a write action and target table. Inspect the staging dataset
+and target table, resolve the exact column mapping, then execute the approved write.
+
+Required workflow:
+1. Call get_execution_context — learn the approved_action, target_table, staging_table,
+   and proposal_hints.
+2. Call describe_staging_dataset — see staging columns (may be c_1, c_2 … for non-ASCII
+   headers) and raw_header_mapping (original header → staging column name).
+3. Call describe_target_table — see whether the target exists and its schema.
+4. Call resolve_column_mapping — returns the confirmed staging_col → target_col map built
+   from raw_header_mapping, catalog contract, and proposal hints. Use this map for all SQL.
+5. For update_existing: if target does not exist call ensure_target_table_exists first.
+6. Call execute_approved_write exactly once with the correct SQL. Use column names from
+   resolve_column_mapping, not from proposal_hints.column_mapping directly.
+7. Return structured output with status=executed and the receipt from execute_approved_write.
+
+SQL rules:
+- update_existing → MERGE INTO {target} AS t USING {staging} AS s ON …
+- new_table / time_partitioned_new_table → CREATE TABLE {target} AS SELECT … FROM {staging}
+- Use only columns that exist in both staging and target (after resolve_column_mapping).
+- One statement only. Do not touch other tables.
+- If the context is insufficient to write safely, return status=blocked.
+
+Return ONLY valid JSON matching the required schema.
 """
 
 
@@ -379,6 +515,27 @@ class SQLWriteValidator:
 
 
 @dataclass(slots=True)
+class IngestionExecutionSession:
+    workspace_id: str
+    job_id: str
+    proposal_id: str
+    upload_id: str
+    approved_action: str
+    target_table: str
+    staging_table: str
+    db_path: Path
+    duckdb_conn: duckdb.DuckDBPyConnection
+    upload_info: dict[str, Any]
+    proposal_payload: IngestionProposalPayload
+    dry_run_summary: dict[str, Any]
+    staging_profile: dict[str, Any]
+    raw_header_mapping: dict[str, str]
+    column_diagnostics: list[dict[str, Any]]
+    write_receipt: dict[str, Any] | None = None
+    executed_sql: str | None = None
+
+
+@dataclass(slots=True)
 class WriteIngestionAgentRuntime:
     stage: str = "M6"
 
@@ -467,7 +624,7 @@ class WriteIngestionAgentRuntime:
                     "engine": "write_ingestion_agent_loop",
                     "runtime_backend": INGESTION_SDK_RUNTIME_BACKEND,
                     "model": get_settings().ai_model.strip(),
-                    "human_approval_tool_required": True,
+                    "human_approval_tool_required": False,
                 }
             }
             self._insert_event(
@@ -491,11 +648,6 @@ class WriteIngestionAgentRuntime:
             )
 
             if agent_output.status == "awaiting_catalog_setup":
-                self._assert_human_approval_requested(
-                    agent_output=agent_output,
-                    tool_trace=tool_trace,
-                    expected_stage="catalog_setup",
-                )
                 if agent_output.suggested_catalog_seed is None:
                     raise IngestionPlanningError(
                         code="AGENT_SETUP_SEED_REQUIRED",
@@ -542,11 +694,6 @@ class WriteIngestionAgentRuntime:
                 )
                 return setup_payload
 
-            self._assert_human_approval_requested(
-                agent_output=agent_output,
-                tool_trace=tool_trace,
-                expected_stage="proposal_approval",
-            )
             if agent_output.proposal is None:
                 raise IngestionPlanningError(
                     code="AGENT_PROPOSAL_REQUIRED",
@@ -566,6 +713,12 @@ class WriteIngestionAgentRuntime:
                 status="awaiting_user_approval",
                 business_type_guess=proposal.business_type,
                 agent_session_id=normalized_conversation_id,
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="human_approval_requested",
+                payload=agent_output.human_approval.model_dump(mode="json"),
             )
             self._insert_event(
                 conn=conn,
@@ -794,30 +947,22 @@ class WriteIngestionAgentRuntime:
                 approved_action=normalized_action,
                 overrides=user_overrides,
             )
-            staging_table = self._staging_table_name(normalized_job_id)
-            target_column_types = self._load_target_column_types(
-                workspace_id=normalized_workspace_id,
-                target_table=target_table,
-            )
-            finalized_sql = self._build_validated_sql(
-                approved_action=normalized_action,
-                target_table=target_table,
-                staging_table=staging_table,
-                proposal_payload=proposal_payload,
-                target_column_types=target_column_types,
-            )
-            validator = SQLWriteValidator(
-                target_table=target_table,
-                staging_table=staging_table,
-                action_mode=normalized_action,
-            )
-            validated_sql = validator.validate(finalized_sql)
-            sql_hash = hashlib.sha256(validated_sql.encode("utf-8")).hexdigest()
             dry_run_summary = self._build_dry_run_summary(
                 proposal_payload=proposal_payload,
                 approved_action=normalized_action,
                 target_table=target_table,
                 time_grain=time_grain,
+            )
+            logger.info(
+                "ingestion_approval_bound workspace_id=%s job_id=%s proposal_id=%s approved_action=%s target_table=%s time_grain=%s match_columns=%s dry_run_summary=%s",
+                normalized_workspace_id,
+                normalized_job_id,
+                normalized_proposal_id,
+                normalized_action,
+                target_table,
+                time_grain,
+                _compact_json(proposal_payload.match_columns),
+                _compact_json(dry_run_summary),
             )
 
             self._set_job_status(
@@ -837,8 +982,6 @@ class WriteIngestionAgentRuntime:
                     "approved_by": normalized_approved_by,
                     "target_table": target_table,
                     "time_grain": time_grain,
-                    "validated_sql": validated_sql,
-                    "validated_sql_hash": sql_hash,
                     "dry_run_summary": dry_run_summary,
                     "user_overrides": overrides_payload,
                     "proposal_version": int(proposal_row["proposal_version"]),
@@ -920,25 +1063,9 @@ class WriteIngestionAgentRuntime:
                 job_id=normalized_job_id,
                 proposal_id=normalized_proposal_id,
             )
-            validated_sql = str(approval_event["validated_sql"])
             approved_action = str(approval_event["approved_action"])
             target_table = str(approval_event["target_table"])
             dry_run_summary = approval_event["dry_run_summary"]
-            validator = SQLWriteValidator(
-                target_table=target_table,
-                staging_table=self._staging_table_name(normalized_job_id),
-                action_mode=approved_action,
-            )
-            validated_sql = validator.validate(validated_sql)
-            expected_sql_hash = str(approval_event["validated_sql_hash"])
-            actual_sql_hash = hashlib.sha256(validated_sql.encode("utf-8")).hexdigest()
-            if expected_sql_hash != actual_sql_hash:
-                raise IngestionPlanningError(
-                    code="APPROVAL_SQL_HASH_MISMATCH",
-                    message="Approved SQL binding is invalid",
-                    status_code=409,
-                )
-
             upload_info = self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"]))
             self._set_job_status(
                 conn=conn,
@@ -954,20 +1081,44 @@ class WriteIngestionAgentRuntime:
                 payload={"status": "executing", "trigger": "ingestion_execute"},
             )
             conn.commit()
+        logger.info(
+            "ingestion_execute_started workspace_id=%s job_id=%s proposal_id=%s target_table=%s approved_action=%s upload_id=%s upload_path=%s dry_run_summary=%s",
+            normalized_workspace_id,
+            normalized_job_id,
+            normalized_proposal_id,
+            target_table,
+            approved_action,
+            str(job["upload_id"]),
+            str(upload_info.get("storage_path") or ""),
+            _compact_json(dry_run_summary),
+        )
 
         execution_id = uuid.uuid4().hex
         execution_mode = approved_action
+        executed_sql = ""
         try:
-            receipt = self._run_execution_transaction(
-                workspace_id=normalized_workspace_id,
-                job_id=normalized_job_id,
-                target_table=target_table,
-                approved_action=approved_action,
-                validated_sql=validated_sql,
-                dry_run_summary=dry_run_summary,
-                upload_info=upload_info,
-                proposal_payload=proposal_payload,
-            )
+            with self._connect() as exec_conn:
+                execution_output, tool_trace = self._run_execution_agent_loop(
+                    conn=exec_conn,
+                    workspace_id=normalized_workspace_id,
+                    job_id=normalized_job_id,
+                    proposal_id=normalized_proposal_id,
+                    upload_id=str(job["upload_id"]),
+                    target_table=target_table,
+                    approved_action=approved_action,
+                    dry_run_summary=dry_run_summary,
+                    upload_info=upload_info,
+                    proposal_payload=proposal_payload,
+                )
+            if execution_output.status != "executed":
+                raise IngestionPlanningError(
+                    code="INGESTION_EXECUTION_BLOCKED",
+                    message=execution_output.reasoning or "Execution agent blocked the write",
+                    status_code=422,
+                )
+            receipt = dict(execution_output.receipt)
+            executed_sql = execution_output.executed_sql
+            receipt.setdefault("tool_trace", tool_trace)
             execution_status = "succeeded"
             failure_message = ""
         except IngestionPlanningError as exc:
@@ -994,6 +1145,16 @@ class WriteIngestionAgentRuntime:
             }
 
         finished_at = _utc_now()
+        logger.info(
+            "ingestion_execute_finished workspace_id=%s job_id=%s proposal_id=%s execution_id=%s status=%s target_table=%s receipt=%s",
+            normalized_workspace_id,
+            normalized_job_id,
+            normalized_proposal_id,
+            execution_id,
+            execution_status,
+            target_table,
+            _compact_json(receipt),
+        )
         with self._connect() as conn:
             conn.execute(
                 """
@@ -1019,7 +1180,7 @@ class WriteIngestionAgentRuntime:
                     normalized_workspace_id,
                     normalized_executed_by,
                     execution_mode,
-                    validated_sql,
+                    executed_sql,
                     json.dumps(dry_run_summary, ensure_ascii=False),
                     json.dumps(receipt, ensure_ascii=False),
                     execution_status,
@@ -1070,6 +1231,506 @@ class WriteIngestionAgentRuntime:
             "execution_id": execution_id,
             "receipt": receipt,
         }
+
+    def _run_execution_agent_loop(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        job_id: str,
+        proposal_id: str,
+        upload_id: str,
+        target_table: str,
+        approved_action: str,
+        dry_run_summary: dict[str, Any],
+        upload_info: dict[str, Any],
+        proposal_payload: IngestionProposalPayload,
+    ) -> tuple[IngestionExecutionAgentOutput, list[dict[str, Any]]]:
+        settings = get_settings()
+        auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+        if not auth_token_source.strip() or not settings.ai_model.strip():
+            raise IngestionPlanningError(
+                code="INGESTION_AI_NOT_CONFIGURED",
+                message="Claude Agent SDK credentials are not configured for ingestion execution",
+                status_code=503,
+            )
+
+        tool_trace_snapshot: list[dict[str, Any]] = []
+        session = self._prepare_execution_session(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            proposal_id=proposal_id,
+            upload_id=upload_id,
+            target_table=target_table,
+            approved_action=approved_action,
+            dry_run_summary=dry_run_summary,
+            upload_info=upload_info,
+            proposal_payload=proposal_payload,
+        )
+
+        async def runner() -> tuple[IngestionExecutionAgentOutput, list[dict[str, Any]]]:
+            return await self._run_execution_agent_loop_async(
+                conn=conn,
+                session=session,
+                tool_trace_sink=tool_trace_snapshot,
+            )
+
+        try:
+            return anyio.run(runner)
+        except IngestionPlanningError:
+            raise
+        except TimeoutError as exc:
+            recovered = self._recover_execution_output_from_tool_trace(
+                tool_trace=tool_trace_snapshot,
+                session=session,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_execution_output_recovered_from_tool_trace job_id=%s reason=timeout_outer",
+                    job_id,
+                )
+                return recovered, tool_trace_snapshot
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=(
+                    "Claude Agent SDK timed out during ingestion execution "
+                    f"(>{settings.agent_timeout_seconds}s)"
+                ),
+                status_code=503,
+            ) from exc
+        except ClaudeSDKError as exc:
+            recovered = self._recover_execution_output_from_tool_trace(
+                tool_trace=tool_trace_snapshot,
+                session=session,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_execution_output_recovered_from_tool_trace job_id=%s reason=claude_sdk_error",
+                    job_id,
+                )
+                return recovered, tool_trace_snapshot
+            suffix = str(exc).strip()
+            detail = f": {suffix}" if suffix else ""
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=f"Claude Agent SDK is unavailable for ingestion execution{detail}",
+                status_code=503,
+            ) from exc
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=f"Claude Agent SDK failed during ingestion execution: {exc}",
+                status_code=503,
+            ) from exc
+        finally:
+            try:
+                session.duckdb_conn.close()
+            except Exception:
+                pass
+
+    async def _run_execution_agent_loop_async(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        session: IngestionExecutionSession,
+        tool_trace_sink: list[dict[str, Any]] | None = None,
+    ) -> tuple[IngestionExecutionAgentOutput, list[dict[str, Any]]]:
+        settings = get_settings()
+        tool_trace = tool_trace_sink if tool_trace_sink is not None else []
+        options = self._build_execution_sdk_options(
+            conn=conn,
+            job_id=session.job_id,
+            session=session,
+            tool_trace=tool_trace,
+        )
+        prompt = self._build_execution_agent_prompt(session=session)
+        raw_output: dict[str, Any] | None = None
+        text_blocks: list[str] = []
+        session_id = f"ingestion-execute-{session.job_id}"
+
+        try:
+            with anyio.fail_after(settings.agent_timeout_seconds):
+                async with ClaudeSDKClient(options=options) as client:
+                    await client.query(prompt, session_id=session_id)
+                    async for sdk_message in client.receive_response():
+                        candidate = self._consume_ingestion_sdk_message(
+                            message=sdk_message,
+                            text_blocks=text_blocks,
+                        )
+                        if candidate is not None:
+                            raw_output = candidate
+        except TimeoutError:
+            recovered = self._recover_execution_output_from_tool_trace(
+                tool_trace=tool_trace,
+                session=session,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_execution_output_recovered_from_tool_trace job_id=%s reason=timeout",
+                    session.job_id,
+                )
+                return recovered, tool_trace
+            raise
+
+        if raw_output is None and text_blocks:
+            raw_output = _decode_json_dict("\n".join(text_blocks))
+        if raw_output is None:
+            recovered = self._recover_execution_output_from_tool_trace(
+                tool_trace=tool_trace,
+                session=session,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_execution_output_recovered_from_tool_trace job_id=%s reason=missing_structured_output",
+                    session.job_id,
+                )
+                return recovered, tool_trace
+            raise IngestionPlanningError(
+                code="AGENT_STRUCTURED_OUTPUT_MISSING",
+                message="Write Execution Agent did not return structured output",
+                status_code=502,
+            )
+        try:
+            output = IngestionExecutionAgentOutput.model_validate(raw_output)
+        except Exception as exc:
+            recovered = self._recover_execution_output_from_tool_trace(
+                tool_trace=tool_trace,
+                session=session,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "ingestion_execution_output_recovered_from_tool_trace job_id=%s reason=invalid_structured_output",
+                    session.job_id,
+                )
+                return recovered, tool_trace
+            raise IngestionPlanningError(
+                code="AGENT_STRUCTURED_OUTPUT_INVALID",
+                message="Write Execution Agent returned invalid structured output",
+                status_code=502,
+            ) from exc
+
+        if output.target_table != session.target_table:
+            raise IngestionPlanningError(
+                code="EXECUTION_TARGET_MISMATCH",
+                message="Execution agent returned a target table outside the approved scope",
+                status_code=502,
+            )
+        if output.approved_action != session.approved_action:
+            raise IngestionPlanningError(
+                code="EXECUTION_ACTION_MISMATCH",
+                message="Execution agent returned an action outside the approved scope",
+                status_code=502,
+            )
+        if output.status == "executed":
+            if session.write_receipt is None:
+                recovered = self._recover_execution_output_from_tool_trace(
+                    tool_trace=tool_trace,
+                    session=session,
+                )
+                if recovered is not None:
+                    return recovered, tool_trace
+                raise IngestionPlanningError(
+                    code="EXECUTION_WRITE_NOT_PERFORMED",
+                    message="Execution agent reported success without calling execute_approved_write",
+                    status_code=502,
+                )
+            if not output.executed_sql and session.executed_sql:
+                output.executed_sql = session.executed_sql
+            if not output.receipt:
+                output.receipt = dict(session.write_receipt)
+        return output, tool_trace
+
+    def _build_execution_sdk_options(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        session: IngestionExecutionSession,
+        tool_trace: list[dict[str, Any]],
+    ) -> ClaudeAgentOptions:
+        settings = get_settings()
+
+        async def can_use_tool(
+            tool_name: str,
+            input_data: dict[str, Any],
+            permission_context: Any,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            _ = (input_data, permission_context)
+            canonical_name = _canonical_mcp_tool_name(
+                tool_name,
+                server_name=INGESTION_EXECUTION_SDK_MCP_SERVER_NAME,
+            )
+            if canonical_name in INGESTION_EXECUTION_TOOL_NAMES:
+                return PermissionResultAllow()
+            return PermissionResultDeny(
+                message=f"Tool '{tool_name}' is outside the Write Execution Agent tool surface."
+            )
+
+        server = create_sdk_mcp_server(
+            name=INGESTION_EXECUTION_SDK_MCP_SERVER_NAME,
+            version="1.0.0",
+            tools=self._build_execution_sdk_tools(
+                conn=conn,
+                job_id=job_id,
+                session=session,
+                tool_trace=tool_trace,
+            ),
+        )
+        env: dict[str, str] = {
+            "API_TIMEOUT_MS": str(settings.api_timeout_ms),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+        auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+        auth_token = auth_token_source.strip()
+        if auth_token:
+            env["ANTHROPIC_API_KEY"] = auth_token
+            env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+        if settings.anthropic_base_url.strip():
+            env["ANTHROPIC_BASE_URL"] = settings.anthropic_base_url.strip()
+        model = settings.ai_model.strip() or None
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = (
+                settings.anthropic_default_haiku_model.strip() or model
+            )
+
+        return ClaudeAgentOptions(
+            tools=[],
+            system_prompt=INGESTION_EXECUTION_AGENT_SYSTEM_PROMPT,
+            mcp_servers={INGESTION_EXECUTION_SDK_MCP_SERVER_NAME: server},
+            can_use_tool=can_use_tool,
+            permission_mode="default",
+            max_turns=max(
+                settings.agent_max_tool_steps,
+                MIN_INGESTION_EXECUTION_AGENT_MAX_TURNS,
+            ),
+            model=model,
+            cwd=str(Path.cwd()),
+            env=env,
+            output_format={
+                "type": "json_schema",
+                "schema": IngestionExecutionAgentOutput.model_json_schema(),
+            },
+        )
+
+    def _build_execution_sdk_tools(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        session: IngestionExecutionSession,
+        tool_trace: list[dict[str, Any]],
+    ) -> list[Any]:
+        sdk_tools: list[Any] = []
+        for definition in INGESTION_EXECUTION_TOOL_DEFINITIONS:
+            tool_name = str(definition["name"])
+            description = str(definition["description"])
+            input_schema = definition["parameters"]
+            is_read_only = bool(definition.get("read_only", True))
+            annotations = ToolAnnotations(
+                readOnlyHint=is_read_only,
+                destructiveHint=not is_read_only,
+                idempotentHint=is_read_only,
+                openWorldHint=False,
+            )
+
+            async def handler(args: dict[str, Any], _tool_name: str = tool_name) -> dict[str, Any]:
+                result = self._invoke_execution_sdk_tool(
+                    conn=conn,
+                    job_id=job_id,
+                    session=session,
+                    tool_trace=tool_trace,
+                    tool_name=_tool_name,
+                    arguments=args,
+                )
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, ensure_ascii=False, default=str),
+                        }
+                    ],
+                    "is_error": False,
+                }
+
+            sdk_tools.append(
+                tool(
+                    tool_name,
+                    description,
+                    input_schema,
+                    annotations=annotations,
+                )(handler)
+            )
+        return sdk_tools
+
+    def _invoke_execution_sdk_tool(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        job_id: str,
+        session: IngestionExecutionSession,
+        tool_trace: list[dict[str, Any]],
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        canonical_name = _canonical_mcp_tool_name(
+            tool_name,
+            server_name=INGESTION_EXECUTION_SDK_MCP_SERVER_NAME,
+        )
+        if canonical_name not in INGESTION_EXECUTION_TOOL_NAMES:
+            raise IngestionPlanningError(
+                code="INGESTION_TOOL_NOT_ALLOWED",
+                message=f"Tool '{tool_name}' is outside the Write Execution Agent tool surface",
+                status_code=403,
+            )
+        if not isinstance(arguments, dict):
+            arguments = {}
+        return self._run_tool(
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name=canonical_name,
+            arguments=arguments,
+            handler=lambda: self._handle_execution_tool(
+                conn=conn,
+                session=session,
+                tool_name=canonical_name,
+                arguments=arguments,
+            ),
+        )
+
+    def _handle_execution_tool(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        session: IngestionExecutionSession,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if tool_name == "get_execution_context":
+            return self._tool_get_execution_context(session=session)
+        if tool_name == "inspect_upload":
+            return self._tool_inspect_upload(
+                conn=conn,
+                upload_id=str(arguments.get("upload_id") or session.upload_id),
+            )
+        if tool_name == "get_workspace_catalog":
+            return self._tool_get_workspace_catalog(
+                conn=conn,
+                workspace_id=session.workspace_id,
+            )
+        if tool_name == "describe_table_schema":
+            return self._tool_describe_table_schema_by_name(
+                conn=conn,
+                workspace_id=session.workspace_id,
+                table_name=str(arguments.get("table_name") or session.target_table),
+            )
+        if tool_name == "describe_staging_dataset":
+            return self._tool_describe_staging_dataset(session=session)
+        if tool_name == "describe_target_table":
+            return self._tool_describe_target_table(conn=conn, session=session)
+        if tool_name == "preview_write_diff":
+            return self._tool_preview_write_diff(
+                session=session,
+                match_columns=[
+                    self._normalize_identifier(str(item))
+                    for item in arguments.get("match_columns", [])
+                    if self._normalize_identifier(str(item))
+                ],
+            )
+        if tool_name == "resolve_column_mapping":
+            return self._tool_resolve_column_mapping(conn=conn, session=session)
+        if tool_name == "ensure_target_table_exists":
+            return self._tool_ensure_target_table_exists(session=session)
+        if tool_name == "execute_approved_write":
+            return self._tool_execute_approved_write(
+                session=session,
+                sql=str(arguments.get("sql", "")),
+                reasoning=str(arguments.get("reasoning", "")),
+            )
+        raise IngestionPlanningError(
+            code="INGESTION_TOOL_NOT_ALLOWED",
+            message=f"Unsupported execution tool: {tool_name}",
+            status_code=403,
+        )
+
+    @staticmethod
+    def _build_execution_agent_prompt(*, session: IngestionExecutionSession) -> str:
+        return json.dumps(
+            {
+                "task": "Execute the already-approved ingestion write.",
+                "workspace_id": session.workspace_id,
+                "job_id": session.job_id,
+                "proposal_id": session.proposal_id,
+                "upload_id": session.upload_id,
+                "approved_action": session.approved_action,
+                "target_table": session.target_table,
+                "staging_table": session.staging_table,
+                "dry_run_summary": session.dry_run_summary,
+                "proposal_hints": {
+                    "business_type": session.proposal_payload.business_type,
+                    "match_columns": session.proposal_payload.match_columns,
+                    "column_mapping": session.proposal_payload.column_mapping,
+                    "explanation": session.proposal_payload.explanation,
+                    "risks": session.proposal_payload.risks,
+                },
+                "required_tool_sequence": INGESTION_EXECUTION_REQUIRED_TOOL_SEQUENCE,
+            },
+            ensure_ascii=False,
+        )
+
+    def _recover_execution_output_from_tool_trace(
+        self,
+        *,
+        tool_trace: list[dict[str, Any]],
+        session: IngestionExecutionSession,
+    ) -> IngestionExecutionAgentOutput | None:
+        execute_item = self._latest_tool_trace_item(
+            tool_trace,
+            names={"execute_approved_write"},
+        )
+        if execute_item is None:
+            return None
+
+        if isinstance(execute_item.get("result"), dict):
+            result = dict(execute_item["result"])
+            try:
+                return IngestionExecutionAgentOutput.model_validate(
+                    {
+                        "status": "executed",
+                        "approved_action": session.approved_action,
+                        "target_table": session.target_table,
+                        "reasoning": (
+                            "Recovered from tool trace because execute_approved_write completed "
+                            "before the agent returned structured output."
+                        ),
+                        "executed_sql": str(
+                            result.get("executed_sql") or session.executed_sql or ""
+                        ).strip(),
+                        "receipt": result,
+                        "risks": [],
+                    }
+                )
+            except Exception:
+                return None
+
+        error_payload = execute_item.get("error") if isinstance(execute_item.get("error"), dict) else {}
+        if not error_payload:
+            return None
+        try:
+            return IngestionExecutionAgentOutput.model_validate(
+                {
+                    "status": "blocked",
+                    "approved_action": session.approved_action,
+                    "target_table": session.target_table,
+                    "reasoning": str(error_payload.get("error") or "Execution tool failed").strip(),
+                    "executed_sql": str(session.executed_sql or "").strip(),
+                    "receipt": {},
+                    "risks": [],
+                }
+            )
+        except Exception:
+            return None
 
     def _run_planning_agent_loop(
         self,
@@ -1189,46 +1850,64 @@ class WriteIngestionAgentRuntime:
                         if candidate is not None:
                             raw_output = candidate
         except TimeoutError:
-            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
-            if recovered is not None:
-                logger.warning(
-                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=timeout",
-                    job_id,
-                )
-                return recovered, tool_trace
-            raise
+            raise IngestionPlanningError(
+                code="INGESTION_AI_UNAVAILABLE",
+                message=(
+                    "Write Ingestion Agent timed out. Please retry — "
+                    f"the agent must complete within {settings.agent_timeout_seconds}s."
+                ),
+                status_code=503,
+            )
 
         if raw_output is None and text_blocks:
             raw_output = _decode_json_dict("\n".join(text_blocks))
         if raw_output is None:
-            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
-            if recovered is not None:
-                logger.warning(
-                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=missing_structured_output",
-                    job_id,
-                )
-                return recovered, tool_trace
             raise IngestionPlanningError(
                 code="AGENT_STRUCTURED_OUTPUT_MISSING",
                 message="Write Ingestion Agent did not return structured output",
                 status_code=502,
             )
+        self._inject_human_approval_if_missing(raw_output)
         try:
             output = IngestionAgentPlanOutput.model_validate(raw_output)
         except Exception as exc:
-            recovered = self._recover_agent_output_from_tool_trace(tool_trace=tool_trace)
-            if recovered is not None:
-                logger.warning(
-                    "ingestion_agent_output_recovered_from_tool_trace job_id=%s reason=invalid_structured_output",
-                    job_id,
-                )
-                return recovered, tool_trace
             raise IngestionPlanningError(
                 code="AGENT_STRUCTURED_OUTPUT_INVALID",
                 message="Write Ingestion Agent returned invalid structured output",
                 status_code=502,
             ) from exc
         return output, tool_trace
+
+    @staticmethod
+    def _inject_human_approval_if_missing(raw_output: dict[str, Any]) -> None:
+        if "human_approval" in raw_output and isinstance(raw_output["human_approval"], dict):
+            return
+        status = str(raw_output.get("status", "")).strip()
+        if status == "awaiting_catalog_setup":
+            raw_output["human_approval"] = {
+                "required": True,
+                "mechanism": "catalog_setup_card",
+                "stage": "catalog_setup",
+                "question": "Please confirm the catalog setup before proceeding.",
+                "options": list(CATALOG_SETUP_APPROVAL_OPTIONS),
+                "recommended_option": "confirm_catalog_setup",
+            }
+        else:
+            proposal = raw_output.get("proposal") if isinstance(raw_output.get("proposal"), dict) else {}
+            recommended = str(proposal.get("recommended_action") or "update_existing").strip()
+            if recommended not in DEFAULT_ACTION_OPTIONS:
+                recommended = "update_existing"
+            raw_output["human_approval"] = {
+                "required": True,
+                "mechanism": "frontend_approval_card",
+                "stage": "proposal_approval",
+                "question": (
+                    proposal.get("explanation")
+                    or "Please review the proposed ingestion action."
+                )[:300],
+                "options": list(DEFAULT_ACTION_OPTIONS),
+                "recommended_option": recommended,
+            }
 
     def _build_ingestion_sdk_options(
         self,
@@ -1430,8 +2109,6 @@ class WriteIngestionAgentRuntime:
                     if str(item).strip()
                 ],
             )
-        if tool_name in INGESTION_APPROVAL_TOOL_ALIASES:
-            return self._tool_request_human_approval(conn=conn, job_id=job_id, arguments=arguments)
         raise IngestionPlanningError(
             code="INGESTION_TOOL_NOT_ALLOWED",
             message=f"Unsupported ingestion tool: {tool_name}",
@@ -1462,12 +2139,8 @@ class WriteIngestionAgentRuntime:
                     "describe_table_schema when a target table is considered",
                     "build_diff_preview when producing a proposal",
                     "generate_write_sql_draft when producing a proposal",
-                    f"{INGESTION_APPROVAL_TOOL_NAME} before the final structured output",
                 ],
-                "available_approval_options": {
-                    "catalog_setup": CATALOG_SETUP_APPROVAL_OPTIONS,
-                    "proposal_approval": DEFAULT_ACTION_OPTIONS,
-                },
+                "available_proposal_actions": DEFAULT_ACTION_OPTIONS,
             },
             ensure_ascii=False,
         )
@@ -1541,7 +2214,7 @@ class WriteIngestionAgentRuntime:
                 status_code=502,
             )
         for item in tool_trace:
-            if item.get("tool_name") not in INGESTION_APPROVAL_TOOL_ALIASES:
+            if item.get("tool_name") not in _LEGACY_APPROVAL_TOOL_ALIASES:
                 continue
             arguments = item.get("arguments")
             if isinstance(arguments, dict) and arguments.get("stage") == expected_stage:
@@ -1604,7 +2277,7 @@ class WriteIngestionAgentRuntime:
     ) -> IngestionAgentPlanOutput | None:
         approval_item = self._latest_tool_trace_item(
             tool_trace,
-            names=INGESTION_APPROVAL_TOOL_ALIASES,
+            names=_LEGACY_APPROVAL_TOOL_ALIASES,
         )
         if approval_item is None:
             return None
@@ -1803,10 +2476,8 @@ class WriteIngestionAgentRuntime:
                 return 0
 
         column_mapping: dict[str, str] = {}
-        for raw_column in upload_columns:
-            normalized = self._normalize_identifier(raw_column)
-            if not normalized:
-                continue
+        for index, raw_column in enumerate(upload_columns):
+            normalized = self._normalize_identifier(raw_column) or f"c_{index + 1}"
             column_mapping[raw_column] = normalized
 
         proposal_payload = {
@@ -2046,8 +2717,6 @@ class WriteIngestionAgentRuntime:
         required = (
             "approved_action",
             "target_table",
-            "validated_sql",
-            "validated_sql_hash",
             "dry_run_summary",
         )
         for key in required:
@@ -2294,6 +2963,7 @@ class WriteIngestionAgentRuntime:
 
     @staticmethod
     def _timestamp_cast_expr(*, source_expr: str, target_type: str) -> str:
+        string_expr = f"NULLIF(TRIM(CAST({source_expr} AS VARCHAR)), '')"
         numeric_expr = f"TRY_CAST({source_expr} AS DOUBLE)"
         excel_serial_expr = (
             "CASE "
@@ -2307,14 +2977,14 @@ class WriteIngestionAgentRuntime:
         )
         return (
             "COALESCE("
-            f"TRY_CAST({source_expr} AS {target_type}), "
-            f"TRY_CAST(CAST({source_expr} AS VARCHAR) AS {target_type}), "
+            f"TRY_CAST({string_expr} AS {target_type}), "
             f"{excel_serial_expr}"
             ")"
         )
 
     @staticmethod
     def _date_cast_expr(*, source_expr: str, target_type: str) -> str:
+        string_expr = f"NULLIF(TRIM(CAST({source_expr} AS VARCHAR)), '')"
         numeric_expr = f"TRY_CAST({source_expr} AS DOUBLE)"
         excel_serial_expr = (
             "CASE "
@@ -2324,8 +2994,7 @@ class WriteIngestionAgentRuntime:
         )
         return (
             "COALESCE("
-            f"TRY_CAST({source_expr} AS {target_type}), "
-            f"TRY_CAST(CAST({source_expr} AS VARCHAR) AS {target_type}), "
+            f"TRY_CAST({string_expr} AS {target_type}), "
             f"{excel_serial_expr}"
             ")"
         )
@@ -2360,18 +3029,19 @@ class WriteIngestionAgentRuntime:
             "risks": list(proposal_payload.risks),
         }
 
-    def _run_execution_transaction(
+    def _prepare_execution_session(
         self,
         *,
         workspace_id: str,
         job_id: str,
+        proposal_id: str,
+        upload_id: str,
         target_table: str,
         approved_action: str,
-        validated_sql: str,
         dry_run_summary: dict[str, Any],
         upload_info: dict[str, Any],
         proposal_payload: IngestionProposalPayload,
-    ) -> dict[str, Any]:
+    ) -> IngestionExecutionSession:
         upload_path = Path(str(upload_info["storage_path"])).resolve()
         if not upload_path.exists():
             raise IngestionPlanningError(
@@ -2380,16 +3050,17 @@ class WriteIngestionAgentRuntime:
                 status_code=500,
             )
 
-        dataframe = self._load_execution_dataframe(
+        raw_dataframe, raw_header_mapping = self._load_execution_dataframe_with_header_mapping(
             upload_path=upload_path,
-            proposal_payload=proposal_payload,
+            column_mapping=dict(proposal_payload.column_mapping) if proposal_payload.column_mapping else None,
         )
+        staging_dataframe = self._prepare_dataframe_for_staging(raw_dataframe)
         staging_table = self._staging_table_name(job_id)
         db_path = self._workspace_duckdb_path(workspace_id=workspace_id)
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            conn = duckdb.connect(str(db_path))
+            duckdb_conn = duckdb.connect(str(db_path))
         except Exception as exc:  # pragma: no cover - defensive
             raise IngestionPlanningError(
                 code="DUCKDB_CONNECT_FAILED",
@@ -2398,47 +3069,529 @@ class WriteIngestionAgentRuntime:
             ) from exc
 
         try:
-            conn.execute("BEGIN TRANSACTION")
-            conn.register("ingestion_upload_df", dataframe)
-            conn.execute(f"CREATE OR REPLACE TEMP TABLE {staging_table} AS SELECT * FROM ingestion_upload_df")
-            conn.unregister("ingestion_upload_df")
-
-            if approved_action == "update_existing":
-                conn.execute(
-                    f"CREATE TABLE IF NOT EXISTS {target_table} AS SELECT * FROM {staging_table} WHERE 1 = 0"
-                )
-
-            conn.execute(validated_sql)
-            rows_after = int(conn.execute(f"SELECT COUNT(*) FROM {target_table}").fetchone()[0])
-            conn.execute("COMMIT")
+            duckdb_conn.register("ingestion_upload_df", staging_dataframe)
+            duckdb_conn.execute(
+                f"CREATE OR REPLACE TEMP TABLE {staging_table} AS SELECT * FROM ingestion_upload_df"
+            )
+            duckdb_conn.unregister("ingestion_upload_df")
         except Exception as exc:
             try:
-                conn.execute("ROLLBACK")
-            except Exception:  # pragma: no cover - defensive
+                duckdb_conn.unregister("ingestion_upload_df")
+            except Exception:
+                pass
+            duckdb_conn.close()
+            raise IngestionPlanningError(
+                code="INGESTION_STAGING_PREP_FAILED",
+                message=f"Unable to prepare DuckDB staging dataset: {exc}",
+                status_code=500,
+            ) from exc
+
+        session = IngestionExecutionSession(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            proposal_id=proposal_id,
+            upload_id=upload_id,
+            approved_action=approved_action,
+            target_table=target_table,
+            staging_table=staging_table,
+            db_path=db_path,
+            duckdb_conn=duckdb_conn,
+            upload_info=upload_info,
+            proposal_payload=proposal_payload,
+            dry_run_summary=dry_run_summary,
+            staging_profile=self._dataframe_profile(staging_dataframe),
+            raw_header_mapping=raw_header_mapping,
+            column_diagnostics=self._build_dataframe_column_diagnostics(
+                dataframe=raw_dataframe,
+                raw_header_mapping=raw_header_mapping,
+            ),
+        )
+        logger.info(
+            "ingestion_execution_session_ready workspace_id=%s job_id=%s proposal_id=%s approved_action=%s target_table=%s staging_table=%s staging_profile=%s",
+            workspace_id,
+            job_id,
+            proposal_id,
+            approved_action,
+            target_table,
+            staging_table,
+            _compact_json(session.staging_profile),
+        )
+        return session
+
+    def _tool_get_execution_context(
+        self,
+        *,
+        session: IngestionExecutionSession,
+    ) -> dict[str, Any]:
+        return {
+            "workspace_id": session.workspace_id,
+            "job_id": session.job_id,
+            "proposal_id": session.proposal_id,
+            "upload_id": session.upload_id,
+            "approved_action": session.approved_action,
+            "target_table": session.target_table,
+            "staging_table": session.staging_table,
+            "duckdb_path": str(session.db_path),
+            "dry_run_summary": dict(session.dry_run_summary),
+            "proposal_hints": {
+                "business_type": session.proposal_payload.business_type,
+                "match_columns": list(session.proposal_payload.match_columns),
+                "column_mapping": dict(session.proposal_payload.column_mapping),
+                "explanation": session.proposal_payload.explanation,
+                "risks": list(session.proposal_payload.risks),
+            },
+        }
+
+    def _tool_describe_staging_dataset(
+        self,
+        *,
+        session: IngestionExecutionSession,
+    ) -> dict[str, Any]:
+        row_count = self._duckdb_table_row_count(
+            conn=session.duckdb_conn,
+            table_name=session.staging_table,
+        )
+        return {
+            "table_name": session.staging_table,
+            "row_count": row_count,
+            "schema": self._duckdb_table_profile(
+                conn=session.duckdb_conn,
+                table_name=session.staging_table,
+            ),
+            "sample_rows": self._duckdb_table_sample_rows(
+                conn=session.duckdb_conn,
+                table_name=session.staging_table,
+                limit=5,
+            ),
+            "raw_header_mapping": dict(session.raw_header_mapping),
+            "column_diagnostics": list(session.column_diagnostics),
+            "dataframe_profile": dict(session.staging_profile),
+        }
+
+    def _tool_describe_target_table(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        session: IngestionExecutionSession,
+    ) -> dict[str, Any]:
+        exists = self._duckdb_table_exists(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        catalog_contract: dict[str, Any] | None = None
+        try:
+            catalog_contract = self._tool_describe_table_schema_by_name(
+                conn=conn,
+                workspace_id=session.workspace_id,
+                table_name=session.target_table,
+            )
+        except IngestionPlanningError:
+            catalog_contract = None
+
+        payload: dict[str, Any] = {
+            "table_name": session.target_table,
+            "exists": exists,
+            "catalog_contract": catalog_contract,
+        }
+        if not exists:
+            payload["row_count"] = 0
+            payload["schema"] = {"table_name": session.target_table, "columns": []}
+            payload["sample_rows"] = []
+            return payload
+
+        payload["row_count"] = self._duckdb_table_row_count(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        payload["schema"] = self._duckdb_table_profile(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        payload["sample_rows"] = self._duckdb_table_sample_rows(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+            limit=5,
+        )
+        return payload
+
+    def _tool_preview_write_diff(
+        self,
+        *,
+        session: IngestionExecutionSession,
+        match_columns: list[str],
+    ) -> dict[str, Any]:
+        safe_match_columns = [
+            column for column in self._dedupe_preserve_order(match_columns) if SAFE_IDENTIFIER_RE.match(column)
+        ]
+        if not safe_match_columns:
+            raise IngestionPlanningError(
+                code="MATCH_COLUMNS_REQUIRED",
+                message="preview_write_diff requires at least one valid match column",
+                status_code=422,
+            )
+
+        staging_schema = self._duckdb_table_profile(
+            conn=session.duckdb_conn,
+            table_name=session.staging_table,
+        )
+        staging_columns = {
+            str(item["name"]).strip().lower()
+            for item in staging_schema.get("columns", [])
+            if str(item.get("name", "")).strip()
+        }
+        target_exists = self._duckdb_table_exists(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        target_schema = (
+            self._duckdb_table_profile(conn=session.duckdb_conn, table_name=session.target_table)
+            if target_exists
+            else {"table_name": session.target_table, "columns": []}
+        )
+        target_columns = {
+            str(item["name"]).strip().lower()
+            for item in target_schema.get("columns", [])
+            if str(item.get("name", "")).strip()
+        }
+        missing_in_staging = [column for column in safe_match_columns if column not in staging_columns]
+        missing_in_target = [column for column in safe_match_columns if column not in target_columns]
+
+        payload: dict[str, Any] = {
+            "approved_action": session.approved_action,
+            "target_table": session.target_table,
+            "staging_table": session.staging_table,
+            "match_columns": safe_match_columns,
+            "target_exists": target_exists,
+            "missing_in_staging": missing_in_staging,
+            "missing_in_target": missing_in_target,
+            "staging_row_count": self._duckdb_table_row_count(
+                conn=session.duckdb_conn,
+                table_name=session.staging_table,
+            ),
+            "target_row_count": (
+                self._duckdb_table_row_count(conn=session.duckdb_conn, table_name=session.target_table)
+                if target_exists
+                else 0
+            ),
+        }
+        if not target_exists or missing_in_staging or missing_in_target:
+            payload["matched_row_count"] = 0
+            payload["unmatched_row_count"] = payload["staging_row_count"]
+            payload["staging_duplicate_key_count"] = 0
+            payload["target_duplicate_key_count"] = 0
+            return payload
+
+        group_expr = ", ".join(safe_match_columns)
+        join_expr = " AND ".join([f"t.{column} = s.{column}" for column in safe_match_columns])
+        first_match_column = safe_match_columns[0]
+        payload["matched_row_count"] = int(
+            session.duckdb_conn.execute(
+                f"SELECT COUNT(*) FROM {session.staging_table} AS s "
+                f"INNER JOIN {session.target_table} AS t ON {join_expr}"
+            ).fetchone()[0]
+        )
+        payload["unmatched_row_count"] = int(
+            session.duckdb_conn.execute(
+                f"SELECT COUNT(*) FROM {session.staging_table} AS s "
+                f"LEFT JOIN {session.target_table} AS t ON {join_expr} "
+                f"WHERE t.{first_match_column} IS NULL"
+            ).fetchone()[0]
+        )
+        payload["staging_duplicate_key_count"] = int(
+            session.duckdb_conn.execute(
+                f"SELECT COUNT(*) FROM ("
+                f"SELECT {group_expr}, COUNT(*) AS c FROM {session.staging_table} "
+                f"GROUP BY {group_expr} HAVING COUNT(*) > 1"
+                f") AS dup"
+            ).fetchone()[0]
+        )
+        payload["target_duplicate_key_count"] = int(
+            session.duckdb_conn.execute(
+                f"SELECT COUNT(*) FROM ("
+                f"SELECT {group_expr}, COUNT(*) AS c FROM {session.target_table} "
+                f"GROUP BY {group_expr} HAVING COUNT(*) > 1"
+                f") AS dup"
+            ).fetchone()[0]
+        )
+        return payload
+
+    def _tool_resolve_column_mapping(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        session: IngestionExecutionSession,
+    ) -> dict[str, Any]:
+        staging_schema = self._duckdb_table_profile(
+            conn=session.duckdb_conn,
+            table_name=session.staging_table,
+        )
+        staging_cols = {str(item["name"]).strip().lower() for item in staging_schema.get("columns", [])}
+
+        raw_header_map: dict[str, str] = {
+            str(original).strip(): str(staging_col).strip().lower()
+            for original, staging_col in session.raw_header_mapping.items()
+            if str(original).strip() and str(staging_col).strip()
+        }
+
+        proposal_col_map: dict[str, str] = {
+            str(src).strip(): str(tgt).strip().lower()
+            for src, tgt in (session.proposal_payload.column_mapping or {}).items()
+            if str(src).strip() and str(tgt).strip()
+        }
+
+        try:
+            catalog = self._tool_describe_table_schema_by_name(
+                conn=conn,
+                workspace_id=session.workspace_id,
+                table_name=session.target_table,
+            )
+        except IngestionPlanningError:
+            catalog = {}
+        catalog_match_cols: list[str] = [
+            str(c).strip().lower()
+            for c in (catalog.get("match_columns") or session.proposal_payload.match_columns or [])
+            if str(c).strip()
+        ]
+
+        resolved: dict[str, str] = {}
+        for original_header, staging_col in raw_header_map.items():
+            if staging_col not in staging_cols:
+                continue
+            target_col = proposal_col_map.get(original_header) or staging_col
+            resolved[staging_col] = target_col
+
+        for staging_col in staging_cols:
+            if staging_col not in resolved:
+                resolved[staging_col] = staging_col
+
+        match_columns_resolved: list[str] = []
+        for target_match_col in catalog_match_cols:
+            for staging_col, target_col in resolved.items():
+                if target_col == target_match_col or staging_col == target_match_col:
+                    match_columns_resolved.append(staging_col)
+                    break
+            else:
+                if target_match_col in staging_cols:
+                    match_columns_resolved.append(target_match_col)
+
+        return {
+            "staging_to_target": resolved,
+            "match_columns_staging": match_columns_resolved,
+            "target_match_columns": catalog_match_cols,
+            "staging_table": session.staging_table,
+            "target_table": session.target_table,
+            "note": (
+                "Use staging_to_target to alias staging columns in SQL. "
+                "Use match_columns_staging for ON clause in MERGE."
+            ),
+        }
+
+    def _tool_ensure_target_table_exists(
+        self,
+        *,
+        session: IngestionExecutionSession,
+    ) -> dict[str, Any]:
+        if session.approved_action != "update_existing":
+            raise IngestionPlanningError(
+                code="TARGET_TABLE_SETUP_NOT_ALLOWED",
+                message="ensure_target_table_exists is only valid for update_existing executions",
+                status_code=422,
+            )
+        exists = self._duckdb_table_exists(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        if exists:
+            return {
+                "table_name": session.target_table,
+                "created": False,
+                "schema": self._duckdb_table_profile(
+                    conn=session.duckdb_conn,
+                    table_name=session.target_table,
+                ),
+            }
+        session.duckdb_conn.execute(
+            f"CREATE TABLE {session.target_table} AS "
+            f"SELECT * FROM {session.staging_table} WHERE 1 = 0"
+        )
+        return {
+            "table_name": session.target_table,
+            "created": True,
+            "schema": self._duckdb_table_profile(
+                conn=session.duckdb_conn,
+                table_name=session.target_table,
+            ),
+        }
+
+    def _tool_execute_approved_write(
+        self,
+        *,
+        session: IngestionExecutionSession,
+        sql: str,
+        reasoning: str,
+    ) -> dict[str, Any]:
+        if session.write_receipt is not None:
+            return dict(session.write_receipt)
+
+        validator = SQLWriteValidator(
+            target_table=session.target_table,
+            staging_table=session.staging_table,
+            action_mode=session.approved_action,
+        )
+        validated_sql = validator.validate(sql)
+        target_exists_before = self._duckdb_table_exists(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        if session.approved_action == "update_existing" and not target_exists_before:
+            raise IngestionPlanningError(
+                code="TARGET_TABLE_NOT_READY",
+                message=(
+                    "Target table does not exist yet. Call ensure_target_table_exists before "
+                    "execute_approved_write for update_existing."
+                ),
+                status_code=422,
+            )
+
+        rows_before = (
+            self._duckdb_table_row_count(conn=session.duckdb_conn, table_name=session.target_table)
+            if target_exists_before
+            else 0
+        )
+        try:
+            session.duckdb_conn.execute("BEGIN TRANSACTION")
+            session.duckdb_conn.execute(validated_sql)
+            session.duckdb_conn.execute("COMMIT")
+        except Exception as exc:
+            try:
+                session.duckdb_conn.execute("ROLLBACK")
+            except Exception:
                 pass
             raise IngestionPlanningError(
                 code="INGESTION_EXECUTION_FAILED",
                 message=f"DuckDB execution failed: {exc}",
                 status_code=500,
             ) from exc
-        finally:
-            conn.close()
 
-        predicted_insert = int(dry_run_summary.get("predicted_insert_count", 0))
-        predicted_update = int(dry_run_summary.get("predicted_update_count", 0))
-        return {
+        rows_after = self._duckdb_table_row_count(
+            conn=session.duckdb_conn,
+            table_name=session.target_table,
+        )
+        receipt = {
             "success": True,
-            "workspace_id": workspace_id,
-            "job_id": job_id,
-            "target_table": target_table,
-            "execution_mode": approved_action,
-            "inserted_rows": max(predicted_insert, 0),
-            "updated_rows": max(predicted_update, 0),
-            "affected_rows": max(predicted_insert, 0) + max(predicted_update, 0),
+            "workspace_id": session.workspace_id,
+            "job_id": session.job_id,
+            "proposal_id": session.proposal_id,
+            "target_table": session.target_table,
+            "approved_action": session.approved_action,
+            "execution_mode": session.approved_action,
+            "staging_table": session.staging_table,
+            "duckdb_path": str(session.db_path),
+            "executed_sql": validated_sql,
+            "reasoning": reasoning.strip(),
+            "predicted_insert_count": int(session.dry_run_summary.get("predicted_insert_count", 0)),
+            "predicted_update_count": int(session.dry_run_summary.get("predicted_update_count", 0)),
+            "rows_before": rows_before,
             "rows_after": rows_after,
-            "duckdb_path": str(db_path),
+            "staging_row_count": self._duckdb_table_row_count(
+                conn=session.duckdb_conn,
+                table_name=session.staging_table,
+            ),
+            "target_exists_before": target_exists_before,
+            "target_schema_after": self._duckdb_table_profile(
+                conn=session.duckdb_conn,
+                table_name=session.target_table,
+            ),
             "finished_at": _utc_now(),
         }
+        session.executed_sql = validated_sql
+        session.write_receipt = dict(receipt)
+        return receipt
+
+    @staticmethod
+    def _duckdb_table_exists(
+        *,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+    ) -> bool:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = ?
+            """,
+            [table_name],
+        ).fetchone()
+        return bool(row and int(row[0]) > 0)
+
+    @staticmethod
+    def _duckdb_table_row_count(
+        *,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+    ) -> int:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
+
+    def _duckdb_table_sample_rows(
+        self,
+        *,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        cursor = conn.execute(f"SELECT * FROM {table_name} LIMIT {max(limit, 0)}")
+        columns = [str(item[0]) for item in (cursor.description or [])]
+        rows = cursor.fetchall()
+        return [
+            {
+                column: self._serialize_json_value(row[index])
+                for index, column in enumerate(columns)
+            }
+            for row in rows
+        ]
+
+    def _build_dataframe_column_diagnostics(
+        self,
+        *,
+        dataframe: pd.DataFrame,
+        raw_header_mapping: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        diagnostics: list[dict[str, Any]] = []
+        for column in dataframe.columns:
+            series = dataframe[column]
+            type_names: list[str] = []
+            sample_values: list[str] = []
+            non_null_count = 0
+            for value in series.tolist():
+                if value is None:
+                    continue
+                try:
+                    if pd.isna(value):
+                        continue
+                except TypeError:
+                    pass
+                non_null_count += 1
+                type_name = type(value).__name__
+                if type_name not in type_names:
+                    type_names.append(type_name)
+                sample_text = str(self._serialize_json_value(value))
+                if sample_text not in sample_values:
+                    sample_values.append(sample_text)
+                if len(type_names) >= 4 and len(sample_values) >= 4:
+                    break
+            raw_headers = [
+                header for header, normalized in raw_header_mapping.items() if normalized == str(column)
+            ]
+            diagnostics.append(
+                {
+                    "column": str(column),
+                    "raw_headers": raw_headers,
+                    "non_null_count": non_null_count,
+                    "python_types": type_names,
+                    "sample_values": sample_values[:4],
+                }
+            )
+        return diagnostics
 
     def _workspace_duckdb_path(self, *, workspace_id: str) -> Path:
         from ..config import get_settings
@@ -2453,21 +3606,7 @@ class WriteIngestionAgentRuntime:
         upload_path: Path,
         proposal_payload: IngestionProposalPayload,
     ) -> pd.DataFrame:
-        try:
-            sheets = pd.read_excel(upload_path, sheet_name=None, dtype=object, engine="openpyxl")
-        except Exception as exc:
-            raise IngestionPlanningError(
-                code="UPLOAD_READ_FAILED",
-                message=f"Unable to read uploaded workbook: {exc}",
-                status_code=500,
-            ) from exc
-        if not sheets:
-            raise IngestionPlanningError(
-                code="UPLOAD_READ_FAILED",
-                message="Uploaded workbook has no readable sheets",
-                status_code=500,
-            )
-
+        sheets = self._read_execution_workbook(upload_path=upload_path)
         alias_map = {
             str(key): str(value).strip().lower()
             for key, value in proposal_payload.column_mapping.items()
@@ -2484,13 +3623,133 @@ class WriteIngestionAgentRuntime:
             merged = pd.DataFrame(columns=list({*merged.columns}))
         return merged
 
+    def _load_execution_dataframe_with_header_mapping(
+        self,
+        *,
+        upload_path: Path,
+        column_mapping: dict[str, str] | None = None,
+    ) -> tuple[pd.DataFrame, dict[str, str]]:
+        alias_map = dict(column_mapping) if column_mapping else {}
+        sheets = self._read_execution_workbook(upload_path=upload_path)
+        merged_frames: list[pd.DataFrame] = []
+        raw_header_mapping: dict[str, str] = {}
+        for frame in sheets.values():
+            renamed, header_mapping = self._normalize_frame_columns_with_mapping(
+                frame=frame,
+                alias_map=alias_map,
+            )
+            merged_frames.append(renamed)
+            raw_header_mapping.update(header_mapping)
+
+        merged = pd.concat(merged_frames, ignore_index=True, sort=False)
+        merged = merged.where(pd.notna(merged), None)
+        if merged.empty:
+            merged = pd.DataFrame(columns=list({*merged.columns}))
+        return merged, raw_header_mapping
+
+    def _read_execution_workbook(self, *, upload_path: Path) -> dict[str, pd.DataFrame]:
+        try:
+            sheets = pd.read_excel(upload_path, sheet_name=None, dtype=object, engine="openpyxl")
+        except Exception as exc:
+            raise IngestionPlanningError(
+                code="UPLOAD_READ_FAILED",
+                message=f"Unable to read uploaded workbook: {exc}",
+                status_code=500,
+            ) from exc
+        if not sheets:
+            raise IngestionPlanningError(
+                code="UPLOAD_READ_FAILED",
+                message="Uploaded workbook has no readable sheets",
+                status_code=500,
+            )
+        return sheets
+
+    def _prepare_dataframe_for_staging(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        prepared = dataframe.copy()
+        for column in prepared.columns:
+            prepared[column] = prepared[column].map(self._serialize_json_value)
+        prepared = prepared.where(pd.notna(prepared), None)
+        return prepared
+
+    @staticmethod
+    def _dataframe_profile(dataframe: pd.DataFrame) -> dict[str, Any]:
+        return {
+            "rows": int(len(dataframe)),
+            "columns": [str(column) for column in dataframe.columns],
+            "dtypes": {str(column): str(dtype) for column, dtype in dataframe.dtypes.items()},
+        }
+
+    @staticmethod
+    def _serialize_json_value(value: Any) -> Any:
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except TypeError:
+            pass
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            if value.is_integer():
+                return str(int(value))
+            return format(value, "g")
+        if isinstance(value, datetime):
+            return value.isoformat(sep=" ")
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        isoformat = getattr(value, "isoformat", None)
+        if callable(isoformat) and not isinstance(value, str):
+            try:
+                return isoformat()
+            except TypeError:
+                pass
+        return str(value)
+
+    @staticmethod
+    def _duckdb_table_profile(
+        *,
+        conn: duckdb.DuckDBPyConnection,
+        table_name: str,
+    ) -> dict[str, Any]:
+        rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+        columns = []
+        for row in rows:
+            if len(row) < 3:
+                continue
+            columns.append(
+                {
+                    "name": str(row[1]),
+                    "type": str(row[2]),
+                }
+            )
+        return {
+            "table_name": table_name,
+            "columns": columns,
+        }
+
     def _normalize_frame_columns(
         self,
         *,
         frame: pd.DataFrame,
         alias_map: dict[str, str],
     ) -> pd.DataFrame:
+        renamed, _header_mapping = self._normalize_frame_columns_with_mapping(
+            frame=frame,
+            alias_map=alias_map,
+        )
+        return renamed
+
+    def _normalize_frame_columns_with_mapping(
+        self,
+        *,
+        frame: pd.DataFrame,
+        alias_map: dict[str, str],
+    ) -> tuple[pd.DataFrame, dict[str, str]]:
         rename_map: dict[str, str] = {}
+        header_mapping: dict[str, str] = {}
         seen: set[str] = set()
         for index, column in enumerate(frame.columns):
             raw = str(column).strip()
@@ -2506,7 +3765,8 @@ class WriteIngestionAgentRuntime:
                 seq += 1
             seen.add(candidate)
             rename_map[column] = candidate
-        return frame.rename(columns=rename_map)
+            header_mapping[raw] = candidate
+        return frame.rename(columns=rename_map), header_mapping
 
     @staticmethod
     def _staging_table_name(job_id: str) -> str:
@@ -3136,12 +4396,16 @@ def _decode_json_dict(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _canonical_ingestion_tool_name(tool_name: str) -> str:
+def _canonical_mcp_tool_name(tool_name: str, *, server_name: str) -> str:
     normalized = str(tool_name or "").strip()
-    prefix = f"mcp__{INGESTION_SDK_MCP_SERVER_NAME}__"
+    prefix = f"mcp__{server_name}__"
     if normalized.startswith(prefix):
         return normalized[len(prefix):]
     return normalized
+
+
+def _canonical_ingestion_tool_name(tool_name: str) -> str:
+    return _canonical_mcp_tool_name(tool_name, server_name=INGESTION_SDK_MCP_SERVER_NAME)
 
 
 def _compact_json(payload: Any) -> str:
@@ -3149,6 +4413,13 @@ def _compact_json(payload: Any) -> str:
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):
         return str(payload)
+
+
+def _preview_sql(sql: str, *, max_length: int = 600) -> str:
+    normalized = re.sub(r"\s+", " ", str(sql or "")).strip()
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 3]}..."
 
 
 def _utc_now() -> str:

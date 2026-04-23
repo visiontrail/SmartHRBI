@@ -57,12 +57,10 @@ def test_ingestion_sdk_turn_budget_covers_full_proposal_sequence(
 
 
 def test_ingestion_system_prompt_keeps_approval_after_preview_and_sql() -> None:
-    expected_sequence = (
-        "build_diff_preview, generate_write_sql_draft, AskUserQuestion, "
-        "then the final"
-    )
-
-    assert expected_sequence in INGESTION_AGENT_SYSTEM_PROMPT
+    assert "build_diff_preview" in INGESTION_AGENT_SYSTEM_PROMPT
+    assert "generate_write_sql_draft" in INGESTION_AGENT_SYSTEM_PROMPT
+    assert "AskUserQuestion" not in INGESTION_AGENT_SYSTEM_PROMPT
+    assert "Human approval is handled by" in INGESTION_AGENT_SYSTEM_PROMPT
 
 
 def test_ingestion_sdk_error_result_is_reported_as_ai_unavailable() -> None:

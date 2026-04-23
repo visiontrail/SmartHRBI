@@ -158,11 +158,13 @@ async def execute_ingestion_plan(
     )
 
     try:
-        payload = runtime.execute_plan(
-            workspace_id=request.workspace_id,
-            job_id=request.job_id,
-            proposal_id=request.proposal_id,
-            executed_by=identity.user_id,
+        payload = await anyio.to_thread.run_sync(
+            lambda: runtime.execute_plan(
+                workspace_id=request.workspace_id,
+                job_id=request.job_id,
+                proposal_id=request.proposal_id,
+                executed_by=identity.user_id,
+            )
         )
     except IngestionPlanningError as exc:
         get_audit_logger().log(

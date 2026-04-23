@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+
+import pandas as pd
 import pytest
 
 from apps.api.agentic_ingestion.models import DiffPreview, IngestionProposalPayload
@@ -127,4 +130,20 @@ def test_build_validated_sql_casts_timestamp_columns_for_merge() -> None:
 
     assert "MERGE INTO employee_roster" in sql
     assert "snapshot_at = COALESCE(" in sql
-    assert "TRY_CAST(s.snapshot_at AS TIMESTAMP)" in sql
+    assert "TRY_CAST(NULLIF(TRIM(CAST(s.snapshot_at AS VARCHAR)), '') AS TIMESTAMP)" in sql
+    assert "TRY_CAST(s.snapshot_at AS TIMESTAMP)" not in sql
+
+
+def test_prepare_dataframe_for_staging_serializes_mixed_temporal_values() -> None:
+    runtime = WriteIngestionAgentRuntime()
+    dataframe = pd.DataFrame(
+        {
+            "employee_id": ["E-001", "E-002", "E-003"],
+            "snapshot_at": [datetime(2024, 1, 2, 3, 4, 5), 45292, None],
+        },
+        dtype=object,
+    )
+
+    prepared = runtime._prepare_dataframe_for_staging(dataframe)  # noqa: SLF001
+
+    assert prepared["snapshot_at"].tolist() == ["2024-01-02 03:04:05", "45292", None]

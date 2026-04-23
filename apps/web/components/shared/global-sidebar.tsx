@@ -80,10 +80,10 @@ export function GlobalSidebar() {
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="px-3 py-3">
+        <div className="pl-3 pr-5 py-3">
           {/* Chat Sessions */}
           <div className="mb-4">
-            <div className="flex items-center justify-between mb-2 px-1">
+            <div className="sticky top-0 z-10 bg-ivory flex items-center justify-between mb-2 px-1 py-0.5">
               <span className="text-label text-stone-gray uppercase tracking-wider font-medium">
                 {t("sidebar.section.conversations")}
               </span>
@@ -130,7 +130,7 @@ export function GlobalSidebar() {
 
           {/* Workspaces */}
           <div>
-            <div className="flex items-center justify-between mb-2 px-1">
+            <div className="sticky top-0 z-10 bg-ivory flex items-center justify-between mb-2 px-1 py-0.5">
               <span className="text-label text-stone-gray uppercase tracking-wider font-medium">
                 {t("sidebar.section.workspaces")}
               </span>

@@ -4,7 +4,11 @@ import re
 import sqlite3
 from typing import Any
 
-from apps.api.agentic_ingestion.models import IngestionAgentPlanOutput, IngestionProposalPayload
+from apps.api.agentic_ingestion.models import (
+    IngestionAgentPlanOutput,
+    IngestionExecutionAgentOutput,
+    IngestionProposalPayload,
+)
 from apps.api.agentic_ingestion.runtime import WriteIngestionAgentRuntime
 
 
@@ -14,6 +18,19 @@ def install_mock_planning_agent(monkeypatch) -> None:  # type: ignore[no-untyped
         "_run_planning_agent_loop",
         _mock_run_planning_agent_loop,
     )
+
+
+def install_mock_execution_agent(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        WriteIngestionAgentRuntime,
+        "_run_execution_agent_loop",
+        _mock_run_execution_agent_loop,
+    )
+
+
+def install_mock_ingestion_agents(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    install_mock_planning_agent(monkeypatch)
+    install_mock_execution_agent(monkeypatch)
 
 
 def install_failing_planning_agent(  # type: ignore[no-untyped-def]
@@ -102,28 +119,6 @@ def _mock_run_planning_agent_loop(
             "is_active_target": True,
             "description": "Mock agent seed from upload inspection.",
         }
-        human_approval = self._run_tool(  # noqa: SLF001
-            conn=conn,
-            job_id=job_id,
-            trace=tool_trace,
-            name="AskUserQuestion",
-            arguments={
-                "stage": "catalog_setup",
-                "question": "Approve catalog setup before planning the write?",
-                "options": ["confirm_catalog_setup", "cancel"],
-                "recommended_option": "confirm_catalog_setup",
-            },
-            handler=lambda: self._tool_request_human_approval(  # noqa: SLF001
-                conn=conn,
-                job_id=job_id,
-                arguments={
-                    "stage": "catalog_setup",
-                    "question": "Approve catalog setup before planning the write?",
-                    "options": ["confirm_catalog_setup", "cancel"],
-                    "recommended_option": "confirm_catalog_setup",
-                },
-            ),
-        )
         output = IngestionAgentPlanOutput.model_validate(
             {
                 "status": "awaiting_catalog_setup",
@@ -146,7 +141,14 @@ def _mock_run_planning_agent_loop(
                     },
                 ],
                 "suggested_catalog_seed": seed,
-                "human_approval": human_approval,
+                "human_approval": {
+                    "required": True,
+                    "mechanism": "catalog_setup_card",
+                    "stage": "catalog_setup",
+                    "question": "Please confirm the catalog setup before proceeding.",
+                    "options": ["confirm_catalog_setup", "cancel"],
+                    "recommended_option": "confirm_catalog_setup",
+                },
             }
         )
         return output, tool_trace
@@ -200,28 +202,6 @@ def _mock_run_planning_agent_loop(
             match_columns=match_columns,
         ),
     )
-    human_approval = self._run_tool(  # noqa: SLF001
-        conn=conn,
-        job_id=job_id,
-        trace=tool_trace,
-        name="AskUserQuestion",
-        arguments={
-            "stage": "proposal_approval",
-            "question": "Approve the next ingestion action?",
-            "options": ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
-            "recommended_option": action,
-        },
-        handler=lambda: self._tool_request_human_approval(  # noqa: SLF001
-            conn=conn,
-            job_id=job_id,
-            arguments={
-                "stage": "proposal_approval",
-                "question": "Approve the next ingestion action?",
-                "options": ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
-                "recommended_option": action,
-            },
-        ),
-    )
     proposal = IngestionProposalPayload(
         business_type=str(schema["business_type"]),
         confidence=0.91,
@@ -246,10 +226,191 @@ def _mock_run_planning_agent_loop(
             "status": "awaiting_user_approval",
             "agent_guess": agent_guess,
             "proposal": proposal.model_dump(mode="json"),
-            "human_approval": human_approval,
+            "human_approval": {
+                "required": True,
+                "mechanism": "frontend_approval_card",
+                "stage": "proposal_approval",
+                "question": "Please review the proposed ingestion action.",
+                "options": ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
+                "recommended_option": action,
+            },
         }
     )
     return output, tool_trace
+
+
+def _mock_run_execution_agent_loop(
+    self: WriteIngestionAgentRuntime,
+    *,
+    conn: sqlite3.Connection,
+    workspace_id: str,
+    job_id: str,
+    proposal_id: str,
+    upload_id: str,
+    target_table: str,
+    approved_action: str,
+    dry_run_summary: dict[str, Any],
+    upload_info: dict[str, Any],
+    proposal_payload: IngestionProposalPayload,
+) -> tuple[IngestionExecutionAgentOutput, list[dict[str, Any]]]:
+    _ = upload_info
+    tool_trace: list[dict[str, Any]] = []
+    session = self._prepare_execution_session(  # noqa: SLF001
+        workspace_id=workspace_id,
+        job_id=job_id,
+        proposal_id=proposal_id,
+        upload_id=upload_id,
+        target_table=target_table,
+        approved_action=approved_action,
+        dry_run_summary=dry_run_summary,
+        upload_info=self._tool_inspect_upload(conn=conn, upload_id=upload_id),  # noqa: SLF001
+        proposal_payload=proposal_payload,
+    )
+    try:
+        context = self._run_tool(  # noqa: SLF001
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name="get_execution_context",
+            arguments={},
+            handler=lambda: self._tool_get_execution_context(session=session),  # noqa: SLF001
+        )
+        staging = self._run_tool(  # noqa: SLF001
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name="describe_staging_dataset",
+            arguments={},
+            handler=lambda: self._tool_describe_staging_dataset(session=session),  # noqa: SLF001
+        )
+        target = self._run_tool(  # noqa: SLF001
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name="describe_target_table",
+            arguments={},
+            handler=lambda: self._tool_describe_target_table(conn=conn, session=session),  # noqa: SLF001
+        )
+
+        col_map_result = self._run_tool(  # noqa: SLF001
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name="resolve_column_mapping",
+            arguments={},
+            handler=lambda: self._tool_resolve_column_mapping(conn=conn, session=session),  # noqa: SLF001
+        )
+        staging_to_target: dict[str, str] = dict(col_map_result.get("staging_to_target", {}))
+        match_columns_staging: list[str] = list(col_map_result.get("match_columns_staging", []))
+
+        target_schema = target["schema"]
+        if approved_action == "update_existing" and not target["exists"]:
+            ensured = self._run_tool(  # noqa: SLF001
+                conn=conn,
+                job_id=job_id,
+                trace=tool_trace,
+                name="ensure_target_table_exists",
+                arguments={},
+                handler=lambda: self._tool_ensure_target_table_exists(session=session),  # noqa: SLF001
+            )
+            target_schema = ensured["schema"]
+
+        target_column_types = {
+            str(item["name"]).strip().lower(): str(item["type"]).strip()
+            for item in target_schema.get("columns", [])
+            if str(item.get("name", "")).strip() and str(item.get("type", "")).strip()
+        }
+
+        staging_columns = list(staging_to_target.keys()) or [
+            str(item["name"])
+            for item in staging["schema"].get("columns", [])
+            if str(item.get("name", "")).strip()
+        ]
+
+        if not match_columns_staging and staging_columns:
+            match_columns_staging = [staging_columns[0]]
+
+        if match_columns_staging:
+            self._run_tool(  # noqa: SLF001
+                conn=conn,
+                job_id=job_id,
+                trace=tool_trace,
+                name="preview_write_diff",
+                arguments={"match_columns": match_columns_staging},
+                handler=lambda: self._tool_preview_write_diff(  # noqa: SLF001
+                    session=session,
+                    match_columns=match_columns_staging,
+                ),
+            )
+
+        if approved_action == "update_existing":
+            source_expr_by_staging_col = {
+                staging_col: self._source_expr_for_target_type(  # noqa: SLF001
+                    source_alias="s",
+                    column=staging_col,
+                    target_type=target_column_types.get(staging_to_target.get(staging_col, staging_col)),
+                )
+                for staging_col in staging_columns
+            }
+            effective_match = match_columns_staging or staging_columns[:1]
+            update_cols = [c for c in staging_columns if c not in set(effective_match)] or list(staging_columns)
+            target_cols_list = [staging_to_target.get(c, c) for c in staging_columns]
+            on_clause = " AND ".join(
+                f"t.{staging_to_target.get(c, c)} = {source_expr_by_staging_col[c]}"
+                for c in effective_match
+            )
+            update_clause = ", ".join(
+                f"{staging_to_target.get(c, c)} = {source_expr_by_staging_col[c]}"
+                for c in update_cols
+            )
+            insert_cols = ", ".join(staging_to_target.get(c, c) for c in staging_columns)
+            insert_vals = ", ".join(source_expr_by_staging_col[c] for c in staging_columns)
+            sql = (
+                f"MERGE INTO {target_table} AS t\n"
+                f"USING {session.staging_table} AS s\n"
+                f"ON {on_clause}\n"
+                f"WHEN MATCHED THEN UPDATE SET {update_clause}\n"
+                f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"
+            )
+        else:
+            select_parts = ", ".join(
+                f"s.{staging_col} AS {staging_to_target.get(staging_col, staging_col)}"
+                for staging_col in staging_columns
+            )
+            sql = (
+                f"CREATE TABLE {target_table} AS\n"
+                f"SELECT {select_parts} FROM {session.staging_table} AS s"
+            )
+
+        receipt = self._run_tool(  # noqa: SLF001
+            conn=conn,
+            job_id=job_id,
+            trace=tool_trace,
+            name="execute_approved_write",
+            arguments={
+                "sql": sql,
+                "reasoning": "Mock execution agent wrote the approved ingestion data.",
+            },
+            handler=lambda: self._tool_execute_approved_write(  # noqa: SLF001
+                session=session,
+                sql=sql,
+                reasoning="Mock execution agent wrote the approved ingestion data.",
+            ),
+        )
+        output = IngestionExecutionAgentOutput.model_validate(
+            {
+                "status": "executed",
+                "approved_action": approved_action,
+                "target_table": target_table,
+                "reasoning": "Mock execution agent completed the approved write through tools.",
+                "executed_sql": str(receipt.get("executed_sql") or sql),
+                "receipt": receipt,
+                "risks": [],
+            }
+        )
+        return output, tool_trace
+    finally:
+        session.duckdb_conn.close()
 
 
 def _normalize_identifier(raw: str) -> str:

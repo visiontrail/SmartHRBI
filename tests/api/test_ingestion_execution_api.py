@@ -21,7 +21,7 @@ from apps.api.table_catalog import clear_table_catalog_service_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
 from apps.api.views import clear_view_storage_service_cache
 from apps.api.workspaces import clear_workspace_service_cache
-from tests.agentic_ingestion_fakes import install_mock_planning_agent
+from tests.agentic_ingestion_fakes import install_mock_ingestion_agents
 from tests.auth_utils import auth_headers, expect_error_code
 
 
@@ -35,7 +35,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path, *, ingestion_enabled: bool) ->
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AGENTIC_INGESTION_ENABLED", "true" if ingestion_enabled else "false")
-    install_mock_planning_agent(monkeypatch)
+    install_mock_ingestion_agents(monkeypatch)
 
     get_settings.cache_clear()
     clear_auth_cache()

@@ -269,14 +269,12 @@ def test_ingestion_plan_reports_agent_loop_audit(monkeypatch, tmp_path: Path) ->
     audit = payload["analysis_audit"]["agent_planning"]
     assert audit["engine"] == "write_ingestion_agent_loop"
     assert audit["runtime_backend"] == "claude-agent-sdk"
-    assert audit["human_approval_tool_required"] is True
+    assert audit["human_approval_tool_required"] is False
 
-    approval_trace = next(
-        item for item in payload["tool_trace"] if item.get("tool_name") == "AskUserQuestion"
-    )
-    approval_result = approval_trace["result"]
-    assert approval_result["stage"] in {"catalog_setup", "proposal_approval"}
-    assert approval_result["status"] == "pending"
+    tool_names = {item.get("tool_name") for item in payload["tool_trace"]}
+    assert "AskUserQuestion" not in tool_names
+    assert payload["human_approval"]["stage"] in {"catalog_setup", "proposal_approval"}
+    assert payload["human_approval"]["required"] is True
 
     db_path = tmp_path / "workspace-state.db"
     with sqlite3.connect(db_path) as conn:

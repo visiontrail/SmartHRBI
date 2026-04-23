@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -181,6 +181,29 @@ class IngestionAgentPlanOutput(BaseModel):
     suggested_catalog_seed: IngestionCatalogSetupSeed | None = None
     proposal: IngestionProposalPayload | None = None
     human_approval: IngestionHumanApprovalRequest
+
+
+class IngestionExecutionAgentOutput(BaseModel):
+    status: Literal["executed", "blocked"]
+    approved_action: Literal["update_existing", "time_partitioned_new_table", "new_table"]
+    target_table: str = Field(min_length=1, max_length=128)
+    reasoning: str = Field(default="", max_length=2000)
+    executed_sql: str = ""
+    receipt: dict[str, Any] = Field(default_factory=dict)
+    risks: list[str] = Field(default_factory=list)
+
+    @field_validator("target_table")
+    @classmethod
+    def _trim_target_table(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("target_table is required")
+        return normalized
+
+    @field_validator("executed_sql", "reasoning")
+    @classmethod
+    def _trim_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class IngestionApprovalOverrides(BaseModel):
