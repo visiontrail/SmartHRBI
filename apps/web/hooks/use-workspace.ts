@@ -45,6 +45,23 @@ export function useWorkspaceCatalog(workspaceId: string | null) {
   });
 }
 
+export function useWorkspaceCatalogDataPreview(
+  workspaceId: string | null,
+  catalogId: string | null,
+  options: { limit?: number; offset?: number } = {}
+) {
+  const limit = options.limit ?? 100;
+  const offset = options.offset ?? 0;
+  return useQuery({
+    queryKey: ["workspace-catalog-data", workspaceId, catalogId, limit, offset],
+    queryFn: async () => {
+      if (!workspaceId || !catalogId) return null;
+      return api.fetchWorkspaceCatalogDataPreview(workspaceId, catalogId, { limit, offset });
+    },
+    enabled: Boolean(workspaceId && catalogId),
+  });
+}
+
 export function useCreateWorkspaceCatalogFromSetup() {
   const queryClient = useQueryClient();
 

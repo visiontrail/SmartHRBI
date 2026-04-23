@@ -1,7 +1,13 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
 import { safeLoadFromStorage, safeSaveToStorage } from "@/lib/chat/session-storage";
 import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
-import type { TableCatalogEntry, Workspace, WorkspaceSnapshot } from "@/types/workspace";
+import type {
+  TableCatalogDataColumn,
+  TableCatalogDataPreview,
+  TableCatalogEntry,
+  Workspace,
+  WorkspaceSnapshot,
+} from "@/types/workspace";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const configuredClearance = Number(process.env.NEXT_PUBLIC_DEFAULT_CLEARANCE ?? 1);
@@ -156,6 +162,39 @@ export async function fetchWorkspaceCatalog(workspaceId: string): Promise<TableC
     .filter((item): item is TableCatalogEntry => item !== null);
 }
 
+export async function fetchWorkspaceCatalogDataPreview(
+  workspaceId: string,
+  catalogId: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<TableCatalogDataPreview> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 100),
+    offset: String(options.offset ?? 0),
+  });
+  const response = await fetch(
+    `${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/catalog/${encodeURIComponent(catalogId)}/data?${params.toString()}`,
+    {
+      method: "GET",
+      headers,
+    }
+  );
+  const payload = await readPayload(response);
+  if (!response.ok) {
+    throw toApiError(payload, response.status, "workspace_catalog_data_preview_failed");
+  }
+
+  const preview = mapTableCatalogDataPreview(asRecord(payload));
+  if (!preview) {
+    throw new WorkspaceApiError({
+      code: "workspace_catalog_data_preview_invalid_payload",
+      message: "Workspace catalog data preview response is invalid",
+      status: 500,
+    });
+  }
+  return preview;
+}
+
 export async function createWorkspaceCatalogFromSetup(
   workspaceId: string,
   seed: IngestionCatalogSetupSeed
@@ -257,6 +296,36 @@ function mapTableCatalogEntry(value: Record<string, unknown>): TableCatalogEntry
   };
 }
 
+function mapTableCatalogDataPreview(
+  value: Record<string, unknown>
+): TableCatalogDataPreview | null {
+  const entry = mapTableCatalogEntry(asRecord(value.entry));
+  if (!entry) {
+    return null;
+  }
+  return {
+    entry,
+    table: asString(value.table),
+    rowCount: asNumber(value.row_count),
+    limit: asNumber(value.limit),
+    offset: asNumber(value.offset),
+    hasMore: Boolean(value.has_more),
+    columns: asRecordList(value.columns).map(mapTableCatalogDataColumn),
+    rows: Array.isArray(value.rows)
+      ? value.rows.filter((item): item is Record<string, unknown> => isRecord(item))
+      : [],
+  };
+}
+
+function mapTableCatalogDataColumn(value: Record<string, unknown>): TableCatalogDataColumn {
+  return {
+    name: asString(value.name),
+    type: asString(value.type),
+    nullable: Boolean(value.nullable),
+    primaryKey: Boolean(value.primary_key),
+  };
+}
+
 function removeWorkspaceSnapshot(workspaceId: string): void {
   const persisted = loadPersistedWorkspaceSnapshots();
   const snapshots = { ...persisted.snapshots };
@@ -320,6 +389,10 @@ function extractErrorDetail(payload: unknown): { code?: string; message?: string
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function asOptionalString(value: unknown): string | undefined {

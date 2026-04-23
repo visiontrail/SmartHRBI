@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 from fastapi.testclient import TestClient
 
 from apps.api.audit import clear_audit_logger_cache
@@ -171,6 +172,77 @@ def test_table_catalog_create_accepts_business_intent_only(monkeypatch, tmp_path
         assert entry["match_columns"] == []
         assert entry["is_active_target"] is False
         assert entry["description"] == "Stores the employee master sheet used for workforce analysis."
+
+
+def test_table_catalog_data_preview_reads_workspace_duckdb(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin", clearance=9)
+
+        workspace_response = client.post(
+            "/workspaces",
+            json={"name": "Data Preview Catalog"},
+            headers=owner_headers,
+        )
+        assert workspace_response.status_code == 200
+        workspace_id = workspace_response.json()["workspace_id"]
+
+        create_response = client.post(
+            f"/workspaces/{workspace_id}/catalog",
+            headers=owner_headers,
+            json={
+                "table_name": "employee_master",
+                "human_label": "Employee Master",
+                "description": "Stores employee master rows.",
+            },
+        )
+        assert create_response.status_code == 200
+        catalog_id = create_response.json()["entry"]["id"]
+
+        db_path = get_settings().upload_dir / "agentic_ingestion" / "duckdb" / f"{workspace_id}.duckdb"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE employee_master (
+                    employee_id VARCHAR,
+                    employee_name VARCHAR,
+                    department VARCHAR
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO employee_master VALUES ('E001', 'Ava Chen', 'HR'), ('E002', 'Noah Lin', 'R&D')"
+            )
+        finally:
+            conn.close()
+
+        preview_response = client.get(
+            f"/workspaces/{workspace_id}/catalog/{catalog_id}/data",
+            headers=owner_headers,
+            params={"limit": 1, "offset": 1},
+        )
+        assert preview_response.status_code == 200
+        payload = preview_response.json()
+        assert payload["table"] == "employee_master"
+        assert payload["row_count"] == 2
+        assert payload["limit"] == 1
+        assert payload["offset"] == 1
+        assert payload["has_more"] is False
+        assert [column["name"] for column in payload["columns"]] == [
+            "employee_id",
+            "employee_name",
+            "department",
+        ]
+        assert payload["rows"] == [
+            {
+                "employee_id": "E002",
+                "employee_name": "Noah Lin",
+                "department": "R&D",
+            }
+        ]
 
 
 def test_table_catalog_create_generates_missing_table_name_with_ai(monkeypatch, tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mutateAsync = vi.fn();
 const deleteMutateAsync = vi.fn();
+const refetchPreview = vi.fn();
 
 vi.mock("sonner", () => ({
   toast: {
@@ -54,6 +55,50 @@ vi.mock("../../hooks/use-workspace", () => ({
       ],
     };
   },
+  useWorkspaceCatalogDataPreview: (_workspaceId: string, catalogId: string | null) => {
+    if (!catalogId) {
+      return {
+        isLoading: false,
+        isFetching: false,
+        isError: false,
+        data: null,
+        refetch: refetchPreview,
+      };
+    }
+    return {
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      refetch: refetchPreview,
+      data: {
+        entry: {
+          id: catalogId,
+          workspaceId: "ws-1",
+          tableName: "employee_roster",
+          humanLabel: "Employees Roster",
+          businessType: "roster",
+          writeMode: "new_table",
+          timeGrain: "none",
+          isActiveTarget: true,
+          primaryKeys: [],
+          matchColumns: [],
+          description: "Stores employee master data.",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z",
+        },
+        table: "employee_roster",
+        rowCount: 1,
+        limit: 100,
+        offset: 0,
+        hasMore: false,
+        columns: [
+          { name: "employee_id", type: "VARCHAR", nullable: true, primaryKey: false },
+          { name: "department", type: "VARCHAR", nullable: true, primaryKey: false },
+        ],
+        rows: [{ employee_id: "E001", department: "HR" }],
+      },
+    };
+  },
   useCreateWorkspaceCatalogFromSetup: () => ({
     isPending: false,
     mutateAsync,
@@ -70,6 +115,7 @@ describe("WorkspaceCatalogReadonly", () => {
   beforeEach(() => {
     mutateAsync.mockReset();
     deleteMutateAsync.mockReset();
+    refetchPreview.mockReset();
     deleteMutateAsync.mockResolvedValue(undefined);
   });
 
@@ -99,6 +145,20 @@ describe("WorkspaceCatalogReadonly", () => {
         catalogId: "catalog-1",
       });
     });
+  });
+
+  it("opens a raw data preview when a catalog entry is clicked", async () => {
+    render(<WorkspaceCatalogReadonly workspaceId="ws-1" />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Open raw data for Employees Roster" })
+    );
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("employee_id")).toBeInTheDocument();
+    expect(screen.getByText("VARCHAR")).toBeInTheDocument();
+    expect(screen.getByText("E001")).toBeInTheDocument();
+    expect(screen.getByText("HR")).toBeInTheDocument();
   });
 
   it("renders empty state and add-table setup card when workspace has no catalog entries", async () => {

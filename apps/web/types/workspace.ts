@@ -73,6 +73,24 @@ export type TableCatalogEntry = {
   updatedAt: string;
 };
 
+export type TableCatalogDataColumn = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+};
+
+export type TableCatalogDataPreview = {
+  entry: TableCatalogEntry;
+  table: string;
+  rowCount: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  columns: TableCatalogDataColumn[];
+  rows: Record<string, unknown>[];
+};
+
 export type SavedReportPage = {
   id: string;
   workspaceId: string;

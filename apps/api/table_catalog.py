@@ -15,12 +15,15 @@ from typing import Any, Literal
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+import duckdb
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from .agentic_ingestion.schema import initialize_sqlite_schema
 from .auth import AuthIdentity, require_permission
 from .config import get_settings
+from .data_policy import filter_schema_columns, redact_rows
+from .datasets import SAFE_IDENTIFIER_RE, get_dataset_service
 from .workspaces import WorkspaceError, get_workspace_service
 
 BUSINESS_TYPES = ("roster", "project_progress", "attendance", "other")
@@ -428,6 +431,97 @@ class TableCatalogService:
             return None
         return self._serialize_entry(row)
 
+    def preview_table_data(
+        self,
+        *,
+        workspace_id: str,
+        catalog_id: str,
+        actor_user_id: str,
+        actor_project_id: str,
+        actor_role: str,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        entry = self.get_entry(workspace_id=workspace_id, catalog_id=catalog_id)
+        table_name = str(entry["table_name"]).strip()
+        if not SAFE_IDENTIFIER_RE.match(table_name):
+            raise TableCatalogError(
+                code="CATALOG_TABLE_NAME_INVALID",
+                message="Catalog table name is not a valid SQL identifier",
+                status_code=400,
+            )
+
+        settings = get_settings()
+        dataset_service = get_dataset_service(
+            settings.upload_dir,
+            ai_api_key=settings.ai_api_key,
+            ai_model=settings.ai_model,
+            ai_base_url=settings.model_provider_url,
+            ai_timeout=settings.ai_timeout_seconds,
+        )
+
+        try:
+            with dataset_service.session_manager.connection(
+                actor_user_id,
+                actor_project_id,
+                workspace_id=workspace_id,
+            ) as conn:
+                available_tables = {
+                    str(row[0]).strip().lower(): str(row[0]).strip()
+                    for row in conn.execute("SHOW TABLES").fetchall()
+                }
+                resolved_table = available_tables.get(table_name.lower())
+                if resolved_table is None:
+                    raise TableCatalogError(
+                        code="CATALOG_TABLE_DATA_NOT_FOUND",
+                        message="No physical data table has been written for this catalog entry yet",
+                        status_code=404,
+                    )
+
+                column_rows = conn.execute(f'PRAGMA table_info("{resolved_table}")').fetchall()
+                row_count = int(conn.execute(f'SELECT COUNT(*) FROM "{resolved_table}"').fetchone()[0])
+                cursor = conn.execute(
+                    f'SELECT * FROM "{resolved_table}" LIMIT {limit} OFFSET {offset}'
+                )
+                column_names = [str(column[0]) for column in (cursor.description or [])]
+                rows = [dict(zip(column_names, row)) for row in cursor.fetchall()]
+        except TableCatalogError:
+            raise
+        except duckdb.Error as exc:
+            raise TableCatalogError(
+                code="CATALOG_TABLE_DATA_READ_FAILED",
+                message="Failed to read table data",
+                status_code=500,
+            ) from exc
+
+        typed_columns = [
+            {
+                "name": str(item[1]),
+                "type": str(item[2]),
+                "nullable": not bool(item[3]),
+                "primary_key": bool(item[5]),
+            }
+            for item in column_rows
+        ]
+        safe_columns = filter_schema_columns(typed_columns, role=actor_role)
+        safe_column_names = [str(item["name"]) for item in safe_columns]
+        redacted_rows = redact_rows(rows, role=actor_role)
+        visible_rows = [
+            {column_name: row.get(column_name) for column_name in safe_column_names}
+            for row in redacted_rows
+        ]
+
+        return {
+            "entry": entry,
+            "table": table_name,
+            "row_count": row_count,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(visible_rows) < row_count,
+            "columns": safe_columns,
+            "rows": visible_rows,
+        }
+
     def _get_entry_row(self, *, workspace_id: str, catalog_id: str) -> sqlite3.Row:
         normalized_workspace_id = workspace_id.strip()
         normalized_catalog_id = catalog_id.strip()
@@ -602,6 +696,32 @@ async def get_table_catalog_entry(
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
     return {"entry": entry}
+
+
+@router.get("/{catalog_id}/data")
+async def preview_table_catalog_data(
+    workspace_id: str,
+    catalog_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    identity: AuthIdentity = Depends(require_permission("workspaces:read")),
+) -> dict[str, Any]:
+    _assert_workspace_role(workspace_id=workspace_id, identity=identity, minimum_role="viewer")
+    bounded_limit = max(1, min(int(limit), 200))
+    bounded_offset = max(0, int(offset))
+    service = get_table_catalog_service()
+    try:
+        return service.preview_table_data(
+            workspace_id=workspace_id,
+            catalog_id=catalog_id,
+            actor_user_id=identity.user_id,
+            actor_project_id=identity.project_id,
+            actor_role=identity.role,
+            limit=bounded_limit,
+            offset=bounded_offset,
+        )
+    except TableCatalogError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
 
 @router.patch("/{catalog_id}")
