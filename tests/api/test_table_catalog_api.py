@@ -10,6 +10,7 @@ from apps.api.chat import clear_chat_stream_service_cache
 from apps.api.config import get_settings
 from apps.api.datasets import clear_dataset_service_cache
 from apps.api.main import app
+from apps.api import table_catalog
 from apps.api.semantic import clear_semantic_cache
 from apps.api.table_catalog import clear_table_catalog_service_cache
 from apps.api.tool_calling import clear_tool_calling_service_cache
@@ -170,6 +171,56 @@ def test_table_catalog_create_accepts_business_intent_only(monkeypatch, tmp_path
         assert entry["match_columns"] == []
         assert entry["is_active_target"] is False
         assert entry["description"] == "Stores the employee master sheet used for workforce analysis."
+
+
+def test_table_catalog_create_generates_missing_table_name_with_ai(monkeypatch, tmp_path: Path) -> None:
+    _set_minimal_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AI_API_KEY", "test-ai-key")
+    monkeypatch.setenv("AI_MODEL", "test-model")
+    get_settings.cache_clear()
+
+    observed_payloads: list[dict[str, object]] = []
+
+    def fake_ai_request(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        observed_payloads.append(kwargs["payload"])
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"table_name":"employee_master_snapshot"}',
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(table_catalog, "_post_table_name_ai_request", fake_ai_request)
+
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, user_id="alice", project_id="north", role="admin", clearance=9)
+
+        workspace_response = client.post(
+            "/workspaces",
+            json={"name": "AI Named Catalog"},
+            headers=owner_headers,
+        )
+        assert workspace_response.status_code == 200
+        workspace_id = workspace_response.json()["workspace_id"]
+
+        create_response = client.post(
+            f"/workspaces/{workspace_id}/catalog",
+            headers=owner_headers,
+            json={
+                "human_label": "员工主数据",
+                "description": "存放员工主数据，用于人数、组织、职级等分析。",
+            },
+        )
+        assert create_response.status_code == 200
+        entry = create_response.json()["entry"]
+        assert entry["table_name"] == "employee_master_snapshot"
+        assert observed_payloads
+        user_message = observed_payloads[0]["messages"][1]["content"]  # type: ignore[index]
+        assert "员工主数据" in str(user_message)
+        assert "职级" in str(user_message)
 
 
 def test_table_catalog_workspace_role_checks(monkeypatch, tmp_path: Path) -> None:

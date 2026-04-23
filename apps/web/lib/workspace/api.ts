@@ -161,6 +161,7 @@ export async function createWorkspaceCatalogFromSetup(
   seed: IngestionCatalogSetupSeed
 ): Promise<TableCatalogEntry> {
   const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const tableName = seed.tableName.trim();
   const response = await fetch(
     `${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/catalog`,
     {
@@ -170,7 +171,7 @@ export async function createWorkspaceCatalogFromSetup(
         ...headers,
       },
       body: JSON.stringify({
-        table_name: seed.tableName,
+        ...(tableName ? { table_name: tableName } : {}),
         human_label: seed.humanLabel,
         business_type: seed.businessType,
         write_mode: seed.writeMode,

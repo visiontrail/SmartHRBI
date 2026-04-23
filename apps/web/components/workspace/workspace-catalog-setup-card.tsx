@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +17,7 @@ type WorkspaceCatalogSetupCardProps = {
 };
 
 export function WorkspaceCatalogSetupCard({
-  entries,
+  entries: _entries,
   isSubmitting = false,
   onAdd,
 }: WorkspaceCatalogSetupCardProps) {
@@ -25,39 +25,6 @@ export function WorkspaceCatalogSetupCard({
   const [humanLabel, setHumanLabel] = useState("");
   const [description, setDescription] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
-
-  const existingTableNames = useMemo(() => new Set(entries.map((entry) => entry.tableName)), [entries]);
-
-  function slugify(value: string): string {
-    const normalized = value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "_")
-      .replace(/^_+|_+$/g, "");
-
-    if (!normalized) {
-      return "workspace_table";
-    }
-    if (/^[0-9]/.test(normalized)) {
-      return `t_${normalized}`;
-    }
-    return normalized;
-  }
-
-  function buildUniqueTableName(label: string): string {
-    const base = slugify(label);
-    if (!existingTableNames.has(base)) {
-      return base;
-    }
-
-    let index = 2;
-    let candidate = `${base}_${index}`;
-    while (existingTableNames.has(candidate)) {
-      index += 1;
-      candidate = `${base}_${index}`;
-    }
-    return candidate;
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,7 +44,7 @@ export function WorkspaceCatalogSetupCard({
     setValidationError(null);
     await onAdd({
       businessType: "other",
-      tableName: buildUniqueTableName(normalizedLabel),
+      tableName: "",
       humanLabel: normalizedLabel,
       writeMode: "new_table",
       timeGrain: "none",

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
+import socket
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,18 +12,22 @@ from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from .agentic_ingestion.schema import initialize_sqlite_schema
 from .auth import AuthIdentity, require_permission
+from .config import get_settings
 from .workspaces import WorkspaceError, get_workspace_service
 
 BUSINESS_TYPES = ("roster", "project_progress", "attendance", "other")
 WRITE_MODES = ("update_existing", "time_partitioned_new_table", "new_table", "append_only")
 TIME_GRAINS = ("none", "month", "quarter", "year")
 TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+logger = logging.getLogger("smarthrbi.table_catalog")
 
 
 class TableCatalogError(Exception):
@@ -39,7 +45,7 @@ class TableCatalogError(Exception):
 
 
 class TableCatalogEntryCreateRequest(BaseModel):
-    table_name: str = Field(min_length=1, max_length=128)
+    table_name: str | None = Field(default=None, min_length=1, max_length=128)
     human_label: str = Field(min_length=1, max_length=120)
     business_type: Literal["roster", "project_progress", "attendance", "other"] = "other"
     write_mode: Literal[
@@ -56,7 +62,9 @@ class TableCatalogEntryCreateRequest(BaseModel):
 
     @field_validator("table_name")
     @classmethod
-    def validate_table_name(cls, value: str) -> str:
+    def validate_table_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         normalized = value.strip()
         if not TABLE_NAME_PATTERN.match(normalized):
             raise ValueError("table_name must be a valid SQL identifier")
@@ -184,6 +192,24 @@ class TableCatalogService:
         with self._lock, self._connect() as conn:
             self._assert_workspace_exists(conn, workspace_id=normalized_workspace_id)
             self._ensure_user_record(conn, user_id=normalized_actor)
+            existing_table_names = self._list_table_names(conn, workspace_id=normalized_workspace_id)
+
+        generated_table_name = payload.table_name is None
+        candidate_table_name = payload.table_name or _generate_table_name_with_ai(
+            human_label=payload.human_label,
+            description=payload.description,
+            existing_table_names=existing_table_names,
+        )
+
+        with self._lock, self._connect() as conn:
+            self._assert_workspace_exists(conn, workspace_id=normalized_workspace_id)
+            self._ensure_user_record(conn, user_id=normalized_actor)
+            current_table_names = self._list_table_names(conn, workspace_id=normalized_workspace_id)
+            table_name = (
+                _dedupe_table_name(candidate_table_name, current_table_names)
+                if generated_table_name
+                else candidate_table_name
+            )
 
             if payload.is_active_target:
                 conn.execute(
@@ -218,7 +244,7 @@ class TableCatalogService:
                 (
                     catalog_id,
                     normalized_workspace_id,
-                    payload.table_name,
+                    table_name,
                     payload.human_label,
                     payload.business_type,
                     payload.write_mode,
@@ -468,6 +494,14 @@ class TableCatalogService:
         )
 
     @staticmethod
+    def _list_table_names(conn: sqlite3.Connection, *, workspace_id: str) -> set[str]:
+        rows = conn.execute(
+            "SELECT table_name FROM table_catalog WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchall()
+        return {str(row["table_name"]).strip().lower() for row in rows if str(row["table_name"]).strip()}
+
+    @staticmethod
     def _serialize_entry(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": str(row["id"]),
@@ -618,6 +652,214 @@ def _assert_workspace_role(*, workspace_id: str, identity: AuthIdentity, minimum
         )
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+def _generate_table_name_with_ai(
+    *,
+    human_label: str,
+    description: str,
+    existing_table_names: set[str],
+) -> str:
+    settings = get_settings()
+    if not settings.model_provider_url.strip() or not settings.ai_api_key.strip() or not settings.ai_model.strip():
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_NOT_CONFIGURED",
+            message="AI table name generation is not configured",
+            status_code=503,
+        )
+
+    payload: dict[str, Any] = {
+        "model": settings.ai_model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You generate concise SQL table names for business datasets. "
+                    "Return only JSON: {\"table_name\":\"...\"}. "
+                    "The table_name must be English, lowercase snake_case, start with a letter or underscore, "
+                    "contain only letters, numbers, and underscores, be at most 48 characters, "
+                    "and must not be a generic sequence like table1, table2, workspace_table, or business_table."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "display_name": human_label,
+                        "description": description,
+                        "existing_table_names": sorted(existing_table_names),
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    response = _post_table_name_ai_request(
+        base_url=settings.model_provider_url,
+        api_key=settings.ai_api_key,
+        timeout_seconds=settings.ai_timeout_seconds,
+        payload=payload,
+    )
+    candidate = _extract_ai_table_name(response)
+    normalized = _normalize_ai_table_name(candidate)
+    if not normalized:
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_INVALID_RESPONSE",
+            message="AI did not return a valid table name",
+            status_code=502,
+        )
+    return normalized
+
+
+def _post_table_name_ai_request(
+    *,
+    base_url: str,
+    api_key: str,
+    timeout_seconds: float,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = _chat_completions_endpoint(base_url)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    request = urllib_request.Request(endpoint, data=body, headers=headers, method="POST")
+
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except TimeoutError as exc:
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_TIMEOUT",
+            message="AI table name generation timed out",
+            status_code=504,
+        ) from exc
+    except socket.timeout as exc:
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_TIMEOUT",
+            message="AI table name generation timed out",
+            status_code=504,
+        ) from exc
+    except urllib_error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+        logger.warning("table_name_ai_http_error status=%s details=%s", exc.code, details or exc.reason)
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_HTTP_ERROR",
+            message="AI table name generation failed",
+            status_code=502,
+        ) from exc
+    except urllib_error.URLError as exc:
+        logger.warning("table_name_ai_request_error reason=%s", exc.reason)
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_REQUEST_FAILED",
+            message="AI table name generation request failed",
+            status_code=502,
+        ) from exc
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_NON_JSON",
+            message="AI table name generation returned invalid JSON",
+            status_code=502,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise TableCatalogError(
+            code="TABLE_NAME_AI_NON_JSON",
+            message="AI table name generation returned invalid JSON",
+            status_code=502,
+        )
+    return parsed
+
+
+def _extract_ai_table_name(response: dict[str, Any]) -> str:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    content = message.get("content") if isinstance(message, dict) else None
+    text = _content_to_text(content)
+    if not text:
+        return ""
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = _json_from_text_block(text)
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("table_name") or "")
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+        return "\n".join(chunks).strip()
+    return ""
+
+
+def _json_from_text_block(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
+        stripped = re.sub(r"```$", "", stripped).strip()
+
+    match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+    if not match:
+        return {}
+    try:
+        decoded = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _normalize_ai_table_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower()).strip("_")
+    if not TABLE_NAME_PATTERN.match(normalized):
+        return ""
+    if normalized in {"table", "table1", "table2", "workspace_table", "business_table"}:
+        return ""
+    if re.fullmatch(r"table_?\d+", normalized):
+        return ""
+    return normalized[:48]
+
+
+def _dedupe_table_name(table_name: str, existing_table_names: set[str]) -> str:
+    normalized_existing = {item.lower() for item in existing_table_names}
+    if table_name.lower() not in normalized_existing:
+        return table_name
+
+    index = 2
+    base = table_name[:124]
+    candidate = f"{base}_{index}"
+    while candidate.lower() in normalized_existing:
+        index += 1
+        suffix = f"_{index}"
+        candidate = f"{table_name[: 128 - len(suffix)]}{suffix}"
+    return candidate
+
+
+def _chat_completions_endpoint(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
 
 
 @lru_cache(maxsize=2)
