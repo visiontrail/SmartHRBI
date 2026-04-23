@@ -1,8 +1,17 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mutateAsync = vi.fn();
+const deleteMutateAsync = vi.fn();
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 vi.mock("../../hooks/use-workspace", () => ({
   useWorkspaceCatalog: (workspaceId: string) => {
@@ -49,11 +58,21 @@ vi.mock("../../hooks/use-workspace", () => ({
     isPending: false,
     mutateAsync,
   }),
+  useDeleteWorkspaceCatalogEntry: () => ({
+    isPending: false,
+    mutateAsync: deleteMutateAsync,
+  }),
 }));
 
 import { WorkspaceCatalogReadonly } from "../../components/workspace/workspace-catalog-readonly";
 
 describe("WorkspaceCatalogReadonly", () => {
+  beforeEach(() => {
+    mutateAsync.mockReset();
+    deleteMutateAsync.mockReset();
+    deleteMutateAsync.mockResolvedValue(undefined);
+  });
+
   it("renders business-purpose catalog entries for a workspace", async () => {
     render(<WorkspaceCatalogReadonly workspaceId="ws-1" />);
 
@@ -64,6 +83,22 @@ describe("WorkspaceCatalogReadonly", () => {
     expect(screen.getByText("Planned")).toBeInTheDocument();
     expect(screen.getByText("AI Inferred")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
+  });
+
+  it("deletes a catalog entry after confirmation", async () => {
+    render(<WorkspaceCatalogReadonly workspaceId="ws-1" />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Delete table intent: Employees Roster" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteMutateAsync).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        catalogId: "catalog-1",
+      });
+    });
   });
 
   it("renders empty state and add-table setup card when workspace has no catalog entries", async () => {

@@ -57,6 +57,18 @@ export function useCreateWorkspaceCatalogFromSetup() {
   });
 }
 
+export function useDeleteWorkspaceCatalogEntry() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ workspaceId, catalogId }: { workspaceId: string; catalogId: string }) =>
+      api.deleteWorkspaceCatalogEntry(workspaceId, catalogId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-catalog", variables.workspaceId] });
+    },
+  });
+}
+
 export function useCreateWorkspace() {
   const queryClient = useQueryClient();
   const addWorkspace = useWorkspaceStore((s) => s.addWorkspace);

@@ -199,6 +199,24 @@ export async function createWorkspaceCatalogFromSetup(
   return entry;
 }
 
+export async function deleteWorkspaceCatalogEntry(
+  workspaceId: string,
+  catalogId: string
+): Promise<void> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const response = await fetch(
+    `${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/catalog/${encodeURIComponent(catalogId)}`,
+    {
+      method: "DELETE",
+      headers,
+    }
+  );
+  const payload = await readPayload(response);
+  if (!response.ok) {
+    throw toApiError(payload, response.status, "workspace_catalog_delete_failed");
+  }
+}
+
 function mapWorkspace(
   value: Record<string, unknown>,
   snapshots: Record<string, WorkspaceSnapshot>

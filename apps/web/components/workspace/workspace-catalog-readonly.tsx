@@ -1,10 +1,27 @@
 "use client";
 
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCreateWorkspaceCatalogFromSetup, useWorkspaceCatalog } from "@/hooks/use-workspace";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  useCreateWorkspaceCatalogFromSetup,
+  useDeleteWorkspaceCatalogEntry,
+  useWorkspaceCatalog,
+} from "@/hooks/use-workspace";
 import { useI18n } from "@/lib/i18n/context";
 import { cn } from "@/lib/utils";
+import type { TableCatalogEntry } from "@/types/workspace";
 import { WorkspaceCatalogSetupCard } from "./workspace-catalog-setup-card";
 
 export function WorkspaceCatalogReadonly({
@@ -17,8 +34,24 @@ export function WorkspaceCatalogReadonly({
   showHeader?: boolean;
 }) {
   const { t } = useI18n();
+  const [entryToDelete, setEntryToDelete] = useState<TableCatalogEntry | null>(null);
   const catalogQuery = useWorkspaceCatalog(workspaceId);
   const createSetupMutation = useCreateWorkspaceCatalogFromSetup();
+  const deleteMutation = useDeleteWorkspaceCatalogEntry();
+
+  const handleConfirmDelete = async () => {
+    if (!entryToDelete) {
+      return;
+    }
+
+    try {
+      await deleteMutation.mutateAsync({ workspaceId, catalogId: entryToDelete.id });
+      toast.success(t("workspace.catalog.deleteSuccess", { name: entryToDelete.humanLabel }));
+      setEntryToDelete(null);
+    } catch {
+      toast.error(t("workspace.catalog.deleteFailed"));
+    }
+  };
 
   if (catalogQuery.isLoading) {
     return (
@@ -75,13 +108,31 @@ export function WorkspaceCatalogReadonly({
                     {entry.description || t("workspace.catalog.purposeFallback")}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                  {entry.primaryKeys.length === 0 && entry.matchColumns.length === 0 ? (
-                    <Badge variant="secondary">{t("workspace.catalog.planned")}</Badge>
-                  ) : (
-                    <Badge variant="outline">{t("workspace.catalog.aiManaged")}</Badge>
-                  )}
-                  {entry.isActiveTarget ? <Badge variant="default">{t("workspace.catalog.active")}</Badge> : null}
+                <div className="flex shrink-0 items-start justify-end gap-2">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {entry.primaryKeys.length === 0 && entry.matchColumns.length === 0 ? (
+                      <Badge variant="secondary">{t("workspace.catalog.planned")}</Badge>
+                    ) : (
+                      <Badge variant="outline">{t("workspace.catalog.aiManaged")}</Badge>
+                    )}
+                    {entry.isActiveTarget ? <Badge variant="default">{t("workspace.catalog.active")}</Badge> : null}
+                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("workspace.catalog.deleteEntry", { name: entry.humanLabel })}
+                        onClick={() => setEntryToDelete(entry)}
+                        disabled={deleteMutation.isPending}
+                        className="shrink-0 text-stone-gray hover:bg-error-crimson/10 hover:text-error-crimson"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("workspace.catalog.delete")}</TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
               <p className="pt-2 text-label text-stone-gray">{entry.tableName}</p>
@@ -95,6 +146,37 @@ export function WorkspaceCatalogReadonly({
         isSubmitting={createSetupMutation.isPending}
         onAdd={(seed) => createSetupMutation.mutateAsync({ workspaceId, seed })}
       />
+
+      <Dialog open={entryToDelete !== null} onOpenChange={(open) => !open && setEntryToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("workspace.catalog.deleteConfirmTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("workspace.catalog.deleteConfirmDescription", {
+                name: entryToDelete?.humanLabel ?? "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEntryToDelete(null)}
+              disabled={deleteMutation.isPending}
+            >
+              {t("workspace.catalog.cancelDelete")}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleConfirmDelete}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? t("workspace.catalog.deleting") : t("workspace.catalog.confirmDelete")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

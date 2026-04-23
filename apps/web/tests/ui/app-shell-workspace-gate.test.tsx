@@ -27,6 +27,7 @@ vi.mock("../../hooks/use-workspace", () => ({
   useDeleteWorkspace: () => ({ mutate: vi.fn(), isPending: false }),
   useWorkspaceCatalog: () => ({ isLoading: false, data: [] }),
   useCreateWorkspaceCatalogFromSetup: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteWorkspaceCatalogEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 describe("AppShell workspace gate", () => {
