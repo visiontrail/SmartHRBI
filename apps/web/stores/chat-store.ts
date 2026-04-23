@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { normalizeSessionTitle } from "@/lib/chat/session-title";
 import type { ChatSession, ChatMessage } from "@/types/chat";
 import type { IngestionPlanAwaitingApproval, IngestionUploadResult } from "@/types/ingestion";
 import {
@@ -48,22 +49,34 @@ type PersistedChatState = {
   messagesBySession: Record<string, ChatMessage[]>;
 };
 
+function normalizeSession(session: ChatSession): ChatSession {
+  return {
+    ...session,
+    title: normalizeSessionTitle(session.title),
+  };
+}
+
+function normalizeSessions(sessions: ChatSession[]): ChatSession[] {
+  return sessions.map(normalizeSession);
+}
+
 function loadPersistedChatState(): PersistedChatState | null {
   const state = safeLoadFromStorage<Partial<PersistedChatState>>(CHAT_STORAGE_KEY);
   if (!state || !Array.isArray(state.sessions)) {
     return null;
   }
 
+  const sessions = normalizeSessions(state.sessions);
   const messagesBySession = isMessageMap(state.messagesBySession) ? state.messagesBySession : {};
-  const sessionIds = new Set(state.sessions.map((session) => session.id));
+  const sessionIds = new Set(sessions.map((session) => session.id));
   const activeSessionId =
     typeof state.activeSessionId === "string" && sessionIds.has(state.activeSessionId)
       ? state.activeSessionId
-      : state.sessions[0]?.id ?? null;
+      : sessions[0]?.id ?? null;
 
   return {
     version: 1,
-    sessions: state.sessions,
+    sessions,
     activeSessionId,
     messagesBySession: Object.fromEntries(
       Object.entries(messagesBySession).filter(([sessionId]) => sessionIds.has(sessionId))
@@ -99,11 +112,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setSessions: (sessions) =>
     set((state) => {
-      const sessionIds = new Set(sessions.map((session) => session.id));
+      const normalizedSessions = normalizeSessions(sessions);
+      const sessionIds = new Set(normalizedSessions.map((session) => session.id));
       const activeSessionId =
         state.activeSessionId && sessionIds.has(state.activeSessionId)
           ? state.activeSessionId
-          : sessions[0]?.id ?? null;
+          : normalizedSessions[0]?.id ?? null;
       const messagesBySession = Object.fromEntries(
         Object.entries(state.messagesBySession).filter(([sessionId]) => sessionIds.has(sessionId))
       );
@@ -111,7 +125,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         Object.entries(state.pendingIngestionBySession).filter(([sessionId]) => sessionIds.has(sessionId))
       );
       const nextState = {
-        sessions,
+        sessions: normalizedSessions,
         activeSessionId,
         messagesBySession,
         pendingIngestionBySession,
@@ -122,13 +136,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   addSession: (session) =>
     set((state) => {
-      const sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)];
+      const normalizedSession = normalizeSession(session);
+      const sessions = [
+        normalizedSession,
+        ...state.sessions.filter((item) => item.id !== normalizedSession.id),
+      ];
       const nextState = {
         sessions,
         activeSessionId: state.activeSessionId,
         messagesBySession: {
           ...state.messagesBySession,
-          [session.id]: state.messagesBySession[session.id] ?? [],
+          [normalizedSession.id]: state.messagesBySession[normalizedSession.id] ?? [],
         },
       };
       persistChatState(nextState);
@@ -221,7 +239,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         );
         return {
           ...session,
-          ...(updates.title ? { title: updates.title } : {}),
+          ...(updates.title ? { title: normalizeSessionTitle(updates.title) } : {}),
           ...(updates.lastMessage ? { lastMessage: updates.lastMessage } : {}),
           messageCount: nextMessageCount,
           updatedAt: new Date().toISOString(),

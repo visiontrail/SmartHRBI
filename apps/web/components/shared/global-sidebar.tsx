@@ -20,7 +20,7 @@ import { useCreateWorkspace, useDeleteWorkspace } from "@/hooks/use-workspace";
 import { useI18n } from "@/lib/i18n/context";
 import type { Locale } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
-import { truncate, formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime } from "@/lib/utils";
 
 export function GlobalSidebar() {
   const { t, locale, setLocale } = useI18n();
@@ -115,7 +115,7 @@ export function GlobalSidebar() {
                     key={session.id}
                     active={session.id === activeSessionId}
                     icon={<MessageSquare className="w-4 h-4" />}
-                    title={truncate(session.title, 28)}
+                    title={session.title}
                     subtitle={formatRelativeTime(new Date(session.updatedAt), locale)}
                     onClick={() => handleSelectSession(session.id)}
                     onDelete={() => deleteSession.mutate(session.id)}
@@ -162,7 +162,7 @@ export function GlobalSidebar() {
                     key={ws.id}
                     active={ws.id === activeWorkspaceId}
                     icon={<LayoutDashboard className="w-4 h-4" />}
-                    title={truncate(ws.title, 28)}
+                    title={ws.title}
                     subtitle={t("sidebar.itemCount", { count: ws.nodeCount })}
                     onClick={() => handleSelectWorkspace(ws.id)}
                     onDelete={() => deleteWorkspace.mutate(ws.id)}
@@ -251,7 +251,7 @@ function SidebarItem({
         if (e.key === "Enter" || e.key === " ") onClick();
       }}
       className={cn(
-        "group flex items-center gap-2.5 px-2 py-2 rounded-comfortable cursor-pointer transition-colors",
+        "group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 px-2 py-2 rounded-comfortable cursor-pointer transition-colors overflow-hidden",
         active
           ? "bg-warm-sand text-near-black shadow-ring-warm"
           : "text-olive-gray hover:bg-border-cream hover:text-near-black"
@@ -261,8 +261,12 @@ function SidebarItem({
         {icon}
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-body-sm font-medium truncate">{title}</p>
-        <p className="text-label text-stone-gray truncate">{subtitle}</p>
+        <p className="text-body-sm font-medium truncate" title={title}>
+          {title}
+        </p>
+        <p className="text-label text-stone-gray truncate" title={subtitle}>
+          {subtitle}
+        </p>
       </div>
       <button
         type="button"

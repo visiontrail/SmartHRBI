@@ -25,6 +25,7 @@ from .chat import ChatStreamRequest, get_chat_stream_service
 from .config import get_settings
 from .data_policy import forbidden_sensitive_columns, redact_rows, redact_structure
 from .datasets import get_dataset_service
+from .session_titles import get_session_title_service
 from .security import (
     AccessContext,
     QueryAccessError,
@@ -91,6 +92,12 @@ class SemanticQueryRequest(BaseModel):
 
 class ChatStreamAPIRequest(ChatStreamRequest):
     pass
+
+
+class ChatTitleRequest(BaseModel):
+    user_id: str
+    project_id: str
+    prompt: str
 
 
 class SaveViewRequest(BaseModel):
@@ -464,6 +471,25 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/chat/title")
+async def generate_chat_title(
+    request: ChatTitleRequest,
+    identity: AuthIdentity = Depends(require_permission("chat:stream")),
+) -> dict[str, str]:
+    ensure_scope(identity, user_id=request.user_id, project_id=request.project_id)
+    title, source = get_session_title_service().generate_title(request.prompt)
+
+    get_audit_logger().log(
+        event_type="query",
+        action="chat_title",
+        status="success",
+        user_id=identity.user_id,
+        project_id=identity.project_id,
+        detail={"source": source},
+    )
+    return {"title": title, "source": source}
 
 
 @app.post("/views")

@@ -113,6 +113,34 @@ describe("GlobalSidebar", () => {
     expect(deleteWorkspace).not.toHaveClass("opacity-0");
   });
 
+  it("keeps the delete action visible for very long conversation titles", () => {
+    useChatStore.setState({
+      sessions: [
+        {
+          id: "session-long",
+          title:
+            "请按组织架构层级对过去二十四个月的人效变化、离职趋势、招聘补充效率和异常波动做完整分析并指出重点部门",
+          createdAt: "2026-04-14T00:00:00.000Z",
+          updatedAt: new Date().toISOString(),
+          messageCount: 1,
+        },
+      ],
+      activeSessionId: "session-long",
+      messagesBySession: { "session-long": [] },
+      isComposing: false,
+      composerText: "",
+    });
+
+    renderWithProviders(<GlobalSidebar />);
+
+    expect(
+      screen.getByRole("button", {
+        name:
+          "Delete conversation: 请按组织架构层级对过去二十四个月的人效变化、离职趋势、招聘补充效率和异常波动做完整分析并指出重点部门",
+      })
+    ).toHaveClass("opacity-100");
+  });
+
   it("deletes a conversation from its always-visible row action", async () => {
     renderWithProviders(<GlobalSidebar />);
 

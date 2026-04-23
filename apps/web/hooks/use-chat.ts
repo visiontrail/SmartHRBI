@@ -6,6 +6,13 @@ import { useAssetStore } from "@/stores/asset-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { parseSSEStream } from "@/lib/chat/sse";
+import {
+  buildFallbackSessionTitle,
+  DEFAULT_SESSION_TITLE,
+  normalizeSessionTitle,
+  requestGeneratedSessionTitle,
+  shouldAutoGenerateSessionTitle,
+} from "@/lib/chat/session-title";
 import { getAuthorizationHeader } from "@/lib/auth/session";
 import { useI18n } from "@/lib/i18n/context";
 import {
@@ -160,12 +167,28 @@ export function useSendMessage() {
         t,
       });
       const userMessage = createUserMessage(sessionId, normalizedContent);
+      const session = useChatStore.getState().sessions.find((item) => item.id === sessionId);
+      const shouldGenerateTitle = shouldAutoGenerateSessionTitle(session);
+      const fallbackTitle = shouldGenerateTitle
+        ? buildFallbackSessionTitle(normalizedContent)
+        : undefined;
       appendMessage(sessionId, userMessage);
       touchSession(sessionId, {
         lastMessage: userMessage.content,
         messageDelta: 1,
-        title: suggestSessionTitle(sessionId, normalizedContent),
+        title: fallbackTitle,
       });
+      if (shouldGenerateTitle) {
+        void requestGeneratedSessionTitle({
+          apiBaseUrl: API_BASE_URL,
+          authContext: DEFAULT_AUTH_CONTEXT,
+          content: normalizedContent,
+        })
+          .then((title) => {
+            useChatStore.getState().touchSession(sessionId, { title });
+          })
+          .catch(() => undefined);
+      }
       return { sessionId };
     },
     onSuccess: ({ assistantMessage, chartAsset }, { sessionId }) => {
@@ -211,7 +234,6 @@ const DEFAULT_AUTH_CONTEXT = {
   department: process.env.NEXT_PUBLIC_DEFAULT_DEPARTMENT ?? "HR",
   clearance: DEFAULT_CLEARANCE,
 };
-const SESSION_TITLE_MAX = 32;
 const SUPPORTED_CHART_TYPES = new Set<KnownChartType>([
   "bar",
   "line",
@@ -466,7 +488,7 @@ function createLocalSession(title?: string): ChatSession {
   const now = new Date().toISOString();
   return {
     id: `session-${generateId()}`,
-    title: title?.trim() || "New Conversation",
+    title: normalizeSessionTitle(title ?? "", DEFAULT_SESSION_TITLE),
     createdAt: now,
     updatedAt: now,
     messageCount: 0,
@@ -816,21 +838,6 @@ function extractUploadStats(upload: IngestionUploadResult): { sheetCount: number
   const sheetCount = normalizedSheetCount > 0 ? normalizedSheetCount : sheets.length;
   const totalRows = sheets.reduce((sum, sheet) => sum + asNumber(sheet.row_count), 0);
   return { sheetCount, totalRows };
-}
-
-function suggestSessionTitle(sessionId: string, content: string): string | undefined {
-  const session = useChatStore.getState().sessions.find((item) => item.id === sessionId);
-  if (!session) {
-    return undefined;
-  }
-  if (session.messageCount > 0 && session.title !== "New Conversation") {
-    return undefined;
-  }
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > SESSION_TITLE_MAX ? `${trimmed.slice(0, SESSION_TITLE_MAX)}...` : trimmed;
 }
 
 function toChartAsset(
