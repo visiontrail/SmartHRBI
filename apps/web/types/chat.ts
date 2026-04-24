@@ -42,6 +42,7 @@ export type SendMessageRequest = {
   sessionId: string;
   content: string;
   attachment?: File;
+  preferredChartType?: import("./chart").KnownChartType;
 };
 
 export type SendMessageResponse = {

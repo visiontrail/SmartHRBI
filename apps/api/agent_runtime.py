@@ -327,6 +327,7 @@ class AgentRequest:
     department: str | None
     clearance: int
     workspace_id: str | None = None
+    preferred_chart_type: str | None = None
 
 
 @dataclass(slots=True)
@@ -1371,6 +1372,14 @@ class AgentRuntime:
         )
         parts.append(context_hint)
 
+        preferred_chart_type = self._normalize_chart_type(request.preferred_chart_type)
+        if preferred_chart_type:
+            parts.append(
+                "User-selected chart_type preference: "
+                f"`{preferred_chart_type}`. Honour this exact chart_type in the final JSON answer "
+                "unless the query returns no rows."
+            )
+
         if session.last_result and isinstance(session.last_result, dict):
             prior_summary = json.dumps(session.last_result, ensure_ascii=False, default=str)
             if len(prior_summary) > 2000:
@@ -1406,6 +1415,9 @@ class AgentRuntime:
     ) -> dict[str, Any]:
         rows = list(answer.get("rows") or [])
         chart_type = str(answer.get("chart_type") or "bar")
+        preferred_chart_type = self._normalize_chart_type(request.preferred_chart_type)
+        if preferred_chart_type:
+            chart_type = preferred_chart_type
         if chart_type not in self.ALL_CHART_TYPES:
             chart_type = "bar"
         if not rows:
@@ -1469,6 +1481,15 @@ class AgentRuntime:
             },
             "meta": {"intent": request.message, "generated_by": SDK_RUNTIME_BACKEND},
         }
+
+    def _normalize_chart_type(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        chart_type = str(value).strip()
+        if chart_type in self.ALL_CHART_TYPES:
+            return chart_type
+        lower_catalog = {item.lower(): item for item in self.ALL_CHART_TYPES}
+        return lower_catalog.get(chart_type.lower())
 
     def _empty_spec(self, *, request: AgentRequest) -> dict[str, Any]:
         return {

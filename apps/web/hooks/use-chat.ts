@@ -22,6 +22,7 @@ import {
   createIngestionUpload,
   executeIngestionProposal,
 } from "@/lib/ingestion/api";
+import type { QueryChartType } from "@/lib/charts/chart-type-options";
 import { generateId, isRecord } from "@/lib/utils";
 import type { ChartAsset, ChartSpec, ChartType, KnownChartType } from "@/types/chart";
 import type { ChatMessage, ChatSession } from "@/types/chat";
@@ -109,11 +110,13 @@ export function useSendMessage() {
       content,
       attachment,
       approvedAction,
+      preferredChartType,
     }: {
       sessionId: string;
       content: string;
       attachment?: File;
       approvedAction?: IngestionProposalAction;
+      preferredChartType?: QueryChartType;
     }) => {
       setIsSending(true);
       const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
@@ -158,7 +161,13 @@ export function useSendMessage() {
           t,
         });
       }
-      return streamAssistantResponse({ sessionId, content: trimmedContent, workspaceId, t });
+      return streamAssistantResponse({
+        sessionId,
+        content: trimmedContent,
+        preferredChartType,
+        workspaceId,
+        t,
+      });
     },
     onMutate: ({ sessionId, content, attachment }) => {
       const normalizedContent = formatUserMessageContent({
@@ -292,14 +301,17 @@ type TranslateFn = (key: string, params?: Record<string, string | number | null 
 async function streamAssistantResponse({
   sessionId,
   content,
+  preferredChartType,
   workspaceId,
   t,
 }: {
   sessionId: string;
   content: string;
+  preferredChartType?: QueryChartType;
   workspaceId: string;
   t: TranslateFn;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+  const aiMessage = buildMessageWithChartPreference({ content, preferredChartType });
   const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: "POST",
@@ -315,7 +327,8 @@ async function streamAssistantResponse({
       department: DEFAULT_AUTH_CONTEXT.department,
       clearance: DEFAULT_AUTH_CONTEXT.clearance,
       dataset_table: DEFAULT_DATASET_TABLE,
-      message: content,
+      message: aiMessage,
+      preferred_chart_type: preferredChartType ?? null,
       conversation_id: sessionId,
       request_id: generateId(),
     }),
@@ -364,6 +377,25 @@ async function streamAssistantResponse({
     timestamp: new Date().toISOString(),
   };
   return { assistantMessage, chartAsset: chartAsset ?? undefined };
+}
+
+function buildMessageWithChartPreference({
+  content,
+  preferredChartType,
+}: {
+  content: string;
+  preferredChartType?: QueryChartType;
+}): string {
+  if (!preferredChartType) {
+    return content;
+  }
+  return [
+    content,
+    "",
+    "[Chart type selection]",
+    `chart_type: ${preferredChartType}`,
+    `Use this exact chart_type in the final JSON answer unless the query returns no rows.`,
+  ].join("\n");
 }
 
 async function runIngestionConversationResponse({

@@ -7,6 +7,13 @@ import { useChatStore } from "@/stores/chat-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useSendMessage } from "@/hooks/use-chat";
 import { useI18n } from "@/lib/i18n/context";
+import { cn } from "@/lib/utils";
+import {
+  QUERY_CHART_TYPE_OPTIONS,
+  findQueryChartType,
+  type ChartTypeOption,
+  type QueryChartType,
+} from "@/lib/charts/chart-type-options";
 import type { IngestionProposalAction, IngestionTimeGrain } from "@/types/ingestion";
 
 export function ChatInput({ sessionId }: { sessionId: string }) {
@@ -20,15 +27,24 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [customApprovalInput, setCustomApprovalInput] = useState(false);
+  const [selectedChartType, setSelectedChartType] = useState<QueryChartType | null>(null);
+  const [chartTrigger, setChartTrigger] = useState<ChartTriggerState | null>(null);
+  const [activeChartIndex, setActiveChartIndex] = useState(0);
   const approvalOptions = useMemo(
     () => collectPendingApprovalOptions(pendingApproval?.plan.humanApproval.options),
     [pendingApproval]
   );
   const inputLockedByApproval = Boolean(pendingApproval) && !customApprovalInput;
+  const filteredChartOptions = useMemo(
+    () => filterChartOptions(chartTrigger?.query ?? ""),
+    [chartTrigger?.query]
+  );
+  const activeChartOption = filteredChartOptions[Math.min(activeChartIndex, filteredChartOptions.length - 1)] ?? null;
 
   useEffect(() => {
     if (pendingApproval) {
       setSelectedFile(null);
+      setChartTrigger(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -37,12 +53,29 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     setCustomApprovalInput(false);
   }, [pendingApproval]);
 
+  useEffect(() => {
+    if (activeChartIndex >= filteredChartOptions.length) {
+      setActiveChartIndex(0);
+    }
+  }, [activeChartIndex, filteredChartOptions.length]);
+
   const handleSubmit = useCallback(() => {
     const content = composerText.trim();
     if ((!content && !selectedFile) || isSending || inputLockedByApproval) return;
+    const chartType = resolveSelectedChartType({
+      explicitSelection: selectedChartType,
+      text: content,
+    });
 
-    sendMessage.mutate({ sessionId, content, attachment: selectedFile ?? undefined });
+    sendMessage.mutate({
+      sessionId,
+      content,
+      attachment: selectedFile ?? undefined,
+      preferredChartType: chartType ?? undefined,
+    });
     setComposerText("");
+    setSelectedChartType(null);
+    setChartTrigger(null);
     setSelectedFile(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -55,6 +88,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     composerText,
     inputLockedByApproval,
     isSending,
+    selectedChartType,
     selectedFile,
     sendMessage,
     sessionId,
@@ -77,6 +111,8 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
         approvedAction,
       });
       setComposerText("");
+      setSelectedChartType(null);
+      setChartTrigger(null);
       setCustomApprovalInput(false);
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -85,14 +121,77 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     [isSending, pendingApproval, sendMessage, sessionId, setComposerText, t]
   );
 
+  const updateChartTriggerFromTextarea = useCallback(
+    (text: string, caretPosition: number | null) => {
+      const trigger = getChartTriggerState(text, caretPosition ?? text.length);
+      setChartTrigger(trigger);
+      setActiveChartIndex(0);
+      setSelectedChartType((current) => {
+        if (!current) return null;
+        return text.includes(`#${current}`) ? current : null;
+      });
+    },
+    []
+  );
+
+  const applyChartSelection = useCallback(
+    (option: ChartTypeOption) => {
+      const trigger = chartTrigger ?? getChartTriggerState(composerText, textareaRef.current?.selectionStart ?? composerText.length);
+      if (!trigger) {
+        setSelectedChartType(option.type);
+        setChartTrigger(null);
+        return;
+      }
+
+      const before = composerText.slice(0, trigger.start);
+      const after = composerText.slice(trigger.end);
+      const replacement = `#${option.type} `;
+      const nextText = `${before}${replacement}${after}`;
+      const nextCaret = before.length + replacement.length;
+      setComposerText(nextText);
+      setSelectedChartType(option.type);
+      setChartTrigger(null);
+      requestAnimationFrame(() => {
+        if (!textareaRef.current) return;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextCaret, nextCaret);
+      });
+    },
+    [chartTrigger, composerText, setComposerText]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (chartTrigger && filteredChartOptions.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setActiveChartIndex((current) => (current + 1) % filteredChartOptions.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setActiveChartIndex((current) =>
+            current === 0 ? filteredChartOptions.length - 1 : current - 1
+          );
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyChartSelection(filteredChartOptions[activeChartIndex] ?? filteredChartOptions[0]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setChartTrigger(null);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
     },
-    [handleSubmit]
+    [activeChartIndex, applyChartSelection, chartTrigger, filteredChartOptions, handleSubmit]
   );
 
   return (
@@ -195,8 +294,23 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             <textarea
               ref={textareaRef}
               value={composerText}
-              onChange={(e) => setComposerText(e.target.value)}
+              aria-label="Chat Input"
+              aria-autocomplete="list"
+              aria-controls="chart-type-picker"
+              aria-activedescendant={activeChartOption ? `chart-type-option-${activeChartOption.type}` : undefined}
+              onChange={(e) => {
+                setComposerText(e.target.value);
+                updateChartTriggerFromTextarea(e.target.value, e.target.selectionStart);
+              }}
               onKeyDown={handleKeyDown}
+              onClick={(e) => {
+                const target = e.currentTarget;
+                updateChartTriggerFromTextarea(target.value, target.selectionStart);
+              }}
+              onFocus={(e) => {
+                const target = e.currentTarget;
+                updateChartTriggerFromTextarea(target.value, target.selectionStart);
+              }}
               placeholder={
                 inputLockedByApproval
                   ? t("chat.ingestion.approvalInputLocked")
@@ -215,6 +329,15 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
                 target.style.height = Math.min(target.scrollHeight, 160) + "px";
               }}
             />
+
+            {chartTrigger && filteredChartOptions.length > 0 ? (
+              <ChartTypePicker
+                options={filteredChartOptions}
+                activeIndex={activeChartIndex}
+                onActiveIndexChange={setActiveChartIndex}
+                onSelect={applyChartSelection}
+              />
+            ) : null}
           </div>
 
           <Button
@@ -223,6 +346,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             onClick={handleSubmit}
             disabled={(!composerText.trim() && !selectedFile) || isSending || inputLockedByApproval}
             className="shrink-0 h-[44px] w-[44px] rounded-generous p-0"
+            aria-label={t("chat.send")}
           >
             {isSending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -234,10 +358,403 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
       </div>
 
       <p className="text-label text-stone-gray text-center mt-2">
-        {t("chat.inputHintWithAttachment")}
+        {selectedChartType
+          ? t("chat.inputHintWithChartType", { chartType: selectedChartType })
+          : t("chat.inputHintWithAttachment")}
       </p>
     </div>
   );
+}
+
+type ChartTriggerState = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+function getChartTriggerState(text: string, caretPosition: number): ChartTriggerState | null {
+  const beforeCaret = text.slice(0, caretPosition);
+  const triggerStart = beforeCaret.lastIndexOf("#");
+  if (triggerStart < 0) return null;
+  const previousChar = triggerStart === 0 ? "" : beforeCaret[triggerStart - 1];
+  if (previousChar && !/\s/.test(previousChar)) return null;
+  const query = beforeCaret.slice(triggerStart + 1);
+  if (/\s/.test(query)) return null;
+  return {
+    start: triggerStart,
+    end: caretPosition,
+    query,
+  };
+}
+
+function filterChartOptions(query: string): ChartTypeOption[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return QUERY_CHART_TYPE_OPTIONS;
+  }
+  return QUERY_CHART_TYPE_OPTIONS.filter((option) => {
+    const haystack = `${option.type} ${option.label} ${option.description} ${option.group}`.toLowerCase();
+    return haystack.includes(normalized);
+  });
+}
+
+function resolveSelectedChartType({
+  explicitSelection,
+  text,
+}: {
+  explicitSelection: QueryChartType | null;
+  text: string;
+}): QueryChartType | null {
+  if (explicitSelection && text.includes(`#${explicitSelection}`)) {
+    return explicitSelection;
+  }
+  const match = text.match(/(?:^|\s)#([A-Za-z_]+)/);
+  return match ? findQueryChartType(match[1]) : null;
+}
+
+function ChartTypePicker({
+  options,
+  activeIndex,
+  onActiveIndexChange,
+  onSelect,
+}: {
+  options: ChartTypeOption[];
+  activeIndex: number;
+  onActiveIndexChange: (index: number) => void;
+  onSelect: (option: ChartTypeOption) => void;
+}) {
+  const activeOption = options[Math.min(activeIndex, options.length - 1)] ?? options[0];
+
+  return (
+    <div
+      id="chart-type-picker"
+      role="listbox"
+      aria-label="Chart type picker"
+      className="absolute bottom-[calc(100%+8px)] left-0 z-30 grid w-full max-w-[720px] grid-cols-[minmax(210px,280px)_1fr] overflow-hidden rounded-comfortable border border-border-cream bg-ivory shadow-[0_18px_48px_rgba(38,35,28,0.16)]"
+    >
+      <div className="max-h-[320px] overflow-y-auto border-r border-border-cream py-2">
+        {options.map((option, index) => {
+          const active = index === activeIndex;
+          return (
+            <button
+              id={`chart-type-option-${option.type}`}
+              key={option.type}
+              type="button"
+              role="option"
+              aria-selected={active}
+              className={cn(
+                "grid w-full grid-cols-[1fr_auto] gap-2 px-3 py-2 text-left transition-colors",
+                active ? "bg-warm-sand text-near-black" : "text-charcoal-warm hover:bg-parchment"
+              )}
+              onMouseEnter={() => onActiveIndexChange(index)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onSelect(option);
+              }}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-body-sm font-medium">{option.label}</span>
+                <span className="block truncate text-caption text-stone-gray">#{option.type}</span>
+              </span>
+              <span className="rounded-full bg-parchment px-2 py-0.5 text-[10px] font-medium text-olive-gray">
+                {option.group}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="min-h-[260px] bg-parchment p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-body-sm font-semibold text-near-black">{activeOption.label}</p>
+            <p className="mt-1 text-caption text-stone-gray">{activeOption.description}</p>
+          </div>
+          <code className="shrink-0 rounded-full bg-ivory px-2 py-1 text-[11px] text-terracotta">
+            chart_type: {activeOption.type}
+          </code>
+        </div>
+        <ChartExamplePreview type={activeOption.type} />
+      </div>
+    </div>
+  );
+}
+
+function ChartExamplePreview({ type }: { type: QueryChartType }) {
+  if (type === "table") {
+    return (
+      <div className="mt-5 overflow-hidden rounded-comfortable border border-border-cream bg-ivory">
+        {[0, 1, 2, 3].map((row) => (
+          <div key={row} className="grid grid-cols-3 border-b border-border-cream last:border-b-0">
+            {[0, 1, 2].map((col) => (
+              <div
+                key={`${row}-${col}`}
+                className={cn("h-9 border-r border-border-cream last:border-r-0", row === 0 ? "bg-warm-sand" : "bg-ivory")}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 320 180"
+      className="mt-5 h-[180px] w-full rounded-comfortable bg-ivory shadow-ring-warm"
+    >
+      <ChartExampleShape type={type} />
+    </svg>
+  );
+}
+
+function ChartExampleShape({ type }: { type: QueryChartType }) {
+  const axis = (
+    <>
+      <line x1="38" y1="142" x2="286" y2="142" stroke="#d9d3c4" strokeWidth="2" />
+      <line x1="38" y1="32" x2="38" y2="142" stroke="#d9d3c4" strokeWidth="2" />
+    </>
+  );
+
+  if (type === "line" || type === "area") {
+    return (
+      <>
+        {axis}
+        {type === "area" ? <path d="M42 130 L88 112 L132 118 L178 72 L224 86 L272 48 L272 142 L42 142 Z" fill="#9bb7a5" opacity="0.35" /> : null}
+        <path d="M42 130 L88 112 L132 118 L178 72 L224 86 L272 48" fill="none" stroke="#4b7f8c" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+        {[42, 88, 132, 178, 224, 272].map((x, i) => (
+          <circle key={x} cx={x} cy={[130, 112, 118, 72, 86, 48][i]} r="5" fill="#c96442" />
+        ))}
+      </>
+    );
+  }
+
+  if (type === "bar" || type === "stacked_bar") {
+    const bars = [
+      [58, 86],
+      [104, 58],
+      [150, 94],
+      [196, 42],
+      [242, 70],
+    ];
+    return (
+      <>
+        {axis}
+        {bars.map(([x, height]) =>
+          type === "stacked_bar" ? (
+            <g key={x}>
+              <rect x={x} y={142 - height} width="26" height={height * 0.48} rx="3" fill="#4b7f8c" />
+              <rect x={x} y={142 - height * 0.52} width="26" height={height * 0.52} rx="3" fill="#c96442" />
+            </g>
+          ) : (
+            <rect key={x} x={x} y={142 - height} width="28" height={height} rx="4" fill="#c96442" />
+          )
+        )}
+      </>
+    );
+  }
+
+  if (type === "pie") {
+    return (
+      <>
+        <circle cx="160" cy="90" r="62" fill="#4b7f8c" />
+        <path d="M160 90 L160 28 A62 62 0 0 1 216 116 Z" fill="#c96442" />
+        <path d="M160 90 L216 116 A62 62 0 0 1 130 144 Z" fill="#9bb7a5" />
+        <circle cx="160" cy="90" r="28" fill="#faf9f5" />
+      </>
+    );
+  }
+
+  if (type === "scatter") {
+    return (
+      <>
+        {axis}
+        {[
+          [70, 116],
+          [96, 94],
+          [122, 105],
+          [148, 78],
+          [174, 86],
+          [202, 56],
+          [232, 68],
+          [258, 44],
+        ].map(([x, y]) => (
+          <circle key={`${x}-${y}`} cx={x} cy={y} r="7" fill="#4b7f8c" opacity="0.86" />
+        ))}
+      </>
+    );
+  }
+
+  if (type === "funnel") {
+    return (
+      <>
+        <path d="M70 36 H250 L224 68 H96 Z" fill="#4b7f8c" />
+        <path d="M96 76 H224 L204 108 H116 Z" fill="#c96442" />
+        <path d="M122 116 H198 L182 148 H138 Z" fill="#9bb7a5" />
+      </>
+    );
+  }
+
+  if (type === "radar") {
+    return (
+      <>
+        {[62, 42, 22].map((offset) => (
+          <polygon key={offset} points={`160,${28 + offset} 220,${70 + offset / 3} 198,${136 - offset / 4} 122,${136 - offset / 4} 100,${70 + offset / 3}`} fill="none" stroke="#d9d3c4" />
+        ))}
+        <polygon points="160,46 214,82 190,130 126,124 110,76" fill="#4b7f8c" opacity="0.32" stroke="#4b7f8c" strokeWidth="4" />
+      </>
+    );
+  }
+
+  if (type === "treemap") {
+    return (
+      <>
+        <rect x="48" y="36" width="116" height="108" rx="4" fill="#4b7f8c" />
+        <rect x="172" y="36" width="100" height="62" rx="4" fill="#c96442" />
+        <rect x="172" y="106" width="46" height="38" rx="4" fill="#9bb7a5" />
+        <rect x="226" y="106" width="46" height="38" rx="4" fill="#d6a94a" />
+      </>
+    );
+  }
+
+  if (type === "sunburst") {
+    return (
+      <>
+        <circle cx="160" cy="90" r="24" fill="#faf9f5" stroke="#4b7f8c" strokeWidth="16" />
+        <path d="M160 26 A64 64 0 0 1 224 90 L192 90 A32 32 0 0 0 160 58 Z" fill="#c96442" />
+        <path d="M224 90 A64 64 0 0 1 104 130 L130 110 A32 32 0 0 0 192 90 Z" fill="#9bb7a5" />
+        <path d="M104 130 A64 64 0 0 1 160 26 L160 58 A32 32 0 0 0 130 110 Z" fill="#d6a94a" />
+      </>
+    );
+  }
+
+  if (type === "sankey") {
+    return (
+      <>
+        <path d="M74 56 C130 56 138 86 190 86 C220 86 232 72 260 72" fill="none" stroke="#4b7f8c" strokeWidth="22" opacity="0.45" />
+        <path d="M74 116 C132 116 142 94 190 94 C226 94 232 124 260 124" fill="none" stroke="#c96442" strokeWidth="18" opacity="0.45" />
+        {[74, 190, 260].map((x) => (
+          <rect key={x} x={x - 8} y="40" width="16" height="96" rx="4" fill="#4d4c48" />
+        ))}
+      </>
+    );
+  }
+
+  if (type === "graph") {
+    const nodes = [
+      [86, 74],
+      [150, 44],
+      [220, 78],
+      [128, 130],
+      [224, 132],
+    ];
+    return (
+      <>
+        <path d="M86 74 L150 44 L220 78 L224 132 L128 130 L86 74 L220 78" fill="none" stroke="#d9d3c4" strokeWidth="3" />
+        {nodes.map(([x, y], index) => (
+          <circle key={index} cx={x} cy={y} r="17" fill={index % 2 ? "#c96442" : "#4b7f8c"} />
+        ))}
+      </>
+    );
+  }
+
+  if (type === "boxplot") {
+    return (
+      <>
+        {axis}
+        {[82, 144, 206, 268].map((x, index) => (
+          <g key={x}>
+            <line x1={x} y1={48 + index * 8} x2={x} y2="134" stroke="#4d4c48" strokeWidth="2" />
+            <rect x={x - 18} y={72 + index * 5} width="36" height="42" fill="#9bb7a5" stroke="#4b7f8c" strokeWidth="3" />
+            <line x1={x - 18} y1={94 + index * 2} x2={x + 18} y2={94 + index * 2} stroke="#c96442" strokeWidth="3" />
+          </g>
+        ))}
+      </>
+    );
+  }
+
+  if (type === "candlestick") {
+    return (
+      <>
+        {axis}
+        {[70, 108, 146, 184, 222, 260].map((x, index) => (
+          <g key={x}>
+            <line x1={x} y1={42 + index * 8} x2={x} y2={126 - index * 3} stroke="#4d4c48" strokeWidth="2" />
+            <rect x={x - 9} y={62 + index * 5} width="18" height={42 - index * 3} fill={index % 2 ? "#4b7f8c" : "#c96442"} />
+          </g>
+        ))}
+      </>
+    );
+  }
+
+  if (type === "map") {
+    return (
+      <>
+        <path d="M88 58 L136 34 L190 46 L232 78 L218 124 L164 146 L110 130 L76 92 Z" fill="#e0f3db" stroke="#4b7f8c" strokeWidth="4" />
+        <path d="M136 34 L154 82 L108 126 L76 92 Z" fill="#a8ddb5" />
+        <path d="M154 82 L232 78 L218 124 L164 146 Z" fill="#43a2ca" opacity="0.72" />
+        <path d="M154 82 L190 46 L232 78 Z" fill="#0868ac" opacity="0.76" />
+      </>
+    );
+  }
+
+  if (type === "heatmap") {
+    return (
+      <>
+        {Array.from({ length: 5 }).map((_, row) =>
+          Array.from({ length: 7 }).map((__, col) => (
+            <rect
+              key={`${row}-${col}`}
+              x={54 + col * 30}
+              y={34 + row * 24}
+              width="24"
+              height="18"
+              rx="3"
+              fill={["#e0f3db", "#a8ddb5", "#43a2ca", "#c96442"][(row + col) % 4]}
+            />
+          ))
+        )}
+      </>
+    );
+  }
+
+  if (type === "parallel") {
+    return (
+      <>
+        {[62, 110, 158, 206, 254].map((x) => (
+          <line key={x} x1={x} y1="36" x2={x} y2="142" stroke="#d9d3c4" strokeWidth="2" />
+        ))}
+        <path d="M62 124 L110 70 L158 96 L206 44 L254 86" fill="none" stroke="#4b7f8c" strokeWidth="4" opacity="0.8" />
+        <path d="M62 62 L110 116 L158 74 L206 104 L254 48" fill="none" stroke="#c96442" strokeWidth="4" opacity="0.75" />
+      </>
+    );
+  }
+
+  if (type === "gauge" || type === "single_value") {
+    return (
+      <>
+        <path d="M88 126 A72 72 0 0 1 232 126" fill="none" stroke="#d9d3c4" strokeWidth="18" strokeLinecap="round" />
+        <path d="M88 126 A72 72 0 0 1 198 66" fill="none" stroke="#c96442" strokeWidth="18" strokeLinecap="round" />
+        <line x1="160" y1="126" x2="198" y2="82" stroke="#4d4c48" strokeWidth="5" strokeLinecap="round" />
+        <circle cx="160" cy="126" r="8" fill="#4d4c48" />
+        <text x="160" y="158" textAnchor="middle" fontSize="26" fontWeight="700" fill="#141413">76</text>
+      </>
+    );
+  }
+
+  if (type === "wordCloud") {
+    return (
+      <>
+        <text x="72" y="74" fontSize="30" fontWeight="700" fill="#4b7f8c">Talent</text>
+        <text x="150" y="108" fontSize="24" fontWeight="700" fill="#c96442">HR</text>
+        <text x="56" y="122" fontSize="18" fill="#9bb7a5">salary</text>
+        <text x="192" y="70" fontSize="16" fill="#d6a94a">team</text>
+        <text x="190" y="134" fontSize="20" fill="#4d4c48">project</text>
+      </>
+    );
+  }
+
+  return null;
 }
 
 function collectPendingApprovalOptions(
