@@ -1,17 +1,20 @@
 "use client";
 
 import { memo, useState, useCallback } from "react";
-import { type NodeProps, NodeResizeControl } from "@xyflow/react";
+import { type NodeProps } from "@xyflow/react";
 import { GripVertical, Trash2, Pencil, Check, X, Copy } from "lucide-react";
 import { ChartPreview } from "@/components/charts/chart-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useI18n } from "@/lib/i18n/context";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { generateId } from "@/lib/utils";
 import type { ChartNodeData } from "@/types/workspace";
 
 function ChartNodeComponent({ id, data, selected }: NodeProps) {
+  const { t } = useI18n();
   const nodeData = data as unknown as ChartNodeData;
   const updateNode = useWorkspaceStore((s) => s.updateNode);
   const removeNode = useWorkspaceStore((s) => s.removeNode);
@@ -88,21 +91,50 @@ function ChartNodeComponent({ id, data, selected }: NodeProps) {
           </div>
         )}
 
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Button variant="ghost" size="icon-sm" onClick={() => setIsEditing(true)}>
-            <Pencil className="w-3 h-3" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" onClick={handleDuplicate}>
-            <Copy className="w-3 h-3" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => removeNode(id)}
-            className="hover:text-error-crimson"
-          >
-            <Trash2 className="w-3 h-3" />
-          </Button>
+        <div className="nodrag flex items-center gap-0.5 shrink-0">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setIsEditing(true)}
+                aria-label={t("workspace.node.editChartTitle", { title: nodeData.title })}
+              >
+                <Pencil className="w-3 h-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("workspace.node.edit")}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleDuplicate}
+                aria-label={t("workspace.node.duplicateChart", { title: nodeData.title })}
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("workspace.node.duplicate")}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => removeNode(id)}
+                className="hover:text-error-crimson"
+                aria-label={t(
+                  nodeData.chartType === "table" ? "workspace.node.deleteTable" : "workspace.node.deleteChart",
+                  { title: nodeData.title }
+                )}
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("workspace.node.delete")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

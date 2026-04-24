@@ -20,16 +20,19 @@ const WARM_THEME = {
 };
 
 export function ChartPreview({ spec, height = 320, className }: ChartPreviewProps) {
+  if (spec.chartType === "table" || spec.echartsOption.__table__ === true) {
+    return <TableView spec={spec} height={height} className={className} />;
+  }
+
+  return <EchartsChartPreview spec={spec} height={height} className={className} />;
+}
+
+function EchartsChartPreview({ spec, height = 320, className }: ChartPreviewProps) {
   const { t } = useI18n();
   const chartRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<echarts.ECharts | null>(null);
   const [geoReady, setGeoReady] = useState(true);
   const [geoError, setGeoError] = useState<string | null>(null);
-
-  // --- Table short-circuit: render as HTML data table, not ECharts ---
-  if (spec.chartType === "table" || spec.echartsOption.__table__ === true) {
-    return <TableView spec={spec} height={height} className={className} />;
-  }
 
   const validation = useMemo(() => validateChartSpec(spec), [spec]);
   const requiresChinaMap = useMemo(() => requiresMapRegistration(spec.echartsOption), [spec.echartsOption]);
