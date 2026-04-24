@@ -16,6 +16,11 @@ from pydantic import BaseModel, Field, field_validator
 from .agentic_ingestion.schema import initialize_sqlite_schema
 from .auth import AuthIdentity, require_permission
 from .config import get_settings
+from .published_pages import (
+    PublishWorkspaceRequest,
+    get_published_page_store,
+    get_snapshot_writer,
+)
 
 SQLITE_RELATIVE_BASE = Path(__file__).resolve().parent
 ROLE_RANK: dict[str, int] = {
@@ -175,6 +180,50 @@ class WorkspaceService:
             ).fetchall()
 
         return [self._serialize_workspace(row) for row in rows]
+
+    def list_workspace_summaries(
+        self,
+        *,
+        workspace_ids: list[str],
+        user_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        normalized_ids = [item.strip() for item in workspace_ids if item.strip()]
+        if not normalized_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        params: list[str] = [*normalized_ids]
+        user_join = ""
+        user_where = ""
+        if user_id is not None and user_id.strip():
+            user_join = "JOIN workspace_members AS wm ON wm.workspace_id = w.id"
+            user_where = "AND wm.user_id = ?"
+            params.append(user_id.strip())
+
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT w.id, w.name, w.slug, w.status, w.created_at, w.updated_at
+                FROM workspaces AS w
+                {user_join}
+                WHERE w.id IN ({placeholders}) AND w.status = 'active'
+                {user_where}
+                """,
+                params,
+            ).fetchall()
+
+        summaries_by_id = {
+            str(row["id"]): {
+                "workspace_id": str(row["id"]),
+                "name": str(row["name"]),
+                "slug": str(row["slug"]),
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        }
+        return [summaries_by_id[item] for item in normalized_ids if item in summaries_by_id]
 
     def get_workspace_for_user(self, *, workspace_id: str, user_id: str) -> dict[str, str]:
         normalized_workspace_id = workspace_id.strip()
@@ -710,6 +759,82 @@ async def add_workspace_member(
         )
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.post("/{workspace_id}/publish")
+async def publish_workspace(
+    workspace_id: str,
+    request: PublishWorkspaceRequest,
+    identity: AuthIdentity = Depends(require_permission("workspaces:write")),
+) -> dict[str, object]:
+    service = get_workspace_service()
+    try:
+        service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="editor",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    empty_charts = [chart.chart_id for chart in request.charts if not chart.rows]
+    if empty_charts:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "PUBLISH_CHART_DATA_REQUIRED",
+                "message": "All charts must have data before publishing",
+                "chart_ids": empty_charts,
+            },
+        )
+
+    store = get_published_page_store()
+    writer = get_snapshot_writer()
+    version = store.next_version(workspace_id=workspace_id)
+    published_at = _utc_now()
+    snapshot = writer.write(
+        workspace_id=workspace_id,
+        version=version,
+        layout=request.layout,
+        sidebar=request.sidebar,
+        charts=request.charts,
+        actor_role=identity.role,
+        published_at=published_at,
+    )
+    page = store.create(
+        workspace_id=workspace_id,
+        version=version,
+        published_by=identity.user_id,
+        manifest_path=snapshot.manifest_path,
+        published_at=published_at,
+    )
+    return {
+        "published_page_id": page.id,
+        "version": page.version,
+    }
+
+
+@router.get("/{workspace_id}/published")
+async def list_workspace_published_pages(
+    workspace_id: str,
+    identity: AuthIdentity = Depends(require_permission("workspaces:read")),
+) -> dict[str, object]:
+    service = get_workspace_service()
+    try:
+        service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="viewer",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    pages = get_published_page_store().list_by_workspace(workspace_id=workspace_id)
+    history = [page.to_history_item() for page in pages]
+    return {
+        "count": len(history),
+        "published_pages": history,
+    }
 
 
 @lru_cache(maxsize=2)

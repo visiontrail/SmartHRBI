@@ -46,6 +46,7 @@ export type WorkspaceEdge = Edge;
 
 export type WorkspaceCanvasFormatId =
   | "infinite"
+  | "web-design"
   | "a4-portrait"
   | "a4-landscape"
   | "a3-portrait"
@@ -62,6 +63,41 @@ export type WorkspaceSnapshot = {
   edges: WorkspaceEdge[];
   viewport: { x: number; y: number; zoom: number };
   canvasFormat?: WorkspaceCanvasFormat;
+  webDesign?: WebDesignLayout;
+};
+
+export type WebDesignGridRow = {
+  id: string;
+  height: number;
+};
+
+export type WebDesignGridConfig = {
+  columns: number;
+  rows: WebDesignGridRow[];
+};
+
+export type WebDesignZone = {
+  id: string;
+  nodeId: string;
+  chartId: string;
+  column: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+};
+
+export type WebDesignSidebarItem = {
+  id: string;
+  label: string;
+  anchorRowId: string;
+  children: WebDesignSidebarItem[];
+};
+
+export type WebDesignLayout = {
+  grid: WebDesignGridConfig;
+  zones: WebDesignZone[];
+  sidebar: WebDesignSidebarItem[];
+  preview: boolean;
 };
 
 export type TableCatalogBusinessType = "roster" | "project_progress" | "attendance" | "other";

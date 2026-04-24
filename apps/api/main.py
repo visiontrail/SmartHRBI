@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from .agentic_ingestion import router as ingestion_router
+from .agentic_ingestion.router import router as ingestion_router
 from .audit import get_audit_logger
 from .auth import (
     AuthIdentity,
@@ -25,6 +25,7 @@ from .chat import ChatStreamRequest, get_chat_stream_service
 from .config import get_settings
 from .data_policy import forbidden_sensitive_columns, redact_rows, redact_structure
 from .datasets import get_dataset_service
+from .portal import router as portal_router
 from .session_titles import get_session_title_service
 from .security import (
     AccessContext,
@@ -57,6 +58,7 @@ app = FastAPI(title="Cognitrix API", version="0.1.0")
 app.include_router(ingestion_router)
 app.include_router(workspaces_router)
 app.include_router(table_catalog_router)
+app.include_router(portal_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,

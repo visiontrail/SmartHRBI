@@ -24,6 +24,7 @@ import { useSaveWorkspace } from "@/hooks/use-workspace";
 import { getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import { ChartNode } from "./nodes/chart-node";
 import { TextNode } from "./nodes/text-node";
+import { WebDesignCanvas } from "./web-design-canvas";
 import type { WorkspaceNode } from "@/types/workspace";
 
 const nodeTypes: NodeTypes = {
@@ -95,6 +96,10 @@ export function WorkspaceCanvas() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [saveWorkspace]);
+
+  if (canvasFormat.id === "web-design") {
+    return <WebDesignCanvas />;
+  }
 
   return (
     <div className="h-full w-full">

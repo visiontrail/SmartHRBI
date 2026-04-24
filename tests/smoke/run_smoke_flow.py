@@ -324,6 +324,57 @@ def main() -> int:
         if str(share_payload.get("view_id", "")) != view_id:
             raise RuntimeError("share payload view_id mismatch")
 
+        publish_rows = semantic_payload.get("rows")
+        if not isinstance(publish_rows, list) or not publish_rows:
+            publish_rows = [{"department": "HR", "headcount": semantic_payload.get("row_count", 1)}]
+
+        publish_response = client.post(
+            f"{api_base_url}/workspaces/{workspace_id}/publish",
+            headers=auth_headers,
+            json={
+                "layout": {
+                    "grid": {"columns": 2, "rows": [{"id": "row-1", "height": 320}]},
+                    "zones": [
+                        {
+                            "id": "zone-1",
+                            "nodeId": "node-smoke-chart",
+                            "chartId": "smoke-chart",
+                            "column": 0,
+                            "row": 0,
+                            "colSpan": 1,
+                            "rowSpan": 1,
+                        }
+                    ],
+                },
+                "sidebar": [{"id": "overview", "label": "Overview", "anchorRowId": "row-1", "children": []}],
+                "charts": [
+                    {
+                        "chart_id": "smoke-chart",
+                        "title": "Smoke Headcount",
+                        "chart_type": "bar",
+                        "spec": spec_payload.get("spec") or {"chart_type": "bar", "title": "Smoke Headcount"},
+                        "rows": publish_rows,
+                    }
+                ],
+            },
+        )
+        publish_response.raise_for_status()
+        published_page_id = str(publish_response.json().get("published_page_id", ""))
+        if not published_page_id:
+            raise RuntimeError("publish response missing published_page_id")
+
+        portal_manifest_response = client.get(f"{api_base_url}/portal/pages/{published_page_id}/manifest")
+        portal_manifest_response.raise_for_status()
+
+        portal_chat_response = client.post(
+            f"{api_base_url}/portal/pages/{published_page_id}/chat",
+            json={"message": "summarize the smoke chart", "chart_id": "smoke-chart"},
+        )
+        portal_chat_response.raise_for_status()
+        portal_events = parse_sse(portal_chat_response.text)
+        if not any(event["event"] == "final" for event in portal_events):
+            raise RuntimeError("portal chat stream missing final event")
+
         summary = {
             "job_id": job_id,
             "workspace_id": workspace_id,
@@ -331,7 +382,9 @@ def main() -> int:
             "semantic_rows": semantic_payload.get("row_count", 0),
             "view_id": view_id,
             "share_path": share_payload.get("share_path"),
+            "published_page_id": published_page_id,
             "stream_events": len(stream_events),
+            "portal_stream_events": len(portal_events),
         }
         print(json.dumps(summary, ensure_ascii=False))
 

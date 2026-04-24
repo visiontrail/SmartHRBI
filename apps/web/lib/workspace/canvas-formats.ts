@@ -19,6 +19,13 @@ export const CANVAS_FORMAT_PRESETS: CanvasFormatPreset[] = [
     height: null,
   },
   {
+    id: "web-design",
+    labelKey: "workspace.canvasFormat.webDesign",
+    descriptionKey: "workspace.canvasFormat.webDesignDescription",
+    width: null,
+    height: null,
+  },
+  {
     id: "a4-portrait",
     labelKey: "workspace.canvasFormat.a4Portrait",
     descriptionKey: "workspace.canvasFormat.a4PortraitDescription",
