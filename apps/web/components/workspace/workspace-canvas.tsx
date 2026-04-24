@@ -100,8 +100,6 @@ export function WorkspaceCanvas() {
         nodeTypes={nodeTypes}
         defaultViewport={storeViewport}
         onViewportChange={setViewport}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
         deleteKeyCode={["Backspace", "Delete"]}
         multiSelectionKeyCode="Shift"
         selectionOnDrag

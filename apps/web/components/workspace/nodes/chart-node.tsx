@@ -12,8 +12,15 @@ import { useI18n } from "@/lib/i18n/context";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { generateId } from "@/lib/utils";
 import type { ChartNodeData } from "@/types/workspace";
+import { ResizableNode } from "./resizable-node";
 
-function ChartNodeComponent({ id, data, selected }: NodeProps) {
+const DEFAULT_CHART_NODE_WIDTH = 520;
+const DEFAULT_CHART_NODE_HEIGHT = 380;
+const MIN_CHART_NODE_WIDTH = 320;
+const MIN_CHART_NODE_HEIGHT = 260;
+const CHART_NODE_HEADER_HEIGHT = 48;
+
+function ChartNodeComponent({ id, data, selected, width, height }: NodeProps) {
   const { t } = useI18n();
   const nodeData = data as unknown as ChartNodeData;
   const updateNode = useWorkspaceStore((s) => s.updateNode);
@@ -33,24 +40,44 @@ function ChartNodeComponent({ id, data, selected }: NodeProps) {
     const currentNode = nodes.find((n) => n.id === id);
     if (!currentNode) return;
 
+    const duplicateWidth =
+      currentNode.width ?? currentNode.measured?.width ?? nodeData.width ?? DEFAULT_CHART_NODE_WIDTH;
+    const duplicateHeight =
+      currentNode.height ?? currentNode.measured?.height ?? nodeData.height ?? DEFAULT_CHART_NODE_HEIGHT;
+
     addNode({
       id: `node-${generateId()}`,
       type: "chartNode",
       position: { x: currentNode.position.x + 30, y: currentNode.position.y + 30 },
-      data: { ...nodeData },
+      width: duplicateWidth,
+      height: duplicateHeight,
+      initialWidth: duplicateWidth,
+      initialHeight: duplicateHeight,
+      data: { ...nodeData, width: duplicateWidth, height: duplicateHeight },
     });
   }, [id, nodeData, nodes, addNode]);
 
+  const nodeWidth = width ?? nodeData.width ?? DEFAULT_CHART_NODE_WIDTH;
+  const nodeHeight = height ?? nodeData.height ?? DEFAULT_CHART_NODE_HEIGHT;
+  const chartHeight = Math.max(nodeHeight - CHART_NODE_HEADER_HEIGHT, 180);
+
   return (
     <div
-      className={`bg-ivory rounded-comfortable border overflow-hidden shadow-whisper transition-shadow ${
+      className={`relative bg-ivory rounded-comfortable border shadow-whisper transition-shadow ${
         selected ? "border-terracotta shadow-[0px_0px_0px_2px_#c96442]" : "border-border-cream"
       }`}
       style={{
-        width: nodeData.width || 520,
-        minHeight: nodeData.height || 380,
+        width: nodeWidth,
+        height: nodeHeight,
       }}
     >
+      <ResizableNode
+        id={id}
+        selected={selected}
+        minWidth={MIN_CHART_NODE_WIDTH}
+        minHeight={MIN_CHART_NODE_HEIGHT}
+      />
+
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border-cream bg-ivory cursor-grab">
         <GripVertical className="w-4 h-4 text-stone-gray shrink-0" />
@@ -142,7 +169,7 @@ function ChartNodeComponent({ id, data, selected }: NodeProps) {
       <div className="p-1">
         <ChartPreview
           spec={nodeData.spec}
-          height={(nodeData.height || 380) - 48}
+          height={chartHeight}
         />
       </div>
     </div>

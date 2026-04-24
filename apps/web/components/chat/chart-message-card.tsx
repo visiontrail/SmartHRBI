@@ -15,6 +15,9 @@ import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
 import type { ChartNodeData } from "@/types/workspace";
 
+const DEFAULT_CHART_NODE_WIDTH = 520;
+const DEFAULT_CHART_NODE_HEIGHT = 380;
+
 type ChartMessageCardProps = {
   assetId: string;
   title: string;
@@ -51,14 +54,18 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
       title: asset.title,
       chartType: asset.chartType,
       spec: asset.spec,
-      width: 520,
-      height: 380,
+      width: DEFAULT_CHART_NODE_WIDTH,
+      height: DEFAULT_CHART_NODE_HEIGHT,
     };
 
     addNode({
       id: `node-${generateId()}`,
       type: "chartNode",
       position: { x: offsetX, y: offsetY },
+      width: DEFAULT_CHART_NODE_WIDTH,
+      height: DEFAULT_CHART_NODE_HEIGHT,
+      initialWidth: DEFAULT_CHART_NODE_WIDTH,
+      initialHeight: DEFAULT_CHART_NODE_HEIGHT,
       data: nodeData,
     });
 
