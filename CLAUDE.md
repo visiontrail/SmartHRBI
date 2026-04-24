@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Cognitrix (识枢) is an AI-Native BI platform for any structured data domain. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through the Claude Agent SDK.
+Cognitrix (识枢) is an AI-Native BI platform for any structured data domain. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through an OpenAI-compatible agent loop (DeepSeek by default; switchable to Claude via Anthropic SDK).
 
 ## Commands
 
@@ -30,6 +30,8 @@ make test
 .venv/bin/python -m pytest tests/unit/test_agent_runtime.py -q   # single test file
 .venv/bin/python -m pytest tests/security -q
 .venv/bin/python -m pytest tests/integration -q
+.venv/bin/python -m pytest tests/evals -q     # agent prompting evals
+.venv/bin/python tests/smoke/run_smoke_flow.py  # local smoke
 
 # Frontend unit tests (Vitest, jsdom)
 cd apps/web && npx vitest run
@@ -64,28 +66,36 @@ make reset-local-data # Clear uploads, DuckDB/SQLite state, logs, test artifacts
 FastAPI app defined in `main.py`. All routes (except `/healthz` and `/auth/login`) require `Authorization: Bearer <token>`.
 
 **Key modules:**
+- `config.py` — `Settings` (Pydantic BaseSettings); all env vars parsed and validated here; use `get_settings()` everywhere
 - `auth.py` — JWT-based token issuance, `AuthIdentity`, RBAC permission scopes (`require_permission`), role overrides stored in-process
 - `security.py` — `SQLReadOnlyValidator`, `RLSInjector`, `AccessContext`; combined through `secure_query_sql()`
 - `data_policy.py` — `redact_rows()`, `redact_structure()`, `forbidden_sensitive_columns()` based on role
-- `agent_runtime.py` — thin host around Claude Agent SDK `ClaudeSDKClient`; exposes BI tools as an in-process SDK MCP server named `cognitrix`; maps SDK stream/hook events to frontend SSE format
-- `chat.py` — `ChatStreamService` routes `POST /chat/stream` into `AgentRuntime.run_turn()`
+- `agent_prompting.py` — `build_agent_system_prompt()`; owns the static BI system prompt injected into every chat turn
+- `agent_runtime.py` — ReAct agent loop; orchestrates `OpenAIAgentLoopClient` + BI tool dispatch; maps LLM events to SSE format
+- `llm_openai.py` — `OpenAIAgentLoopClient`; OpenAI-compatible chat-completions client used by the agent loop (works with DeepSeek, Kimi, etc.)
+- `llm_anthropic.py` — `AnthropicLLMResponse`; Anthropic-specific client path (used when `ANTHROPIC_AUTH_TOKEN` is set)
+- `agent_logging.py` — `format_agent_debug_blocks()`; structured debug log formatter for AI input/output/tool traces
+- `chat.py` — `ChatStreamService` routes `POST /chat/stream` into `AgentRuntime.run_turn()`; handles SSE streaming
 - `agent_guardrails.py` — blocks jailbreak attempts, validates tool names and SQL before execution
 - `tool_calling.py` — `ToolCallingService`; executes the 8 BI tools (list_tables, describe_table, sample_rows, get_metric_catalog, run_semantic_query, execute_readonly_sql, get_distinct_values, save_view)
+- `chart_strategy.py` — `ChartStrategyRouter`; routes chart rendering to ECharts or Recharts based on chart type and complexity score
 - `semantic.py` — metric registry, `IntentParser`, `MetricCompiler`; semantic layer lives in `models/` YAML files
+- `schema_inference.py` — LLM-powered inference for arbitrary Excel uploads; maps Chinese/unknown column headers to canonical snake_case names and infers metric definitions
+- `session_titles.py` — `SessionTitleService`; calls the LLM to generate a short title for a new chat session
 - `datasets.py` — DuckDB session manager, per-user/project connection isolation
+- `table_catalog.py` — `TableCatalogRouter`; SQLite-backed catalog of uploaded tables with business type, write mode, and time-grain metadata; router at `/table-catalog`
 - `views.py` — SQLite-backed view persistence with versioning and rollback
 - `workspaces.py` — workspace RBAC enforcement; router mounted at `/workspaces`
-- `agentic_ingestion/` — isolated write-ingestion lifecycle (plan → approve → execute); uses Claude Agent SDK separately from query runtime
+- `agentic_ingestion/` — isolated write-ingestion lifecycle; uses a separate agent loop from query runtime
 - `audit.py` — structured audit logger; every significant action emits an audit event
 
 **Data flow for a chat turn:**
 1. `POST /chat/stream` → `ChatStreamService` → `AgentRuntime.run_turn()`
-2. `AgentGuardrails` validates the user message
-3. SDK system prompt assembled from: static BI prompt + dataset hints + user role/RLS context + previous structured result
-4. `ClaudeSDKClient` runs with in-process MCP server; `PreToolUse`/`PostToolUse`/`PostToolUseFailure` hooks emit SSE events and write audit entries
-5. Each MCP tool handler calls `ToolCallingService` → `secure_query_sql()` → DuckDB
-6. SDK returns structured final answer (JSON schema); normalized to ECharts/Recharts spec and emitted as `spec` + `final` SSE events
-7. Session state persisted to `UPLOAD_DIR/state/agent_sessions.sqlite3`
+2. `AgentGuardrails` validates the user message; `agentic_ingestion/routing.py` decides `query` vs `write_ingestion` route
+3. System prompt assembled from: `agent_prompting.build_agent_system_prompt()` + dataset hints + user role/RLS context + previous structured result
+4. `OpenAIAgentLoopClient` runs the ReAct loop; each tool call goes through `ToolCallingService` → `secure_query_sql()` → DuckDB; SSE events emitted per step
+5. Final answer (JSON schema) normalized to ECharts/Recharts spec by `ChartStrategyRouter` and emitted as `spec` + `final` SSE events
+6. Session state persisted to `UPLOAD_DIR/state/agent_sessions.sqlite3`
 
 **SSE event types:** `planning`, `tool_use`, `tool_result`, `spec`, `final`, `error` (plus legacy mirrors `reasoning`, `tool`)
 
@@ -96,33 +106,44 @@ FastAPI app defined in `main.py`. All routes (except `/healthz` and `/auth/login
 Next.js App Router. Single entry page renders `<AppShell />`.
 
 **Layout:**
-- `AppShell` — top-level shell with `GlobalSidebar` + panel switching (`chat` / `workspace` / `both`)
-- Keyboard shortcuts: `⌘/Ctrl+1` (chat), `+2` (workspace), `+3` (split), `+B` (toggle sidebar)
+- `AppShell` — top-level shell with `GlobalSidebar` + panel switching; auto-creates workspace on first load; guards with `WorkspaceOnboardingGate`
+- Four panel modes: `chat` | `workspace` | `both` | `catalog`
+- Keyboard shortcuts: `⌘/Ctrl+1` (chat), `+2` (workspace), `+3` (split), `+4` (catalog), `+B` (toggle sidebar)
 - `ChatPanel` — calls `POST /chat/stream`, consumes SSE events, archives returned specs as chart assets
 - `WorkspacePanel` — React Flow canvas with chart nodes, text nodes, drag-layout, local save
+- `WorkspaceCatalogPage` — read-only table catalog view bound to the active workspace
 
 **State management:**
-- `ui-store.ts` (Zustand) — active panel, sidebar open state
+- `ui-store.ts` (Zustand) — active panel (`chat|workspace|both|catalog`), sidebar open state, sending/saving flags
 - `chat-store.ts` (Zustand) — chat sessions and messages
-- `workspace-store.ts` (Zustand) — workspaces and active workspace; session/workspace/chart-asset lists are currently mock/localStorage backed (not synced to backend)
+- `workspace-store.ts` (Zustand) — workspaces and active workspace
 - `asset-store.ts` (Zustand) — chart assets
 - TanStack Query — API calls in `hooks/use-chat.ts`, `hooks/use-workspace.ts`, `hooks/use-chart-assets.ts`
 
 **API client lives in `lib/`:** `lib/auth/`, `lib/chat/`, `lib/workspace/`, `lib/ingestion/`
 
-**Chart rendering:** ECharts for advanced types (heatmap, gauge, sankey, sunburst, boxplot, graph, map, multi-series line); Recharts for common types (bar, line, pie, area, scatter, funnel, table, single_value)
+**i18n:** `lib/i18n/context.tsx` provides `useI18n()` hook with `t()`, `locale`, `setLocale`; dictionaries in `lib/i18n/dictionary.ts`; locale persisted to localStorage
+
+**GenUI layer:** `components/genui/chart-renderer.tsx` + `registry.tsx` handle spec-to-chart rendering; `state-panels.tsx` shows agent planning/tool-use states inline
+
+**Chart rendering:** `ChartStrategyRouter` routes by type and complexity — ECharts for advanced types (heatmap, gauge, sankey, sunburst, boxplot, graph, map, multi-series line); Recharts for common types (bar, line, pie, area, scatter, funnel, table, single_value)
 
 **Auth:** Next.js calls `/auth/login` at session start and caches the Bearer token; all API requests attach it automatically.
 
 ### Ingestion Pipeline (`apps/api/agentic_ingestion/`)
 
-Three-phase lifecycle, isolated from query runtime:
-1. `POST /ingestion/uploads` — upload Excel, trigger planning Agent
-2. `POST /ingestion/plan` — Write Ingestion Agent generates a schema proposal
-3. `POST /ingestion/approve` — human approves/overrides the plan
-4. `POST /ingestion/execute` — approved plan written to DuckDB
+Five-endpoint lifecycle, isolated from query runtime:
+1. `POST /ingestion/uploads` — upload Excel files, inspect columns
+2. `POST /ingestion/plan` — Write Ingestion Agent generates a schema proposal (table name, column types, write mode)
+3. `POST /ingestion/setup/confirm` — user confirms catalog setup (business type, time grain)
+4. `POST /ingestion/approve` — human approves/overrides the plan proposal
+5. `POST /ingestion/execute` — approved plan written to DuckDB
 
-The ingestion Agent also uses Claude Agent SDK in-process MCP tools, with DuckDB write access restricted to approved schema only. SQL identifiers and DuckDB type names are validated against strict regexes (`SAFE_IDENTIFIER_RE`, `SAFE_DUCKDB_TYPE_RE`) before any DDL executes.
+**Route selection:** `agentic_ingestion/routing.py` `select_agent_route()` inspects message keywords, file attachments, and active ingestion job status to pick `write_ingestion` vs `query` route on every chat turn.
+
+DuckDB write access is restricted to the approved schema only. SQL identifiers and DuckDB type names are validated against strict regexes (`SAFE_IDENTIFIER_RE`, `SAFE_DUCKDB_TYPE_RE`) before any DDL executes.
+
+**Feature flag:** `AGENTIC_INGESTION_ENABLED` (default `false` in `.env.example`; set `true` to enable the ingestion UI and endpoints).
 
 ### Data Storage
 
@@ -138,26 +159,34 @@ HR and PM metric definitions in YAML, loaded by `SemanticRegistry`. Metrics map 
 ### Tests (`tests/`)
 
 - `tests/api/` — FastAPI route tests (httpx `TestClient`)
-- `tests/unit/` — pure unit tests for runtime modules, security, semantic DSL
-- `tests/integration/` — DuckDB isolation, agent runtime, full tool-calling chain
-- `tests/security/` — SQL injection, RLS bypass, sensitive column access
-- `tests/e2e/` — Playwright browser tests (run against built Next.js)
+- `tests/unit/` — pure unit tests for runtime modules, security, semantic DSL, chart strategy, ingestion schema
+- `tests/integration/` — DuckDB isolation, agent runtime, full tool-calling chain, state storage
+- `tests/security/` — SQL injection, RLS bypass, sensitive column access, RBAC, audit log
+- `tests/evals/` — agent prompting quality evals
+- `tests/e2e/` — share rehydration flow (Python)
+- `tests/smoke/run_smoke_flow.py` — end-to-end smoke: healthz → login → upload → query → chat → save → share
+- `tests/scripts/` — env-check and shell-env validation
 - `tests/agentic_ingestion_fakes.py` — shared fakes for ingestion tests
 
-Frontend tests in `apps/web/tests/` use Vitest (unit, jsdom) and Playwright (e2e).
+Frontend tests in `apps/web/tests/` use Vitest (unit, jsdom) and Playwright (e2e). UI test coverage includes: sidebar, chat-input, chart-node, workspace-catalog, ingestion-lifecycle-panel, genui-registry, onboarding-gate, share-view, workbench states.
 
 ## Key Configuration
 
-Backend `.env` (generated by `make bootstrap`):
-- `AI_API_KEY` / `ANTHROPIC_AUTH_TOKEN` — provider auth (DeepSeek by default)
-- `ANTHROPIC_BASE_URL` — defaults to DeepSeek's Anthropic-compatible endpoint
-- `AI_MODEL` — defaults to `deepseek-chat`; the Agent SDK routes through this provider
-- `CLAUDE_AGENT_SDK_ENABLED=true` — required; Agent runtime is the only chat path
-- `AGENT_MAX_TOOL_STEPS`, `AGENT_MAX_SQL_ROWS`, `AGENT_TIMEOUT_SECONDS` — Agent loop limits
-- `DATABASE_URL` — SQLite for view state (not DuckDB)
+Backend `.env` (generated by `make bootstrap`; see `apps/api/.env.example`):
+- `MODEL_PROVIDER_URL` — base URL for OpenAI-compatible provider (default: `https://api.deepseek.com`)
+- `AI_API_KEY` / `ANTHROPIC_AUTH_TOKEN` — provider auth key
+- `AI_MODEL` — model name (default: `deepseek-chat`)
+- `AI_TIMEOUT_SECONDS` — timeout for individual LLM calls (default: `120`)
+- `ANTHROPIC_BASE_URL` — Anthropic-compatible endpoint (default: DeepSeek's `/anthropic` path)
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL` — lightweight model for tasks like session title generation (default: `deepseek-chat`)
+- `CLAUDE_AGENT_SDK_ENABLED=true` — enables the ReAct agent runtime (required)
+- `AGENTIC_INGESTION_ENABLED` — enables the write-ingestion pipeline (default: `false`)
+- `LEGACY_DATASET_UPLOAD_ENABLED` — keeps legacy upload endpoint active (default: `true`)
+- `AGENT_MAX_TOOL_STEPS`, `AGENT_MAX_SQL_ROWS`, `AGENT_MAX_SQL_SCAN_ROWS`, `AGENT_TIMEOUT_SECONDS` — agent loop limits
+- `DATABASE_URL` — SQLite for view/catalog state (not DuckDB)
+- `CORS_ALLOW_ORIGINS` — comma-separated allowed origins (default: `http://127.0.0.1:3000,http://localhost:3000`)
 
 Frontend `.env`:
-- `NEXT_PUBLIC_DEFAULT_DATASET_TABLE` — must match the DuckDB table from the last upload; update after uploading new data
 - `NEXT_PUBLIC_API_BASE_URL`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`
 
 ## Sample Data
@@ -167,9 +196,3 @@ Upload these files via the ingestion UI or `POST /ingestion/uploads` to create a
 - `sample_data/hr_workforce_upload_sample.xlsx`
 
 After upload, use the returned `dataset_table` for subsequent chat and semantic queries.
-
-## Architecture Decision Records
-
-- `docs/adr/0001-agentic-query-runtime.md` — why Claude Agent SDK is the sole chat engine; session model; guardrails; output normalization; SSE contract
-- `docs/adr/0002-excel-upload-ingestion-current-state.md` — legacy upload context
-- `docs/adr/0003-workspace-scoped-agentic-ingestion.md` — why ingestion has its own module and lifecycle phases
