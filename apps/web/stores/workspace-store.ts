@@ -54,6 +54,7 @@ type WorkspaceState = {
   removeWebDesignRow: (rowId: string) => void;
   setWebDesignRowHeight: (rowId: string, height: number) => void;
   placeWebDesignZone: (nodeId: string, column: number, row: number) => void;
+  moveWebDesignZone: (zoneId: string, column: number, row: number) => void;
   resizeWebDesignZone: (zoneId: string, colSpan: number, rowSpan: number) => void;
   removeWebDesignZone: (zoneId: string) => void;
   setWebDesignPreview: (preview: boolean) => void;
@@ -188,10 +189,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           ...state.webDesign,
           grid: {
             ...state.webDesign.grid,
-            columns: clamp(columns, 2, 6),
+            columns: clamp(columns, 2, 10),
           },
         },
-        clamp(columns, 2, 6)
+        clamp(columns, 2, 10)
       ),
       hasUnsavedChanges: true,
     })),
@@ -265,6 +266,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
               rowSpan: 1,
             },
           ],
+        },
+        hasUnsavedChanges: true,
+      };
+    }),
+
+  moveWebDesignZone: (zoneId, column, row) =>
+    set((state) => {
+      const zone = state.webDesign.zones.find((item) => item.id === zoneId);
+      if (!zone) return {};
+
+      const safeColumn = clamp(column, 0, state.webDesign.grid.columns - zone.colSpan);
+      const safeRow = clamp(row, 0, state.webDesign.grid.rows.length - zone.rowSpan);
+      if (zone.column === safeColumn && zone.row === safeRow) return {};
+      if (zoneOverlaps(state.webDesign.zones, zoneId, safeColumn, safeRow, zone.colSpan, zone.rowSpan)) {
+        return {};
+      }
+
+      return {
+        webDesign: {
+          ...state.webDesign,
+          zones: state.webDesign.zones.map((item) =>
+            item.id === zoneId ? { ...item, column: safeColumn, row: safeRow } : item
+          ),
         },
         hasUnsavedChanges: true,
       };
@@ -359,7 +383,7 @@ function normalizeWebDesignLayout(value: unknown): WebDesignLayout {
   const layout = value as Partial<WebDesignLayout>;
   return {
     grid: {
-      columns: clamp(Number(layout.grid?.columns ?? 3), 2, 6),
+      columns: clamp(Number(layout.grid?.columns ?? 3), 2, 10),
       rows: Array.isArray(layout.grid?.rows) && layout.grid.rows.length
         ? layout.grid.rows.map((row, index) => ({
             id: String(row.id || `row-${index + 1}`),
@@ -390,6 +414,26 @@ function findNextWebDesignCell(layout: WebDesignLayout): { column: number; row: 
   }
 
   return { column: 0, row: layout.grid.rows.length };
+}
+
+function zoneOverlaps(
+  zones: WebDesignLayout["zones"],
+  zoneId: string,
+  column: number,
+  row: number,
+  colSpan: number,
+  rowSpan: number
+): boolean {
+  return zones.some((zone) => {
+    if (zone.id === zoneId) return false;
+
+    return (
+      column < zone.column + zone.colSpan &&
+      column + colSpan > zone.column &&
+      row < zone.row + zone.rowSpan &&
+      row + rowSpan > zone.row
+    );
+  });
 }
 
 function clampLayoutToColumns(layout: WebDesignLayout, columns: number): WebDesignLayout {

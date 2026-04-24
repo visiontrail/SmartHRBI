@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   BotMessageSquare,
   Check,
@@ -24,6 +24,8 @@ import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem } from "
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ChartNodeData, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
 
+const WEB_DESIGN_ZONE_MIME = "application/x-web-design-zone";
+
 export function WebDesignCanvas() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const nodes = useWorkspaceStore((s) => s.nodes);
@@ -31,6 +33,7 @@ export function WebDesignCanvas() {
   const setColumns = useWorkspaceStore((s) => s.setWebDesignColumns);
   const addRow = useWorkspaceStore((s) => s.addWebDesignRow);
   const setRowHeight = useWorkspaceStore((s) => s.setWebDesignRowHeight);
+  const moveZone = useWorkspaceStore((s) => s.moveWebDesignZone);
   const resizeZone = useWorkspaceStore((s) => s.resizeWebDesignZone);
   const removeZone = useWorkspaceStore((s) => s.removeWebDesignZone);
   const setPreview = useWorkspaceStore((s) => s.setWebDesignPreview);
@@ -85,18 +88,30 @@ export function WebDesignCanvas() {
             <span className="text-sm font-semibold">Web Page Design</span>
             {!layout.preview && (
               <>
-                <select
-                  aria-label="Grid columns"
-                  className="h-8 rounded-md border border-[#d8d1c1] bg-white px-2 text-sm"
-                  value={layout.grid.columns}
-                  onChange={(event) => setColumns(Number(event.target.value))}
-                >
-                  {[2, 3, 4, 5, 6].map((value) => (
-                    <option key={value} value={value}>
-                      {value} columns
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={layout.grid.columns <= 2}
+                    onClick={() => setColumns(layout.grid.columns - 1)}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="w-16 text-center text-sm">{layout.grid.columns} columns</span>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => {
+                      if (layout.grid.columns >= 10) {
+                        toast.error("最多只能添加 10 列");
+                        return;
+                      }
+                      setColumns(layout.grid.columns + 1);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
                 <Button variant="outline" size="sm" onClick={addRow}>
                   <Plus className="h-4 w-4" />
                   Add Row
@@ -152,56 +167,56 @@ export function WebDesignCanvas() {
         <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)] overflow-hidden">
           <SidebarEditor preview={layout.preview} />
           <div className="overflow-auto p-5">
-            <div
-              className={cn(
-                "grid rounded-md border border-[#d8d1c1] bg-white shadow-sm",
-                layout.preview && "border-transparent shadow-none"
-              )}
-              style={{
-                gridTemplateColumns: `repeat(${layout.grid.columns}, minmax(180px, 1fr))`,
-                gridTemplateRows: layout.grid.rows.map((row) => `${row.height}px`).join(" "),
-              }}
-            >
-              {layout.grid.rows.map((row, rowIndex) =>
-                Array.from({ length: layout.grid.columns }).map((_, columnIndex) => (
-                  <GridCell
-                    key={`${row.id}-${columnIndex}`}
-                    rowId={row.id}
-                    rowIndex={rowIndex}
-                    columnIndex={columnIndex}
-                    preview={layout.preview}
-                  />
-                ))
-              )}
-              {layout.zones.map((zone) => (
-                <GridZone
-                  key={zone.id}
-                  zone={zone}
-                  node={chartNodes.find((node) => node.id === zone.nodeId)}
-                  preview={layout.preview}
-                  onResize={(colSpan, rowSpan) => resizeZone(zone.id, colSpan, rowSpan)}
-                  onRemove={() => removeZone(zone.id)}
-                />
-              ))}
-            </div>
-
-            {!layout.preview && (
-              <div className="mt-3 flex flex-wrap gap-3 text-xs text-[#777166]">
-                {layout.grid.rows.map((row) => (
-                  <label key={row.id} className="flex items-center gap-2">
-                    {row.id}
-                    <input
-                      className="h-7 w-20 rounded border border-[#d8d1c1] px-2"
-                      type="number"
-                      min={120}
-                      max={800}
-                      value={row.height}
-                      onChange={(event) => setRowHeight(row.id, Number(event.target.value))}
+            <div className="relative">
+              <div
+                className={cn(
+                  "grid rounded-md border border-[#d8d1c1] bg-white shadow-sm",
+                  layout.preview && "border-transparent shadow-none"
+                )}
+                style={{
+                  gridTemplateColumns: `repeat(${layout.grid.columns}, minmax(180px, 1fr))`,
+                  gridTemplateRows: layout.grid.rows.map((row) => `${row.height}px`).join(" "),
+                }}
+              >
+                {layout.grid.rows.map((row, rowIndex) =>
+                  Array.from({ length: layout.grid.columns }).map((_, columnIndex) => (
+                    <GridCell
+                      key={`${row.id}-${columnIndex}`}
+                      rowId={row.id}
+                      rowIndex={rowIndex}
+                      columnIndex={columnIndex}
+                      preview={layout.preview}
+                      onDropZone={(zoneId) => moveZone(zoneId, columnIndex, rowIndex)}
                     />
-                  </label>
+                  ))
+                )}
+                {layout.zones.map((zone) => (
+                  <GridZone
+                    key={zone.id}
+                    zone={zone}
+                    node={chartNodes.find((node) => node.id === zone.nodeId)}
+                    preview={layout.preview}
+                    onResize={(colSpan, rowSpan) => resizeZone(zone.id, colSpan, rowSpan)}
+                    onRemove={() => removeZone(zone.id)}
+                  />
                 ))}
               </div>
-            )}
+              {!layout.preview &&
+                layout.grid.rows.slice(0, -1).map((row, index) => {
+                  const topPx = layout.grid.rows
+                    .slice(0, index + 1)
+                    .reduce((sum, r) => sum + r.height, 0);
+                  return (
+                    <RowResizeHandle
+                      key={row.id}
+                      rowId={row.id}
+                      topPx={topPx}
+                      currentHeight={row.height}
+                      onSetHeight={(height) => setRowHeight(row.id, height)}
+                    />
+                  );
+                })}
+            </div>
           </div>
         </div>
       </main>
@@ -214,17 +229,37 @@ function GridCell({
   rowIndex,
   columnIndex,
   preview,
+  onDropZone,
 }: {
   rowId: string;
   rowIndex: number;
   columnIndex: number;
   preview: boolean;
+  onDropZone: (zoneId: string) => void;
 }) {
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (preview) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (preview) return;
+    event.preventDefault();
+    const zoneId = event.dataTransfer.getData(WEB_DESIGN_ZONE_MIME);
+    if (zoneId) {
+      onDropZone(zoneId);
+    }
+  };
+
   return (
     <div
       id={columnIndex === 0 ? rowId : undefined}
+      aria-label={`Grid cell row ${rowIndex + 1} column ${columnIndex + 1}`}
       className={cn("border border-dashed border-[#e2dccf]", preview && "border-transparent")}
       style={{ gridColumn: columnIndex + 1, gridRow: rowIndex + 1 }}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     />
   );
 }
@@ -243,9 +278,25 @@ function GridZone({
   onRemove: () => void;
 }) {
   if (!node) return null;
+  const handleDragStart = (event: DragEvent<HTMLElement>) => {
+    if (preview) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(WEB_DESIGN_ZONE_MIME, zone.id);
+    event.dataTransfer.setData("text/plain", zone.id);
+  };
+
   return (
     <section
-      className="relative z-10 overflow-hidden rounded-md border border-[#cfc5b2] bg-white"
+      aria-label={`Chart zone ${node.data.title}`}
+      draggable={!preview}
+      onDragStart={handleDragStart}
+      className={cn(
+        "relative z-10 overflow-hidden rounded-md border border-[#cfc5b2] bg-white",
+        !preview && "cursor-grab active:cursor-grabbing"
+      )}
       style={{
         gridColumn: `${zone.column + 1} / span ${zone.colSpan}`,
         gridRow: `${zone.row + 1} / span ${zone.rowSpan}`,
@@ -317,6 +368,61 @@ function SidebarEditor({ preview }: { preview: boolean }) {
         ))}
       </div>
     </aside>
+  );
+}
+
+function RowResizeHandle({
+  rowId,
+  topPx,
+  currentHeight,
+  onSetHeight,
+}: {
+  rowId: string;
+  topPx: number;
+  currentHeight: number;
+  onSetHeight: (height: number) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+
+  const handleMouseDown = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = currentHeight;
+    setDragging(true);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: MouseEvent) => {
+      onSetHeight(startHeight + ev.clientY - startY);
+    };
+    const onUp = () => {
+      setDragging(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div
+      aria-label={`Resize ${rowId}`}
+      className={cn(
+        "group absolute inset-x-0 z-30 flex h-3 cursor-row-resize select-none items-center",
+        dragging && "z-40"
+      )}
+      style={{ top: topPx - 6 }}
+      onMouseDown={handleMouseDown}
+    >
+      <div
+        className={cn(
+          "h-0.5 w-full transition-colors",
+          dragging ? "bg-[#996b35]" : "bg-transparent group-hover:bg-[#d8d1c1]"
+        )}
+      />
+    </div>
   );
 }
 

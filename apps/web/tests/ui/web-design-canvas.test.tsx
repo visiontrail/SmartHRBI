@@ -1,6 +1,6 @@
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +33,16 @@ const chartNode: WorkspaceNode = {
     },
   },
 };
+
+function createDataTransfer() {
+  const data = new Map<string, string>();
+  return {
+    dropEffect: "",
+    effectAllowed: "",
+    getData: vi.fn((type: string) => data.get(type) ?? ""),
+    setData: vi.fn((type: string, value: string) => data.set(type, value)),
+  };
+}
 
 function renderWithProviders(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -95,6 +105,56 @@ describe("WebDesignCanvas state", () => {
     const zone = useWorkspaceStore.getState().webDesign.zones[0];
     expect(zone.colSpan).toBe(1);
     expect(zone.rowSpan).toBe(1);
+  });
+
+  it("moves chart zones between empty grid cells", () => {
+    const store = useWorkspaceStore.getState();
+    store.placeWebDesignZone("node-chart", 0, 0);
+    const zoneId = useWorkspaceStore.getState().webDesign.zones[0].id;
+
+    useWorkspaceStore.getState().moveWebDesignZone(zoneId, 1, 1);
+
+    const zone = useWorkspaceStore.getState().webDesign.zones[0];
+    expect(zone.column).toBe(1);
+    expect(zone.row).toBe(1);
+  });
+
+  it("keeps moved chart zones from overlapping another chart area", () => {
+    useWorkspaceStore.setState({
+      nodes: [
+        chartNode,
+        {
+          ...chartNode,
+          id: "node-chart-2",
+          data: { ...chartNode.data, assetId: "chart-2", title: "Turnover" },
+        },
+      ],
+    });
+
+    const store = useWorkspaceStore.getState();
+    store.placeWebDesignZone("node-chart", 0, 0);
+    store.placeWebDesignZone("node-chart-2", 1, 0);
+    const zoneId = useWorkspaceStore.getState().webDesign.zones[0].id;
+
+    useWorkspaceStore.getState().moveWebDesignZone(zoneId, 1, 0);
+
+    const zone = useWorkspaceStore.getState().webDesign.zones[0];
+    expect(zone.column).toBe(0);
+    expect(zone.row).toBe(0);
+  });
+
+  it("supports dragging a chart zone to another grid area", () => {
+    useWorkspaceStore.getState().placeWebDesignZone("node-chart", 0, 0);
+    renderWithProviders(<WebDesignCanvas />);
+
+    const dataTransfer = createDataTransfer();
+    fireEvent.dragStart(screen.getByLabelText("Chart zone Headcount"), { dataTransfer });
+    fireEvent.dragOver(screen.getByLabelText("Grid cell row 2 column 2"), { dataTransfer });
+    fireEvent.drop(screen.getByLabelText("Grid cell row 2 column 2"), { dataTransfer });
+
+    const zone = useWorkspaceStore.getState().webDesign.zones[0];
+    expect(zone.column).toBe(1);
+    expect(zone.row).toBe(1);
   });
 
   it("keeps sidebar nesting at two levels", () => {
