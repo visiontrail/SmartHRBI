@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatInput } from "../../components/chat/chat-input";
+import { I18nProvider } from "../../lib/i18n/context";
+import { I18N_STORAGE_KEY } from "../../lib/i18n/dictionary";
 import { useChatStore } from "../../stores/chat-store";
 import { useUIStore } from "../../stores/ui-store";
 
@@ -16,6 +18,7 @@ vi.mock("../../hooks/use-chat", () => ({
 describe("ChatInput chart type picker", () => {
   beforeEach(() => {
     mutate.mockReset();
+    window.localStorage.clear();
     useChatStore.setState({
       composerText: "",
       pendingIngestionBySession: {},
@@ -23,6 +26,27 @@ describe("ChatInput chart type picker", () => {
     useUIStore.setState({
       isSending: false,
     });
+  });
+
+  it("localizes chart type suggestions after switching to Chinese", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(I18N_STORAGE_KEY, "zh-CN");
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(ChatInput, { sessionId: "session-1" })
+      )
+    );
+
+    const input = await screen.findByLabelText("对话输入框");
+    await user.type(input, "#");
+
+    expect(await screen.findByRole("listbox", { name: "图表类型选择器" })).toBeInTheDocument();
+    expect(screen.getByText("柱状图")).toBeInTheDocument();
+    expect(screen.getByText("比较")).toBeInTheDocument();
+    expect(screen.getByText("比较不同类别的数值。")).toBeInTheDocument();
   });
 
   it("opens chart type suggestions on # and sends the selected chart_type", async () => {

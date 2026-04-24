@@ -9,15 +9,15 @@ import { useSendMessage } from "@/hooks/use-chat";
 import { useI18n } from "@/lib/i18n/context";
 import { cn } from "@/lib/utils";
 import {
-  QUERY_CHART_TYPE_OPTIONS,
   findQueryChartType,
+  getQueryChartTypeOptions,
   type ChartTypeOption,
   type QueryChartType,
 } from "@/lib/charts/chart-type-options";
 import type { IngestionProposalAction, IngestionTimeGrain } from "@/types/ingestion";
 
 export function ChatInput({ sessionId }: { sessionId: string }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const composerText = useChatStore((s) => s.composerText);
   const setComposerText = useChatStore((s) => s.setComposerText);
   const pendingApproval = useChatStore((s) => s.pendingIngestionBySession[sessionId]);
@@ -30,14 +30,15 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
   const [selectedChartType, setSelectedChartType] = useState<QueryChartType | null>(null);
   const [chartTrigger, setChartTrigger] = useState<ChartTriggerState | null>(null);
   const [activeChartIndex, setActiveChartIndex] = useState(0);
+  const chartOptions = useMemo(() => getQueryChartTypeOptions(locale), [locale]);
   const approvalOptions = useMemo(
     () => collectPendingApprovalOptions(pendingApproval?.plan.humanApproval.options),
     [pendingApproval]
   );
   const inputLockedByApproval = Boolean(pendingApproval) && !customApprovalInput;
   const filteredChartOptions = useMemo(
-    () => filterChartOptions(chartTrigger?.query ?? ""),
-    [chartTrigger?.query]
+    () => filterChartOptions(chartOptions, chartTrigger?.query ?? ""),
+    [chartOptions, chartTrigger?.query]
   );
   const activeChartOption = filteredChartOptions[Math.min(activeChartIndex, filteredChartOptions.length - 1)] ?? null;
 
@@ -294,7 +295,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             <textarea
               ref={textareaRef}
               value={composerText}
-              aria-label="Chat Input"
+              aria-label={t("chat.inputAriaLabel")}
               aria-autocomplete="list"
               aria-controls="chart-type-picker"
               aria-activedescendant={activeChartOption ? `chart-type-option-${activeChartOption.type}` : undefined}
@@ -336,6 +337,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
                 activeIndex={activeChartIndex}
                 onActiveIndexChange={setActiveChartIndex}
                 onSelect={applyChartSelection}
+                t={t}
               />
             ) : null}
           </div>
@@ -387,12 +389,12 @@ function getChartTriggerState(text: string, caretPosition: number): ChartTrigger
   };
 }
 
-function filterChartOptions(query: string): ChartTypeOption[] {
+function filterChartOptions(options: ChartTypeOption[], query: string): ChartTypeOption[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
-    return QUERY_CHART_TYPE_OPTIONS;
+    return options;
   }
-  return QUERY_CHART_TYPE_OPTIONS.filter((option) => {
+  return options.filter((option) => {
     const haystack = `${option.type} ${option.label} ${option.description} ${option.group}`.toLowerCase();
     return haystack.includes(normalized);
   });
@@ -417,11 +419,13 @@ function ChartTypePicker({
   activeIndex,
   onActiveIndexChange,
   onSelect,
+  t,
 }: {
   options: ChartTypeOption[];
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
   onSelect: (option: ChartTypeOption) => void;
+  t: (key: string, params?: Record<string, string | number | null | undefined>) => string;
 }) {
   const boundedActiveIndex = Math.min(activeIndex, options.length - 1);
   const activeOption = options[boundedActiveIndex] ?? options[0];
@@ -451,7 +455,7 @@ function ChartTypePicker({
     <div
       id="chart-type-picker"
       role="listbox"
-      aria-label="Chart type picker"
+      aria-label={t("chat.chartTypePicker.ariaLabel")}
       className="absolute bottom-[calc(100%+8px)] left-0 z-30 grid w-full max-w-[720px] grid-cols-[minmax(210px,280px)_1fr] overflow-hidden rounded-comfortable border border-border-cream bg-ivory shadow-[0_18px_48px_rgba(38,35,28,0.16)]"
     >
       <div
