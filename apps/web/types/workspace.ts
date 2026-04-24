@@ -26,6 +26,8 @@ export type TextNodeData = {
   type: "text";
   content: string;
   fontSize?: number;
+  fontWeight?: "normal" | "bold";
+  color?: string;
   width: number;
   height: number;
 };

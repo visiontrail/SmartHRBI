@@ -30,6 +30,9 @@ import { toast } from "sonner";
 import { CANVAS_FORMAT_PRESETS, getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import type { TextNodeData } from "@/types/workspace";
 
+const DEFAULT_TEXT_NODE_WIDTH = 480;
+const DEFAULT_TEXT_NODE_HEIGHT = 220;
+
 export function WorkspaceToolbar() {
   const { t } = useI18n();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -98,14 +101,22 @@ export function WorkspaceToolbar() {
     const nodeData: TextNodeData = {
       type: "text",
       content: t("workspace.defaultTextContent"),
-      width: 400,
-      height: 80,
+      fontSize: 18,
+      fontWeight: "normal",
+      color: "#3f3d39",
+      width: DEFAULT_TEXT_NODE_WIDTH,
+      height: DEFAULT_TEXT_NODE_HEIGHT,
     };
 
     addNode({
       id: `node-${generateId()}`,
       type: "textNode",
-      position: { x: 50 + (nodes.length % 4) * 200, y: 50 + Math.floor(nodes.length / 4) * 120 },
+      position: { x: 50 + (nodes.length % 3) * 520, y: 50 + Math.floor(nodes.length / 3) * 260 },
+      dragHandle: ".text-node-drag-handle",
+      width: DEFAULT_TEXT_NODE_WIDTH,
+      height: DEFAULT_TEXT_NODE_HEIGHT,
+      initialWidth: DEFAULT_TEXT_NODE_WIDTH,
+      initialHeight: DEFAULT_TEXT_NODE_HEIGHT,
       data: nodeData,
     });
   };

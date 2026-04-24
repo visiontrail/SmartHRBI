@@ -1,18 +1,21 @@
 "use client";
 
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useEffect } from "react";
 import { type NodeProps } from "@xyflow/react";
-import { GripVertical, Trash2, Pencil, Check } from "lucide-react";
+import { Bold, Check, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useI18n } from "@/lib/i18n/context";
 import type { TextNodeData } from "@/types/workspace";
 import { ResizableNode } from "./resizable-node";
 
-const DEFAULT_TEXT_NODE_WIDTH = 400;
-const DEFAULT_TEXT_NODE_HEIGHT = 80;
+const DEFAULT_TEXT_NODE_WIDTH = 480;
+const DEFAULT_TEXT_NODE_HEIGHT = 220;
 const MIN_TEXT_NODE_WIDTH = 220;
-const MIN_TEXT_NODE_HEIGHT = 80;
+const MIN_TEXT_NODE_HEIGHT = 140;
+const DEFAULT_TEXT_FONT_SIZE = 18;
+const DEFAULT_TEXT_COLOR = "#3f3d39";
+const TEXT_COLORS = ["#3f3d39", "#c96442", "#3f6f5f", "#2457a6", "#7a4c9f"];
 
 function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
   const { t } = useI18n();
@@ -20,68 +23,141 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
   const updateNode = useWorkspaceStore((s) => s.updateNode);
   const removeNode = useWorkspaceStore((s) => s.removeNode);
 
+  const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(nodeData.content);
 
+  useEffect(() => {
+    setEditContent(nodeData.content);
+  }, [nodeData.content]);
+
   const handleSave = useCallback(() => {
-    updateNode(id, { data: { ...nodeData, content: editContent } as any });
+    updateNode(id, { data: { content: editContent } as any });
     setIsEditing(false);
-  }, [id, nodeData, editContent, updateNode]);
+  }, [id, editContent, updateNode]);
+
+  useEffect(() => {
+    if (!selected && isEditing) {
+      handleSave();
+    }
+  }, [handleSave, isEditing, selected]);
+
+  const handleStyleChange = useCallback(
+    (style: Partial<TextNodeData>) => {
+      updateNode(id, { data: style as any });
+    },
+    [id, updateNode]
+  );
 
   const nodeWidth = width ?? nodeData.width ?? DEFAULT_TEXT_NODE_WIDTH;
   const nodeHeight = height ?? nodeData.height ?? DEFAULT_TEXT_NODE_HEIGHT;
+  const fontSize = nodeData.fontSize ?? DEFAULT_TEXT_FONT_SIZE;
+  const fontWeight = nodeData.fontWeight ?? "normal";
+  const color = nodeData.color ?? DEFAULT_TEXT_COLOR;
+  const textStyle = {
+    color,
+    fontSize,
+    fontWeight,
+    lineHeight: 1.45,
+  };
 
-  return (
-    <div
-      className={`relative flex flex-col bg-ivory rounded-comfortable border transition-shadow ${
-        selected ? "border-terracotta shadow-[0px_0px_0px_2px_#c96442]" : "border-border-cream"
-      }`}
-      style={{
-        width: nodeWidth,
-        height: nodeHeight,
-      }}
-    >
-      <ResizableNode
-        id={id}
-        selected={selected}
-        minWidth={MIN_TEXT_NODE_WIDTH}
-        minHeight={MIN_TEXT_NODE_HEIGHT}
-      />
+  const textLayer = (
+    <p className="whitespace-pre-wrap break-words" style={textStyle}>
+      {nodeData.content}
+    </p>
+  );
 
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border-cream bg-ivory cursor-grab">
-        <GripVertical className="w-3.5 h-3.5 text-stone-gray shrink-0" />
-        <span className="text-label text-stone-gray flex-1">{t("workspace.textBlock")}</span>
+  // Editing mode: full panel with toolbar and textarea
+  if (isEditing) {
+    return (
+      <div
+        className="relative flex flex-col bg-ivory rounded-comfortable border border-terracotta shadow-[0px_0px_0px_2px_#c96442]"
+        style={{ width: nodeWidth, height: nodeHeight }}
+      >
+        <ResizableNode
+          id={id}
+          selected={selected}
+          minWidth={MIN_TEXT_NODE_WIDTH}
+          minHeight={MIN_TEXT_NODE_HEIGHT}
+        />
 
-        <div className="flex items-center gap-0.5 shrink-0">
-          {isEditing ? (
-            <Button variant="ghost" size="icon-sm" onClick={handleSave}>
-              <Check className="w-3 h-3 text-terracotta" />
+        <div className="flex items-center gap-2 border-b border-border-cream bg-ivory px-3 py-1.5">
+          <span className="flex-1 text-label text-stone-gray">{t("workspace.textBlock")}</span>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleSave}
+            >
+              <Check className="h-3 w-3 text-terracotta" />
             </Button>
-          ) : (
-            <Button variant="ghost" size="icon-sm" onClick={() => setIsEditing(true)}>
-              <Pencil className="w-3 h-3" />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => removeNode(id)}
+              className="hover:text-error-crimson"
+            >
+              <Trash2 className="h-3 w-3" />
             </Button>
-          )}
+          </div>
+        </div>
+
+        <div
+          className="nodrag flex items-center gap-1 border-b border-border-cream bg-parchment/70 px-3 py-1.5"
+          onMouseDown={(e) => e.preventDefault()}
+        >
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => removeNode(id)}
-            className="hover:text-error-crimson"
+            aria-label="Decrease text size"
+            onClick={() => handleStyleChange({ fontSize: Math.max(12, fontSize - 2) })}
           >
-            <Trash2 className="w-3 h-3" />
+            <Minus className="h-3 w-3" />
           </Button>
+          <span className="w-8 text-center text-label text-stone-gray">{fontSize}</span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Increase text size"
+            onClick={() => handleStyleChange({ fontSize: Math.min(48, fontSize + 2) })}
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+          <Button
+            variant={fontWeight === "bold" ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label="Toggle bold"
+            onClick={() =>
+              handleStyleChange({ fontWeight: fontWeight === "bold" ? "normal" : "bold" })
+            }
+          >
+            <Bold className="h-3.5 w-3.5" />
+          </Button>
+          <div className="ml-1 flex items-center gap-1">
+            {TEXT_COLORS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-label={`Set text color ${item}`}
+                className={`h-5 w-5 rounded-full border ${
+                  color === item ? "border-near-black ring-2 ring-focus-blue" : "border-border-cream"
+                }`}
+                style={{ backgroundColor: item }}
+                onClick={() => handleStyleChange({ color: item })}
+              />
+            ))}
+          </div>
         </div>
-      </div>
 
-      {/* Content */}
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-        {isEditing ? (
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
           <textarea
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
-            className="w-full h-full min-h-[48px] bg-transparent text-body-sm text-near-black resize-none focus:outline-none border border-border-cream rounded-subtle p-2"
+            className="h-full min-h-[92px] w-full resize-none rounded-subtle border border-border-cream bg-transparent p-2 focus:outline-none"
+            style={textStyle}
             autoFocus
+            onBlur={handleSave}
             onKeyDown={(e) => {
               if (e.key === "Enter" && e.metaKey) handleSave();
               if (e.key === "Escape") {
@@ -90,15 +166,32 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
               }
             }}
           />
-        ) : (
-          <p
-            className="text-body-sm text-olive-gray leading-relaxed whitespace-pre-wrap cursor-pointer"
-            onDoubleClick={() => setIsEditing(true)}
-          >
-            {nodeData.content}
-          </p>
-        )}
+        </div>
       </div>
+    );
+  }
+
+  // Default view: whole container is the drag handle zone; edit button opts out via nodrag.
+  return (
+    <div
+      className={`text-node-drag-handle relative bg-transparent ${isHovered ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+      style={{ width: nodeWidth, minHeight: nodeHeight }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {(isHovered || selected) && (
+        <div className="pointer-events-none absolute inset-y-0 left-0 flex -translate-x-full items-start pr-2 pt-1">
+          <button
+            type="button"
+            aria-label="Edit text block"
+            className="nodrag pointer-events-auto flex h-7 w-7 items-center justify-center rounded-comfortable border border-border-cream bg-ivory text-stone-gray shadow-whisper hover:bg-warm-sand hover:text-near-black"
+            onClick={() => setIsEditing(true)}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+      {textLayer}
     </div>
   );
 }

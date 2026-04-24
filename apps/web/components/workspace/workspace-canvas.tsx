@@ -31,6 +31,12 @@ const nodeTypes: NodeTypes = {
   textNode: TextNode,
 };
 
+function normalizeWorkspaceNodes(nodes: WorkspaceNode[]): Node[] {
+  return nodes.map((node) =>
+    node.type === "textNode" ? { ...node, dragHandle: ".text-node-drag-handle" } : node
+  ) as Node[];
+}
+
 export function WorkspaceCanvas() {
   const storeNodes = useWorkspaceStore((s) => s.nodes);
   const storeEdges = useWorkspaceStore((s) => s.edges);
@@ -39,7 +45,7 @@ export function WorkspaceCanvas() {
   const setStoreNodes = useWorkspaceStore((s) => s.setNodes);
   const setViewport = useWorkspaceStore((s) => s.setViewport);
 
-  const [nodes, setNodes] = useNodesState(storeNodes as Node[]);
+  const [nodes, setNodes] = useNodesState(normalizeWorkspaceNodes(storeNodes));
   const [edges, setEdges] = useEdgesState(storeEdges as Edge[]);
   const nodesRef = useRef<Node[]>(storeNodes as Node[]);
 
@@ -47,7 +53,7 @@ export function WorkspaceCanvas() {
   const canvasPreset = getCanvasFormatPreset(canvasFormat.id);
 
   useEffect(() => {
-    const nextNodes = storeNodes as Node[];
+    const nextNodes = normalizeWorkspaceNodes(storeNodes);
     nodesRef.current = nextNodes;
     setNodes(nextNodes);
   }, [storeNodes, setNodes]);
@@ -92,6 +98,8 @@ export function WorkspaceCanvas() {
 
   return (
     <div className="h-full w-full">
+      {/* suppress ReactFlow selection outline for text nodes — editing panel provides its own indicator */}
+      <style>{`.react-flow__node-textNode { outline: none !important; box-shadow: none !important; }`}</style>
       <ReactFlow
         nodes={nodes}
         edges={edges}
