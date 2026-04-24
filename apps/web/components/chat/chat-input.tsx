@@ -423,7 +423,29 @@ function ChartTypePicker({
   onActiveIndexChange: (index: number) => void;
   onSelect: (option: ChartTypeOption) => void;
 }) {
-  const activeOption = options[Math.min(activeIndex, options.length - 1)] ?? options[0];
+  const boundedActiveIndex = Math.min(activeIndex, options.length - 1);
+  const activeOption = options[boundedActiveIndex] ?? options[0];
+  const listRef = useRef<HTMLDivElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    const activeElement = optionRefs.current[boundedActiveIndex];
+    if (!list || !activeElement) return;
+
+    const itemTop = activeElement.offsetTop;
+    const itemBottom = itemTop + activeElement.offsetHeight;
+    const visibleTop = list.scrollTop;
+    const visibleBottom = visibleTop + list.clientHeight;
+
+    if (itemTop < visibleTop) {
+      list.scrollTo({ top: itemTop, behavior: "smooth" });
+      return;
+    }
+    if (itemBottom > visibleBottom) {
+      list.scrollTo({ top: itemBottom - list.clientHeight, behavior: "smooth" });
+    }
+  }, [boundedActiveIndex, options.length]);
 
   return (
     <div
@@ -432,11 +454,18 @@ function ChartTypePicker({
       aria-label="Chart type picker"
       className="absolute bottom-[calc(100%+8px)] left-0 z-30 grid w-full max-w-[720px] grid-cols-[minmax(210px,280px)_1fr] overflow-hidden rounded-comfortable border border-border-cream bg-ivory shadow-[0_18px_48px_rgba(38,35,28,0.16)]"
     >
-      <div className="max-h-[320px] overflow-y-auto border-r border-border-cream py-2">
+      <div
+        id="chart-type-options"
+        ref={listRef}
+        className="max-h-[320px] overflow-y-auto border-r border-border-cream py-2"
+      >
         {options.map((option, index) => {
-          const active = index === activeIndex;
+          const active = index === boundedActiveIndex;
           return (
             <button
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
               id={`chart-type-option-${option.type}`}
               key={option.type}
               type="button"
