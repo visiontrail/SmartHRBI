@@ -723,10 +723,21 @@ function ChartExampleShape({ type }: { type: QueryChartType }) {
   if (type === "map") {
     return (
       <>
-        <path d="M88 58 L136 34 L190 46 L232 78 L218 124 L164 146 L110 130 L76 92 Z" fill="#e0f3db" stroke="#4b7f8c" strokeWidth="4" />
-        <path d="M136 34 L154 82 L108 126 L76 92 Z" fill="#a8ddb5" />
-        <path d="M154 82 L232 78 L218 124 L164 146 Z" fill="#43a2ca" opacity="0.72" />
-        <path d="M154 82 L190 46 L232 78 Z" fill="#0868ac" opacity="0.76" />
+        {/* Simplified China mainland outline */}
+        <path
+          d="M52,82 L62,48 L90,38 L118,28 L152,24 L188,22 L212,18 L230,30 L232,52 L238,72 L236,86 L242,102 L238,114 L234,126 L218,138 L198,148 L174,148 L154,142 L142,132 L126,122 L108,112 L90,104 L72,92 Z"
+          fill="#e0f3db"
+          stroke="#4b7f8c"
+          strokeWidth="2"
+        />
+        {/* Northeast region */}
+        <path d="M188,22 L212,18 L230,30 L232,52 L210,62 L192,50 Z" fill="#43a2ca" opacity="0.7" />
+        {/* East coast region */}
+        <path d="M210,62 L232,52 L238,72 L236,86 L242,102 L238,114 L222,110 L218,86 Z" fill="#c96442" opacity="0.6" />
+        {/* South region */}
+        <path d="M222,110 L238,114 L234,126 L218,138 L198,148 L178,146 L182,126 Z" fill="#a8ddb5" opacity="0.8" />
+        {/* Hainan island */}
+        <ellipse cx="200" cy="156" rx="11" ry="5.5" fill="#a8ddb5" stroke="#4b7f8c" strokeWidth="1.5" />
       </>
     );
   }
