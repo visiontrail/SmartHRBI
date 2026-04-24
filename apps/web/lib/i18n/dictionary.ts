@@ -10,6 +10,7 @@ export type DictionaryMap = Record<string, DictionaryValue>;
 export const DICTIONARY: Record<Locale, DictionaryMap> = {
   "en-US": {
     "app.loadingWorkspaces": "Loading workspaces...",
+    "app.resizeChatCanvas": "Resize chat and canvas panels",
 
     "language.label": "Language",
     "language.en": "EN",
@@ -311,6 +312,7 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
   },
   "zh-CN": {
     "app.loadingWorkspaces": "正在加载工作空间...",
+    "app.resizeChatCanvas": "调整对话与画布宽度",
 
     "language.label": "语言",
     "language.en": "EN",
