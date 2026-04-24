@@ -2,13 +2,18 @@ import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "../../components/ui/tooltip";
+import { WebDesignCanvas } from "../../components/workspace/web-design-canvas";
 import { WorkspaceToolbar } from "../../components/workspace/workspace-toolbar";
 import { DEFAULT_CANVAS_FORMAT } from "../../lib/workspace/canvas-formats";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import type { WorkspaceNode } from "../../types/workspace";
+
+vi.mock("@/components/charts/chart-preview", () => ({
+  ChartPreview: () => <div data-testid="chart-preview" />,
+}));
 
 const chartNode: WorkspaceNode = {
   id: "node-chart",
@@ -102,6 +107,90 @@ describe("WebDesignCanvas state", () => {
     const firstSection = useWorkspaceStore.getState().webDesign.sidebar[0];
     expect(firstSection.children).toHaveLength(1);
     expect(firstSection.children[0].children).toHaveLength(0);
+  });
+
+  it("allows publishing charts whose data is stored in an ECharts dataset", () => {
+    useWorkspaceStore.setState({
+      nodes: [
+        {
+          ...chartNode,
+          data: {
+            ...chartNode.data,
+            spec: {
+              ...chartNode.data.spec,
+              echartsOption: {
+                dataset: {
+                  source: [
+                    ["department", "headcount"],
+                    ["HR", 4],
+                  ],
+                },
+                xAxis: { type: "category" },
+                yAxis: { type: "value" },
+                series: [{ type: "bar" }],
+              },
+            },
+          },
+        },
+      ],
+      webDesign: {
+        ...useWorkspaceStore.getState().webDesign,
+        zones: [
+          {
+            id: "zone-1",
+            nodeId: "node-chart",
+            chartId: "chart-1",
+            column: 0,
+            row: 0,
+            colSpan: 1,
+            rowSpan: 1,
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<WebDesignCanvas />);
+
+    expect(screen.getByRole("button", { name: /Publish/i })).toBeEnabled();
+  });
+
+  it("allows publishing existing ECharts charts that only have render series data", () => {
+    useWorkspaceStore.setState({
+      nodes: [
+        {
+          ...chartNode,
+          data: {
+            ...chartNode.data,
+            spec: {
+              ...chartNode.data.spec,
+              echartsOption: {
+                xAxis: { type: "category", data: ["HR"] },
+                yAxis: { type: "value" },
+                series: [{ name: "headcount", type: "bar", data: [4] }],
+              },
+            },
+          },
+        },
+      ],
+      webDesign: {
+        ...useWorkspaceStore.getState().webDesign,
+        zones: [
+          {
+            id: "zone-1",
+            nodeId: "node-chart",
+            chartId: "chart-1",
+            column: 0,
+            row: 0,
+            colSpan: 1,
+            rowSpan: 1,
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<WebDesignCanvas />);
+
+    expect(screen.getByRole("button", { name: /Publish/i })).toBeEnabled();
   });
 
   it("switches to Web Page Design from the mode picker", async () => {

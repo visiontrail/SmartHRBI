@@ -915,20 +915,26 @@ function toChartAsset(
 }
 
 function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, unknown> | null {
+  const rows = Array.isArray(rawSpec.data) ? rawSpec.data.filter(isRecord) : [];
+  const withRawRows = (option: Record<string, unknown>): Record<string, unknown> => {
+    if (!rows.length || Array.isArray(option.__rows__)) {
+      return option;
+    }
+    return { ...option, __rows__: rows };
+  };
   const config = isRecord(rawSpec.config) ? rawSpec.config : {};
   const option = config.option;
   if (isRecord(option)) {
-    return option;
+    return withRawRows(option);
   }
 
-  const rows = Array.isArray(rawSpec.data) ? rawSpec.data.filter(isRecord) : [];
   const title = typeof rawSpec.title === "string" ? rawSpec.title : "Chart";
   const chartType = normalizeChartType(rawSpec.chart_type);
   const configuredYKey = typeof config.yKey === "string" ? config.yKey : null;
   if (chartType === "single_value" || chartType === "gauge") {
     const yKey = configuredYKey ?? inferYKey(rows, null);
     const value = rows.length > 0 && yKey ? asNumber(rows[0]?.[yKey]) : 0;
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       series: [
         {
@@ -937,7 +943,7 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
           data: [{ value, name: configuredYKey ?? yKey ?? "value" }],
         },
       ],
-    };
+    });
   }
 
   // Table: build a marker option so chart-preview renders an HTML data table.
@@ -961,7 +967,7 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
   const values = rows.map((row) => asNumber(row[yKey]));
 
   if (chartType === "treemap") {
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       series: [
         {
@@ -974,11 +980,11 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
           })),
         },
       ],
-    };
+    });
   }
 
   if (chartType === "funnel") {
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       tooltip: { trigger: "item" },
       series: [
@@ -994,12 +1000,12 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
           })),
         },
       ],
-    };
+    });
   }
 
   if (chartType === "radar") {
     const maxValue = Math.max(1, ...values);
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       tooltip: {},
       radar: {
@@ -1014,11 +1020,11 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
           data: [{ value: values, name: title }],
         },
       ],
-    };
+    });
   }
 
   if (chartType === "pie") {
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       tooltip: { trigger: "item" },
       series: [
@@ -1031,7 +1037,7 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
           })),
         },
       ],
-    };
+    });
   }
 
   if (chartType === "scatter") {
@@ -1042,26 +1048,26 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
       }
       return [index + 1, asNumber(row[yKey])];
     });
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       tooltip: { trigger: "item" },
       xAxis: { type: "value", name: xKey },
       yAxis: { type: "value", name: yKey },
       series: [{ type: "scatter", data: points }],
-    };
+    });
   }
 
   if (chartType === "stacked_bar") {
     const seriesKey = typeof config.seriesKey === "string" ? config.seriesKey : null;
     if (!seriesKey) {
-      return {
+      return withRawRows({
         title: { text: title, left: "center" },
         tooltip: { trigger: "axis" },
         grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true },
         xAxis: { type: "category", data: categories },
         yAxis: { type: "value" },
         series: [{ type: "bar", stack: "total", data: values }],
-      };
+      });
     }
 
     const categoryOrder: string[] = [];
@@ -1086,7 +1092,7 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
       matrix.set(seriesName, rowMap);
     }
 
-    return {
+    return withRawRows({
       title: { text: title, left: "center" },
       tooltip: { trigger: "axis" },
       legend: { top: 28 },
@@ -1099,11 +1105,11 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
         stack: "total",
         data: categoryOrder.map((category) => matrix.get(seriesName)?.get(category) ?? 0),
       })),
-    };
+    });
   }
 
   const seriesType = chartType === "line" || chartType === "area" ? "line" : "bar";
-  return {
+  return withRawRows({
     title: { text: title, left: "center" },
     tooltip: { trigger: "axis" },
     grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true },
@@ -1117,7 +1123,7 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
         ...(chartType === "area" ? { areaStyle: {} } : {}),
       },
     ],
-  };
+  });
 }
 
 function inferXKey(rows: Array<Record<string, unknown>>): string | null {

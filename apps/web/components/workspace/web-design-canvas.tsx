@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChartPreview } from "@/components/charts/chart-preview";
 import { cn } from "@/lib/utils";
+import { extractChartRows } from "@/lib/workspace/chart-rows";
 import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem } from "@/lib/workspace/publish";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ChartNodeData, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
@@ -47,7 +48,7 @@ export function WebDesignCanvas() {
   const unplaced = chartNodes.filter((node) => !placedNodeIds.has(node.id));
   const publishBlocked = layout.zones.some((zone) => {
     const node = chartNodes.find((item) => item.id === zone.nodeId);
-    return !node || extractRows(node.data).length === 0;
+    return !node || extractChartRows(node.data).length === 0;
   });
 
   const handlePublish = async () => {
@@ -408,11 +409,4 @@ function SidebarItemEditor({
       ))}
     </div>
   );
-}
-
-function extractRows(node: ChartNodeData): Record<string, unknown>[] {
-  const rows = node.spec.echartsOption.__rows__;
-  return Array.isArray(rows)
-    ? rows.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-    : [];
 }

@@ -1,4 +1,5 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
+import { extractChartRows } from "@/lib/workspace/chart-rows";
 import type { ChartNodeData, WebDesignLayout, WorkspaceNode } from "@/types/workspace";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -44,7 +45,7 @@ export async function publishWorkspace(
       title: node.data.title,
       chart_type: node.data.chartType,
       spec: node.data.spec,
-      rows: extractRows(node.data),
+      rows: extractChartRows(node.data),
     }));
 
   const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/publish`, {
@@ -84,24 +85,4 @@ export async function fetchPublishHistory(workspaceId: string): Promise<PublishH
   }
   const data = payload as { published_pages?: PublishHistoryItem[] };
   return Array.isArray(data.published_pages) ? data.published_pages : [];
-}
-
-function extractRows(node: ChartNodeData): Record<string, unknown>[] {
-  const option = node.spec.echartsOption;
-  const tableRows = option.__rows__;
-  if (Array.isArray(tableRows)) {
-    return tableRows.filter((item): item is Record<string, unknown> =>
-      typeof item === "object" && item !== null && !Array.isArray(item)
-    );
-  }
-  const source = option.dataset;
-  if (typeof source === "object" && source !== null && !Array.isArray(source)) {
-    const rows = (source as { source?: unknown }).source;
-    if (Array.isArray(rows)) {
-      return rows.filter((item): item is Record<string, unknown> =>
-        typeof item === "object" && item !== null && !Array.isArray(item)
-      );
-    }
-  }
-  return [];
 }
