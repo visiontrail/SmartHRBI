@@ -27,13 +27,13 @@ def test_healthz_success(monkeypatch, tmp_path: Path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["service"] == "SmartHRBI API"
+    assert payload["service"] == "Cognitrix API"
     assert payload["environment"] == "development"
     assert (tmp_path / "uploads").exists()
 
 
-def test_configure_application_logging_binds_smarthrbi_logger_to_uvicorn_handler() -> None:
-    app_logger = logging.getLogger("smarthrbi")
+def test_configure_application_logging_binds_cognitrix_logger_to_uvicorn_handler() -> None:
+    app_logger = logging.getLogger("cognitrix")
     uvicorn_logger = logging.getLogger("uvicorn.error")
     original_app_handlers = list(app_logger.handlers)
     original_app_level = app_logger.level

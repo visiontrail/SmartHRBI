@@ -44,7 +44,7 @@ from .models import (
 )
 from .routing import RouteDecision, select_agent_route
 
-logger = logging.getLogger("smarthrbi.ingestion")
+logger = logging.getLogger("cognitrix.ingestion")
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_DUCKDB_TYPE_RE = re.compile(r"^[A-Za-z0-9_(),\s]+$")
@@ -331,7 +331,7 @@ INGESTION_EXECUTION_REQUIRED_TOOL_SEQUENCE = [
 ]
 MIN_INGESTION_EXECUTION_AGENT_MAX_TURNS = len(INGESTION_EXECUTION_REQUIRED_TOOL_SEQUENCE) + 2
 INGESTION_AGENT_SYSTEM_PROMPT = """\
-You are SmartHRBI's Write Ingestion Agent.
+You are Cognitrix's Write Ingestion Agent.
 
 Use the provided tools to inspect the upload, workspace catalog, existing targets, and
 proposed diff. Then return structured JSON describing your decision.
@@ -365,7 +365,7 @@ Do not execute writes. Do not ask the user any questions. Human approval is hand
 the application after you return. Return ONLY valid JSON matching the required schema.
 """
 INGESTION_EXECUTION_AGENT_SYSTEM_PROMPT = """\
-You are SmartHRBI's Write Execution Agent.
+You are Cognitrix's Write Execution Agent.
 
 A human has already approved a write action and target table. Inspect the staging dataset
 and target table, resolve the exact column mapping, then execute the approved write.

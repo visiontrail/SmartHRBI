@@ -22,7 +22,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-logger = logging.getLogger("smarthrbi.schema_inference")
+logger = logging.getLogger("cognitrix.schema_inference")
 
 # Threshold: run inference when more than this fraction of columns are unrecognized
 INFERENCE_THRESHOLD = 0.4

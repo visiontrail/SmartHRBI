@@ -62,7 +62,7 @@ def test_openai_selector_hits_chat_completions_endpoint_and_parses_payload(monke
         metric_catalog=[{"name": "headcount_total", "synonyms": ["headcount"]}],
     )
 
-    with caplog.at_level(logging.INFO, logger="smarthrbi.llm"):
+    with caplog.at_level(logging.INFO, logger="cognitrix.llm"):
         selected = selector.select_tool(
             message="按部门看人数",
             conversation_id="conv-001",
@@ -184,7 +184,7 @@ def test_openai_selector_wraps_timeout_as_tool_selection_error(monkeypatch, capl
         metric_catalog=[{"name": "attrition_rate", "synonyms": []}],
     )
 
-    with caplog.at_level(logging.WARNING, logger="smarthrbi.llm"):
+    with caplog.at_level(logging.WARNING, logger="cognitrix.llm"):
         with pytest.raises(ToolSelectionError, match="timed out"):
             selector.select_tool(
                 message="Hi",
@@ -246,7 +246,7 @@ def test_agent_loop_client_logs_request_response_and_thinking(monkeypatch, caplo
         ],
     )
 
-    with caplog.at_level(logging.INFO, logger="smarthrbi.llm"):
+    with caplog.at_level(logging.INFO, logger="cognitrix.llm"):
         response = client.chat(
             messages=[{"role": "user", "content": "柱状图显示入职年份统计"}],
             conversation_id="conv-agent-log",

@@ -40,7 +40,7 @@ from .chart_strategy import ChartStrategyRouter
 from .config import get_settings
 from .tool_calling import ToolCall, ToolCallRequest, ToolCallResponse, get_tool_calling_service
 
-logger = logging.getLogger("smarthrbi.agent")
+logger = logging.getLogger("cognitrix.agent")
 
 # ---------------------------------------------------------------------------
 # Tool definitions exposed as Claude Agent SDK in-process MCP tools.
@@ -221,7 +221,7 @@ TOOL_RESULT_RECOVERY_PRIORITY = (
     "list_tables",
 )
 
-SDK_MCP_SERVER_NAME = "smarthrbi"
+SDK_MCP_SERVER_NAME = "cognitrix"
 SDK_RUNTIME_BACKEND = "claude-agent-sdk"
 SDK_TOOL_DEFINITIONS = AGENT_TOOL_DEFINITIONS
 SDK_TOOL_NAMES = tuple(
@@ -911,7 +911,7 @@ class AgentRuntime:
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
-                "permissionDecisionReason": "SmartHRBI BI tool call allowed.",
+                "permissionDecisionReason": "Cognitrix BI tool call allowed.",
             }
         }
 
@@ -942,7 +942,7 @@ class AgentRuntime:
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
-                "additionalContext": "SmartHRBI recorded the BI tool result for audit and SSE trace.",
+                "additionalContext": "Cognitrix recorded the BI tool result for audit and SSE trace.",
             }
         }
 
@@ -1074,7 +1074,7 @@ class AgentRuntime:
         if canonical_name not in SDK_TOOL_NAMES:
             raise AgentGuardrailError(
                 code="TOOL_NOT_ALLOWED",
-                message=f"Tool '{tool_name}' is outside the allowed SmartHRBI BI tool surface.",
+                message=f"Tool '{tool_name}' is outside the allowed Cognitrix BI tool surface.",
             )
         guard_context = AgentGuardrailContext(
             role=run_context.request.role,

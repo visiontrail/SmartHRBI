@@ -1,14 +1,14 @@
-name: smarthrbi
+name: cognitrix
 
 services:
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    container_name: smarthrbi-api
+    container_name: cognitrix-api
     restart: unless-stopped
     environment:
-      APP_NAME: SmartHRBI API
+      APP_NAME: Cognitrix API
       APP_ENV: production
       DATABASE_URL: sqlite:////app/data/uploads/state/ai_views.sqlite3
       MODEL_PROVIDER_URL: ${MODEL_PROVIDER_URL:-https://api.deepseek.com}
@@ -35,13 +35,13 @@ services:
       timeout: 5s
       retries: 10
     volumes:
-      - smarthrbi_upload_data:/app/data/uploads
+      - cognitrix_upload_data:/app/data/uploads
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    container_name: smarthrbi-web
+    container_name: cognitrix-web
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
@@ -60,4 +60,4 @@ services:
       retries: 10
 
 volumes:
-  smarthrbi_upload_data:
+  cognitrix_upload_data:

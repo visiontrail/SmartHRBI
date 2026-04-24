@@ -295,7 +295,7 @@ export function ChatWorkbench({ apiBaseUrl }: ChatWorkbenchProps) {
   return (
     <main className="workspace">
       <header className="workspace-header">
-        <h1>SmartHRBI Chat Workbench</h1>
+        <h1>Cognitrix Chat Workbench</h1>
         <p>状态: {streamLabel}</p>
       </header>
 

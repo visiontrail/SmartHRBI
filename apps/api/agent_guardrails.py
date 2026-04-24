@@ -68,7 +68,7 @@ class AgentGuardrails:
             if pattern.search(message):
                 raise AgentGuardrailError(
                     code=code,
-                    message="The agent can only use the SmartHRBI BI tool surface.",
+                    message="The agent can only use the Cognitrix BI tool surface.",
                 )
 
         lowered = message.lower()

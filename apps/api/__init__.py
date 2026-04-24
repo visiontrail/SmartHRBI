@@ -1,1 +1,1 @@
-# SmartHRBI API package.
+# Cognitrix API package.

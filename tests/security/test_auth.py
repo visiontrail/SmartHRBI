@@ -34,7 +34,7 @@ def _set_minimal_env(monkeypatch, tmp_path: Path) -> None:
 def test_core_api_requires_bearer_token(monkeypatch, tmp_path: Path, caplog) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
-    with caplog.at_level(logging.WARNING, logger="smarthrbi.auth"):
+    with caplog.at_level(logging.WARNING, logger="cognitrix.auth"):
         with TestClient(app) as client:
             response = client.get("/semantic/metrics")
 

@@ -11,7 +11,7 @@ from urllib import request as urllib_request
 
 from .config import get_settings
 
-logger = logging.getLogger("smarthrbi.session_titles")
+logger = logging.getLogger("cognitrix.session_titles")
 
 DEFAULT_SESSION_TITLE = "New Conversation"
 SESSION_TITLE_MAX_LENGTH = 24

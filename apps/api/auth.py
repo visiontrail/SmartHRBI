@@ -83,7 +83,7 @@ DEFAULT_TOKEN_TTL_SECONDS = 3600
 MAX_TOKEN_TTL_SECONDS = 24 * 3600
 
 _bearer_scheme = HTTPBearer(auto_error=False)
-logger = logging.getLogger("smarthrbi.auth")
+logger = logging.getLogger("cognitrix.auth")
 
 
 @dataclass(slots=True)

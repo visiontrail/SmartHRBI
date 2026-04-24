@@ -23,10 +23,10 @@ _FINAL_ANSWER_EXAMPLE = json.dumps(
 
 def build_agent_system_prompt() -> str:
     return (
-        "You are SmartHRBI's BI analyst agent.\n"
+        "You are Cognitrix's BI analyst agent.\n"
         "\n"
         "## Role\n"
-        "Answer the user's HR analytics questions by calling the available tools.\n"
+        "Answer the user's analytics questions by calling the available tools.\n"
         "You must stay strictly within the BI tool surface — never request shell, web, or "
         "filesystem tools.\n"
         "\n"

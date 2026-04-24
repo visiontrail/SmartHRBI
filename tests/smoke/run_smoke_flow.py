@@ -15,7 +15,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run SmartHRBI smoke flow")
+    parser = argparse.ArgumentParser(description="Run Cognitrix smoke flow")
     parser.add_argument("--api-base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--web-base-url", default="http://127.0.0.1:3000")
     parser.add_argument("--timeout-seconds", type=int, default=90)
@@ -159,7 +159,7 @@ def main() -> int:
         if not workspace_id:
             raise RuntimeError("workspace response missing workspace_id")
 
-        with tempfile.TemporaryDirectory(prefix="smarthrbi-smoke-") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="cognitrix-smoke-") as tmp_dir:
             file_path = build_excel_files(Path(tmp_dir))[0]
             upload_response = client.post(
                 f"{api_base_url}/ingestion/uploads",

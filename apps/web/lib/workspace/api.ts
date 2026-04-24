@@ -22,7 +22,7 @@ const DEFAULT_AUTH_CONTEXT = {
   clearance: DEFAULT_CLEARANCE,
 };
 
-const WORKSPACE_SNAPSHOT_STORAGE_KEY = "smarthrbi:workspace-snapshots:v1";
+const WORKSPACE_SNAPSHOT_STORAGE_KEY = "cognitrix:workspace-snapshots:v1";
 
 type WorkspaceApiErrorShape = {
   code?: string;

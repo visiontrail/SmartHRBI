@@ -30,7 +30,7 @@ BUSINESS_TYPES = ("roster", "project_progress", "attendance", "other")
 WRITE_MODES = ("update_existing", "time_partitioned_new_table", "new_table", "append_only")
 TIME_GRAINS = ("none", "month", "quarter", "year")
 TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-logger = logging.getLogger("smarthrbi.table_catalog")
+logger = logging.getLogger("cognitrix.table_catalog")
 
 
 class TableCatalogError(Exception):

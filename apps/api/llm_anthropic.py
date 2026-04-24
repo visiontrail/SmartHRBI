@@ -11,7 +11,7 @@ from urllib import request as urllib_request
 
 from .agent_logging import format_agent_debug_blocks
 
-logger = logging.getLogger("smarthrbi.llm_anthropic")
+logger = logging.getLogger("cognitrix.llm_anthropic")
 
 
 class AnthropicLLMError(Exception):

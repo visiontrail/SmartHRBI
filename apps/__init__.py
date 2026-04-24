@@ -1,1 +1,1 @@
-# SmartHRBI apps namespace package.
+# Cognitrix apps namespace package.

@@ -71,7 +71,10 @@ export function GlobalSidebar() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-cream">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-5 h-5 text-terracotta" />
-          <h1 className="font-serif text-feature text-near-black">SmartHRBI</h1>
+          <div className="flex flex-col leading-tight">
+            <h1 className="font-serif text-feature text-near-black">Cognitrix</h1>
+            <span className="text-xs text-muted-foreground tracking-wide">识枢</span>
+          </div>
         </div>
         <Tooltip>
           <TooltipTrigger asChild>

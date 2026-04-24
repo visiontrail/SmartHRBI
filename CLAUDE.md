@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SmartHRBI is an AI-Native BI prototype for HR/PM scenarios. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through the Claude Agent SDK.
+Cognitrix (识枢) is an AI-Native BI platform for any structured data domain. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through the Claude Agent SDK.
 
 ## Commands
 
@@ -67,7 +67,7 @@ FastAPI app defined in `main.py`. All routes (except `/healthz` and `/auth/login
 - `auth.py` — JWT-based token issuance, `AuthIdentity`, RBAC permission scopes (`require_permission`), role overrides stored in-process
 - `security.py` — `SQLReadOnlyValidator`, `RLSInjector`, `AccessContext`; combined through `secure_query_sql()`
 - `data_policy.py` — `redact_rows()`, `redact_structure()`, `forbidden_sensitive_columns()` based on role
-- `agent_runtime.py` — thin host around Claude Agent SDK `ClaudeSDKClient`; exposes BI tools as an in-process SDK MCP server named `smarthrbi`; maps SDK stream/hook events to frontend SSE format
+- `agent_runtime.py` — thin host around Claude Agent SDK `ClaudeSDKClient`; exposes BI tools as an in-process SDK MCP server named `cognitrix`; maps SDK stream/hook events to frontend SSE format
 - `chat.py` — `ChatStreamService` routes `POST /chat/stream` into `AgentRuntime.run_turn()`
 - `agent_guardrails.py` — blocks jailbreak attempts, validates tool names and SQL before execution
 - `tool_calling.py` — `ToolCallingService`; executes the 8 BI tools (list_tables, describe_table, sample_rows, get_metric_catalog, run_semantic_query, execute_readonly_sql, get_distinct_values, save_view)

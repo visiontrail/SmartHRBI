@@ -12,7 +12,7 @@ LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
 class Settings(BaseSettings):
-    app_name: str = Field(default="SmartHRBI API", alias="APP_NAME")
+    app_name: str = Field(default="Cognitrix API", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     database_url: str = Field(alias="DATABASE_URL")
     model_provider_url: str = Field(alias="MODEL_PROVIDER_URL")

@@ -14,7 +14,7 @@ from .agent_guardrails import AgentGuardrailError
 from .agent_runtime import AgentRequest, AgentRuntimeError, get_agent_runtime
 from .config import get_settings
 
-logger = logging.getLogger("smarthrbi.chat")
+logger = logging.getLogger("cognitrix.chat")
 
 
 class ChatStreamRequest(BaseModel):

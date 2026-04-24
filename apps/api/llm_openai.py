@@ -11,7 +11,7 @@ from urllib import request as urllib_request
 
 from .agent_logging import format_agent_debug_blocks
 
-logger = logging.getLogger("smarthrbi.llm")
+logger = logging.getLogger("cognitrix.llm")
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ class OpenAICompatibleToolSelector:
 
     def _build_system_prompt(self) -> str:
         return (
-            "You are a SmartHRBI router. Return only one JSON object with keys: tool, arguments. "
+            "You are a Cognitrix router. Return only one JSON object with keys: tool, arguments. "
             "tool must be one of query_metrics, describe_dataset, save_view. "
             "Use describe_dataset for schema/field/column/sample requests. "
             "Also use describe_dataset for custom raw-column analysis that is not directly covered by an available metric, "

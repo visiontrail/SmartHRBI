@@ -59,7 +59,7 @@ def warning_messages(kind: str, path: Path) -> List[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate SmartHRBI environment variables")
+    parser = argparse.ArgumentParser(description="Validate Cognitrix environment variables")
     parser.add_argument("--web-env-file", default="apps/web/.env", type=Path)
     parser.add_argument("--api-env-file", default="apps/api/.env", type=Path)
     args = parser.parse_args()

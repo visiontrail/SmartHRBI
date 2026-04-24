@@ -12,7 +12,7 @@ type CachedAccessToken = {
   scopeKey: string;
 };
 
-const AUTH_STORAGE_KEY = "smarthrbi:access-token:v1";
+const AUTH_STORAGE_KEY = "cognitrix:access-token:v1";
 const TOKEN_REFRESH_SKEW_SECONDS = 30;
 
 export async function getAuthorizationHeader(

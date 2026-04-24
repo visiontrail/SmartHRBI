@@ -2,7 +2,7 @@ export type Locale = "en-US" | "zh-CN";
 
 export const SUPPORTED_LOCALES: Locale[] = ["en-US", "zh-CN"];
 export const DEFAULT_LOCALE: Locale = "en-US";
-export const I18N_STORAGE_KEY = "smarthrbi.locale";
+export const I18N_STORAGE_KEY = "cognitrix.locale";
 
 export type DictionaryValue = string;
 export type DictionaryMap = Record<string, DictionaryValue>;

@@ -59,7 +59,7 @@ class DbTarget:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Clear SmartHRBI local runtime data, runtime databases, and test artifacts."
+        description="Clear Cognitrix local runtime data, runtime databases, and test artifacts."
     )
     parser.add_argument(
         "--api-env-file",

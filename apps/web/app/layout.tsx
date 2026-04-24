@@ -4,8 +4,8 @@ import { Providers } from "@/components/shared/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SmartHRBI — AI Native HR & Project BI",
-  description: "Conversational AI analytics for HR and project management. Ask questions, generate charts, compose reports.",
+  title: "Cognitrix 识枢 — AI-Native Analytics",
+  description: "Conversational AI analytics for any structured dataset. Ask questions, generate charts, compose reports.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

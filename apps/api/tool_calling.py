@@ -44,7 +44,7 @@ from .semantic import (
 from .views import SaveViewInput, ViewStorageError, get_view_storage_service
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-logger = logging.getLogger("smarthrbi.tool_calling")
+logger = logging.getLogger("cognitrix.tool_calling")
 
 TOOLS_REQUIRE_ACTIVE_DATASET = frozenset(
     {

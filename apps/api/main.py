@@ -53,7 +53,7 @@ from .views import (
 )
 from .workspaces import WorkspaceError, get_workspace_service, router as workspaces_router
 
-app = FastAPI(title="SmartHRBI API", version="0.1.0")
+app = FastAPI(title="Cognitrix API", version="0.1.0")
 app.include_router(ingestion_router)
 app.include_router(workspaces_router)
 app.include_router(table_catalog_router)
@@ -124,7 +124,7 @@ class RollbackViewRequest(BaseModel):
 
 def configure_application_logging(level_name: str) -> None:
     level = getattr(logging, level_name.upper(), logging.INFO)
-    app_logger = logging.getLogger("smarthrbi")
+    app_logger = logging.getLogger("cognitrix")
     uvicorn_error_logger = logging.getLogger("uvicorn.error")
 
     app_logger.setLevel(level)
@@ -141,7 +141,7 @@ async def on_startup() -> None:
     settings = get_settings()
     configure_application_logging(settings.log_level)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("smarthrbi")
+    logger = logging.getLogger("cognitrix")
     logger.info(
         "application_logging_configured level=%s upload_dir=%s",
         settings.log_level,
