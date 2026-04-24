@@ -1,5 +1,25 @@
 from __future__ import annotations
 
+import json
+
+_FINAL_ANSWER_EXAMPLE = json.dumps(
+    {
+        "chart_type": "bar",
+        "title": "各部门平均年龄",
+        "x_key": "department",
+        "y_key": "avg_age",
+        "series_key": None,
+        "name_key": None,
+        "metric_name": "avg_age",
+        "rows": [{"department": "Engineering", "avg_age": 32}, {"department": "HR", "avg_age": 35}],
+        "conclusion": "Engineering 部门平均年龄最低，为 32 岁。",
+        "scope": "全员，不含离职人员",
+        "anomalies": None,
+    },
+    ensure_ascii=False,
+    indent=2,
+)
+
 
 def build_agent_system_prompt() -> str:
     return (
@@ -33,49 +53,78 @@ def build_agent_system_prompt() -> str:
         "(wrong filter value, column mismatch, RLS scope) and retry with corrections.\n"
         "\n"
         "## Chart type selection\n"
-        "Choose the most appropriate chart_type in your final structured answer based on the user's "
-        "request and the nature of the data. Available types:\n"
+        "Choose the most appropriate chart_type in your final JSON answer based on the user's "
+        "request and the nature of the data. All types are rendered by ECharts:\n"
         "\n"
-        "**Common types (rendered via Recharts):**\n"
+        "**Basic comparison & distribution:**\n"
         "- `bar` — compare categorical values side-by-side.\n"
+        "- `stacked_bar` — stacked bar chart; set series_key for the stacking dimension.\n"
         "- `line` — show trends over time or ordered sequence.\n"
-        "- `pie` — show proportion / share of a whole (≤10 slices ideal).\n"
         "- `area` — like line but filled; good for volume over time.\n"
-        "- `scatter` — show correlation between two numeric variables.\n"
-        "- `radar` — compare multiple dimensions for a few items.\n"
-        "- `treemap` — show hierarchical part-of-whole; rectangles grouped by category. "
-        "Set x_key=grouping dimension (e.g. department), name_key=label for each box "
-        "(e.g. employee name), y_key=size metric (count, or omit for equal sizing).\n"
+        "- `scatter` — show correlation between two numeric variables (x_key and y_key both numeric).\n"
+        "- `pie` — show proportion / share of a whole (≤ 10 slices ideal).\n"
         "- `funnel` — show conversion / pipeline stages.\n"
-        "- `radialBar` — circular bar chart for ranking/comparison.\n"
-        "- `composed` — overlay bar + line + area on the same axes.\n"
+        "- `radar` — compare multiple dimensions for a few items.\n"
         "\n"
-        "**Advanced types (rendered via ECharts):**\n"
-        "- `heatmap` — 2D grid coloured by intensity.\n"
-        "- `gauge` — single KPI dial.\n"
-        "- `sankey` — flow diagram between stages (rows need source, target, value).\n"
-        "- `sunburst` — nested ring hierarchy.\n"
-        "- `boxplot` — statistical distribution.\n"
-        "- `graph` — network / relationship diagram (rows need source, target).\n"
-        "- `map` — geographic choropleth map of China. Use when data is grouped by "
-        "province/city/region and the user wants to visualise spatial distribution "
-        "(e.g. headcount by work location, salary by province). "
-        "Set x_key to the region/province column, y_key to the numeric metric. "
-        "Province names can be short form (北京) or full form (北京市). "
-        "Example rows: [{\"province\": \"北京\", \"count\": 120}, {\"province\": \"上海\", \"count\": 95}].\n"
+        "**Hierarchy & flow:**\n"
+        "- `treemap` — hierarchical part-of-whole rectangles; set x_key=grouping dimension "
+        "(e.g. department), name_key=label for each box (e.g. employee name), "
+        "y_key=size metric.\n"
+        "- `sunburst` — nested ring hierarchy; rows may include a 'children' field.\n"
+        "- `sankey` — flow diagram between stages; rows must include source, target, value fields.\n"
+        "- `graph` — network / relationship diagram; rows must include source, target fields.\n"
         "\n"
-        "**Non-visual types:**\n"
-        "- `table` — structured row/column table (fallback for complex data).\n"
-        "- `single_value` — display one big number.\n"
+        "**Statistical & financial:**\n"
+        "- `boxplot` — statistical distribution per category; y_key as [min,q1,median,q3,max] or scalar.\n"
+        "- `candlestick` — OHLC financial chart; rows need open, high, low, close (or o,h,l,c) fields.\n"
         "\n"
-        "When the user explicitly requests a chart type (e.g. 'treemap', 'radar', 'funnel'), "
+        "**Geographic:**\n"
+        "- `map` — China province-level choropleth; set x_key=province column, y_key=metric. "
+        "Province names can be short (北京) or full (北京市). "
+        "Example rows: [{\"province\": \"北京\", \"count\": 120}].\n"
+        "\n"
+        "**Heat & intensity:**\n"
+        "- `heatmap` — 2D grid coloured by intensity; set x_key, y_key for axes, series_key for value.\n"
+        "- `parallel` — parallel coordinates; all numeric columns become axes automatically.\n"
+        "\n"
+        "**Single metric & text:**\n"
+        "- `gauge` — single KPI dial; y_key is the metric value.\n"
+        "- `single_value` — display one big number; y_key is the value.\n"
+        "- `wordCloud` — word frequency / tag cloud; x_key=word/label, y_key=frequency/weight.\n"
+        "\n"
+        "**Tabular fallback:**\n"
+        "- `table` — structured data table for complex multi-column results that don't fit "
+        "a chart. Use when there are many columns or mixed types.\n"
+        "\n"
+        "When the user explicitly requests a chart type (e.g. '柱状图', 'treemap', 'radar'), "
         "honour that request. Otherwise pick the type that best fits the data shape.\n"
         "\n"
-        "## Final answer\n"
-        "When you have gathered sufficient data, return a structured result "
-        "including chart_type, title, rows, conclusion, scope, and anomalies.\n"
+        "## Final answer — required JSON format\n"
+        "After collecting data with tools, END your response with a JSON block "
+        "(inside ```json ... ```) that matches this structure exactly:\n"
+        "\n"
+        "```json\n"
+        f"{_FINAL_ANSWER_EXAMPLE}\n"
+        "```\n"
+        "\n"
+        "Field rules:\n"
+        "- `chart_type`: one of the types listed above.\n"
+        "- `title`: concise human-readable chart title.\n"
+        "- `x_key`: name of the column to use as the category / X-axis / label.\n"
+        "- `y_key`: name of the column to use as the numeric metric / size.\n"
+        "- `series_key`: column for grouping into multiple series, or null.\n"
+        "- `name_key`: column for per-element labels (treemap/graph only), or null.\n"
+        "- `metric_name`: short internal metric name (e.g. 'headcount', 'avg_salary').\n"
+        "- `rows`: the full data array — each object must use the same column names as "
+        "x_key / y_key / series_key.\n"
+        "- `conclusion`: 1–2 sentence insight from the data, in the user's language.\n"
+        "- `scope`: what the query covers (filters, time range, population).\n"
+        "- `anomalies`: empty result reason or data oddity, or null if none.\n"
+        "\n"
+        "IMPORTANT: The JSON block is machine-parsed. Do not wrap it in extra prose after the "
+        "closing ```; place your narrative conclusion inside the 'conclusion' field.\n"
         "Tool errors are still observations. If a tool reports an execution error, "
-        "summarize what failed for the user instead of stopping silently.\n"
+        "summarize what failed inside 'conclusion' and 'anomalies' instead of stopping silently.\n"
         "If every attempt fails, return empty rows and explain the failure in "
         "conclusion and anomalies.\n"
     )
@@ -87,5 +136,5 @@ def describe_reasoning_strategy() -> list[str]:
         "Inspect schema and sample data to confirm column names and actual values.",
         "Use get_distinct_values for any uncertain categorical filter.",
         "Retry with corrections if a query returns 0 rows.",
-        "Return a structured JSON final answer with conclusion and scope.",
+        "Return a structured JSON final answer (```json ... ```) with conclusion and scope.",
     ]

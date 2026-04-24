@@ -242,6 +242,7 @@ FINAL_ANSWER_OUTPUT_SCHEMA: dict[str, Any] = {
                 "line",
                 "pie",
                 "area",
+                "stacked_bar",
                 "scatter",
                 "radar",
                 "treemap",
@@ -253,8 +254,11 @@ FINAL_ANSWER_OUTPUT_SCHEMA: dict[str, Any] = {
                 "sankey",
                 "sunburst",
                 "boxplot",
+                "candlestick",
                 "graph",
                 "map",
+                "parallel",
+                "wordCloud",
                 "table",
                 "single_value",
             ],
@@ -589,10 +593,11 @@ class AgentRuntime:
         except ClaudeSDKError as exc:
             self._flush_pending_sdk_tool_results(run_context)
             if _has_tool_observation(tool_trace):
-                final_answer = _recover_failed_final_answer_from_tool_trace(
-                    tool_trace=tool_trace,
-                    request_message=request.message,
-                    sdk_error=str(exc),
+                recovered = _recover_final_answer_from_tool_trace(
+                    tool_trace=tool_trace, request_message=request.message
+                )
+                final_answer = recovered if recovered is not None else _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace, request_message=request.message, sdk_error=str(exc),
                 )
             else:
                 raise AgentRuntimeError(
@@ -603,10 +608,11 @@ class AgentRuntime:
         except Exception as exc:
             self._flush_pending_sdk_tool_results(run_context)
             if _has_tool_observation(tool_trace):
-                final_answer = _recover_failed_final_answer_from_tool_trace(
-                    tool_trace=tool_trace,
-                    request_message=request.message,
-                    sdk_error=str(exc),
+                recovered = _recover_final_answer_from_tool_trace(
+                    tool_trace=tool_trace, request_message=request.message
+                )
+                final_answer = recovered if recovered is not None else _recover_failed_final_answer_from_tool_trace(
+                    tool_trace=tool_trace, request_message=request.message, sdk_error=str(exc),
                 )
             else:
                 raise AgentRuntimeError(
@@ -795,7 +801,7 @@ class AgentRuntime:
             model=model,
             cwd=str(Path.cwd()),
             env=env,
-            output_format={"type": "json_schema", "schema": FINAL_ANSWER_OUTPUT_SCHEMA},
+            output_format=None,
         )
 
     def _build_sdk_tools(self, *, run_context: SDKRunContext) -> list[Any]:
@@ -1375,17 +1381,18 @@ class AgentRuntime:
 
         return "\n\n".join(parts)
 
-    # Chart types that Recharts can render natively
+    # Chart types rendered via frontend fallback option builders (no backend config.option needed)
     RECHARTS_TYPES = frozenset({
         "bar", "line", "pie", "area", "scatter", "radar",
-        "treemap", "funnel", "radialBar", "composed",
-        "table", "single_value", "note", "empty",
+        "funnel", "radialBar", "composed",
+        "single_value", "note", "empty",
     })
 
-    # Chart types that must be routed to ECharts (need config.option)
+    # Chart types that must be routed to ECharts (backend builds config.option)
     ECHARTS_ONLY_TYPES = frozenset({
-        "heatmap", "gauge", "sankey", "sunburst",
+        "stacked_bar", "treemap", "heatmap", "gauge", "sankey", "sunburst",
         "boxplot", "candlestick", "graph", "map", "parallel", "wordCloud",
+        "table",
     })
 
     # All valid chart types (union of both)
@@ -1432,9 +1439,9 @@ class AgentRuntime:
             )
             # Normalise echarts chart_type to a valid catalog value
             echarts_catalog = {
-                "bar", "line", "pie", "scatter", "treemap", "heatmap",
+                "bar", "line", "pie", "area", "stacked_bar", "scatter", "treemap", "heatmap",
                 "radar", "funnel", "gauge", "sankey", "sunburst",
-                "boxplot", "candlestick", "graph", "map", "parallel", "wordCloud",
+                "boxplot", "candlestick", "graph", "map", "parallel", "wordCloud", "table",
             }
             echarts_ct = chart_type if chart_type in echarts_catalog else "bar"
             config: dict[str, Any] = {"option": option}
@@ -1684,7 +1691,18 @@ def _parse_final_answer(content: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         pass
 
-    # JSON inside a code block
+    # ```json ... ``` code fence (preferred format from system prompt)
+    import re
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence_match:
+        try:
+            parsed = json.loads(fence_match.group(1))
+            if isinstance(parsed, dict) and ("rows" in parsed or "chart_type" in parsed):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # Bare JSON object anywhere in the text
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
@@ -2017,6 +2035,8 @@ def _build_echarts_option(
 ) -> dict[str, Any]:
     """Build a complete ECharts option dict from flat rows."""
 
+    if chart_type == "table":
+        return _echarts_table_option(rows=rows, title=title)
     if chart_type == "map":
         return _echarts_map_option(rows=rows, x_key=x_key, y_key=y_key, title=title, metric_name=metric_name)
     if chart_type == "treemap":
@@ -2035,6 +2055,12 @@ def _build_echarts_option(
         return _echarts_sunburst_option(rows=rows, x_key=x_key, y_key=y_key)
     if chart_type == "boxplot":
         return _echarts_boxplot_option(rows=rows, x_key=x_key, y_key=y_key)
+    if chart_type == "candlestick":
+        return _echarts_candlestick_option(rows=rows, x_key=x_key)
+    if chart_type == "parallel":
+        return _echarts_parallel_option(rows=rows)
+    if chart_type == "wordCloud":
+        return _echarts_wordcloud_option(rows=rows, x_key=x_key, y_key=y_key)
     if chart_type == "graph":
         return _echarts_graph_option(rows=rows, x_key=x_key, y_key=y_key)
     if chart_type == "pie":
@@ -2042,10 +2068,16 @@ def _build_echarts_option(
     if chart_type == "scatter":
         return _echarts_scatter_option(rows=rows, x_key=x_key, y_key=y_key)
 
-    # Default: category axis bar/line
+    # Default: category axis bar/line/stacked_bar/area
+    if chart_type == "stacked_bar":
+        return _echarts_cartesian_option(
+            rows=rows, x_key=x_key, y_key=y_key,
+            series_key=series_key, series_type="bar",
+            metric_name=metric_name, stacked=True,
+        )
     return _echarts_cartesian_option(
         rows=rows, x_key=x_key, y_key=y_key,
-        series_key=series_key, series_type=chart_type if chart_type in {"line", "bar"} else "bar",
+        series_key=series_key, series_type=chart_type if chart_type in {"line", "bar", "area"} else "bar",
         metric_name=metric_name,
     )
 
@@ -2058,10 +2090,15 @@ def _echarts_cartesian_option(
     series_key: str | None,
     series_type: str,
     metric_name: str,
+    stacked: bool = False,
 ) -> dict[str, Any]:
+    is_line = series_type in {"line", "area"}
+    render_type = "line" if is_line else series_type
+    area_style: dict[str, Any] = {"opacity": 0.4} if series_type == "area" else {}
+
     if series_key:
-        series_groups: dict[str, list] = {}
         categories_set: list[str] = []
+        series_groups: dict[str, dict[str, Any]] = {}
         for row in rows:
             cat = str(row.get(x_key, ""))
             if cat not in categories_set:
@@ -2071,12 +2108,17 @@ def _echarts_cartesian_option(
 
         series_list = []
         for sg_name, cat_map in series_groups.items():
-            series_list.append({
+            s: dict[str, Any] = {
                 "name": sg_name,
-                "type": series_type,
-                "smooth": True,
+                "type": render_type,
+                "smooth": is_line,
                 "data": [cat_map.get(c, 0) for c in categories_set],
-            })
+            }
+            if stacked:
+                s["stack"] = "total"
+            if area_style:
+                s["areaStyle"] = area_style
+            series_list.append(s)
         return {
             "tooltip": {"trigger": "axis"},
             "legend": {},
@@ -2088,12 +2130,22 @@ def _echarts_cartesian_option(
 
     categories = [str(r.get(x_key, f"item-{i+1}")) for i, r in enumerate(rows)]
     values = [r.get(y_key, 0) for r in rows]
+    s_single: dict[str, Any] = {
+        "name": metric_name,
+        "type": render_type,
+        "smooth": is_line,
+        "data": values,
+    }
+    if stacked:
+        s_single["stack"] = "total"
+    if area_style:
+        s_single["areaStyle"] = area_style
     return {
         "tooltip": {"trigger": "axis"},
         "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
         "xAxis": {"type": "category", "data": categories},
         "yAxis": {"type": "value"},
-        "series": [{"name": metric_name, "type": series_type, "smooth": True, "data": values}],
+        "series": [s_single],
     }
 
 
@@ -2373,6 +2425,77 @@ def _echarts_map_option(
                 "data": data,
             }
         ],
+    }
+
+
+def _echarts_table_option(*, rows: list[dict[str, Any]], title: str) -> dict[str, Any]:
+    """Produce a special marker that the frontend renders as an HTML data table."""
+    columns = list(rows[0].keys()) if rows else []
+    return {
+        "__table__": True,
+        "__columns__": columns,
+        "__rows__": rows,
+        "__title__": title,
+        "series": [],
+    }
+
+
+def _echarts_candlestick_option(*, rows: list[dict[str, Any]], x_key: str) -> dict[str, Any]:
+    categories = [str(r.get(x_key, f"item-{i+1}")) for i, r in enumerate(rows)]
+    data = []
+    for r in rows:
+        y_val = r.get("y")
+        if isinstance(y_val, list) and len(y_val) == 4:
+            data.append(y_val)
+        else:
+            o = r.get("open", r.get("o", 0))
+            c = r.get("close", r.get("c", 0))
+            l = r.get("low", r.get("l", 0))  # noqa: E741
+            h = r.get("high", r.get("h", 0))
+            data.append([o, c, l, h])
+    return {
+        "tooltip": {"trigger": "axis", "axisPointer": {"type": "cross"}},
+        "grid": {"left": "5%", "right": "5%", "bottom": "8%", "containLabel": True},
+        "xAxis": {"type": "category", "data": categories, "boundaryGap": True},
+        "yAxis": {"type": "value", "scale": True},
+        "series": [{"type": "candlestick", "data": data}],
+    }
+
+
+def _echarts_parallel_option(*, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"series": []}
+    all_keys = list(rows[0].keys())
+    numeric_keys = [k for k in all_keys if isinstance(rows[0].get(k), (int, float))]
+    axes = numeric_keys if numeric_keys else all_keys
+    parallel_axis = [{"dim": i, "name": k} for i, k in enumerate(axes)]
+    data = [[r.get(k, 0) for k in axes] for r in rows]
+    return {
+        "parallelAxis": parallel_axis,
+        "tooltip": {"trigger": "item"},
+        "parallel": {"left": "5%", "right": "13%", "bottom": "10%", "top": "10%"},
+        "series": [{"type": "parallel", "smooth": True, "data": data}],
+    }
+
+
+def _echarts_wordcloud_option(*, rows: list[dict[str, Any]], x_key: str, y_key: str) -> dict[str, Any]:
+    data = [
+        {"name": str(r.get(x_key, f"word-{i+1}")), "value": max(1, int(r.get(y_key, 1)))}
+        for i, r in enumerate(rows)
+    ]
+    return {
+        "tooltip": {},
+        "series": [{
+            "type": "wordCloud",
+            "gridSize": 8,
+            "sizeRange": [14, 60],
+            "rotationRange": [-45, 45],
+            "shape": "circle",
+            "width": "100%",
+            "height": "100%",
+            "textStyle": {"color": "random"},
+            "data": data,
+        }],
     }
 
 

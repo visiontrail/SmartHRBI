@@ -908,6 +908,12 @@ function resolveEchartsOption(rawSpec: Record<string, unknown>): Record<string, 
     };
   }
 
+  // Table: build a marker option so chart-preview renders an HTML data table.
+  if (chartType === "table") {
+    const cols = rows.length ? Object.keys(rows[0]) : [];
+    return { __table__: true, __columns__: cols, __rows__: rows, __title__: title, series: [] };
+  }
+
   if (!FALLBACK_OPTION_TYPES.has(chartType as KnownChartType)) {
     // Never rewrite unsupported/advanced chart types to a different fallback type.
     return null;

@@ -26,6 +26,11 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
   const [geoReady, setGeoReady] = useState(true);
   const [geoError, setGeoError] = useState<string | null>(null);
 
+  // --- Table short-circuit: render as HTML data table, not ECharts ---
+  if (spec.chartType === "table" || spec.echartsOption.__table__ === true) {
+    return <TableView spec={spec} height={height} className={className} />;
+  }
+
   const validation = useMemo(() => validateChartSpec(spec), [spec]);
   const requiresChinaMap = useMemo(() => requiresMapRegistration(spec.echartsOption), [spec.echartsOption]);
 
@@ -73,25 +78,31 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
   useEffect(() => {
     if (!chartRef.current || !option || !geoReady) return;
 
-    const instance = echarts.init(chartRef.current, undefined, { renderer: "canvas" });
-    instanceRef.current = instance;
+    let cancelled = false;
 
-    try {
-      instance.setOption(option);
-    } catch {
-      instance.dispose();
-      instanceRef.current = null;
-      return;
-    }
+    import("echarts-wordcloud").then(() => {
+      if (cancelled || !chartRef.current) return;
 
-    const observer = new ResizeObserver(() => {
-      instance.resize();
+      const instance = echarts.init(chartRef.current, undefined, { renderer: "canvas" });
+      instanceRef.current = instance;
+
+      try {
+        instance.setOption(option);
+      } catch {
+        instance.dispose();
+        instanceRef.current = null;
+        return;
+      }
+
+      const observer = new ResizeObserver(() => {
+        instance.resize();
+      });
+      observer.observe(chartRef.current);
     });
-    observer.observe(chartRef.current);
 
     return () => {
-      observer.disconnect();
-      instance.dispose();
+      cancelled = true;
+      instanceRef.current?.dispose();
       instanceRef.current = null;
     };
   }, [geoReady, option]);
@@ -129,6 +140,73 @@ export function ChartPreview({ spec, height = 320, className }: ChartPreviewProp
       className={className}
       style={{ width: "100%", height }}
     />
+  );
+}
+
+function TableView({
+  spec,
+  height,
+  className,
+}: {
+  spec: ChartSpec;
+  height: number;
+  className?: string;
+}) {
+  const opt = spec.echartsOption;
+  const columns = Array.isArray(opt.__columns__)
+    ? (opt.__columns__ as string[])
+    : [];
+  const rows = Array.isArray(opt.__rows__)
+    ? (opt.__rows__ as Record<string, unknown>[])
+    : [];
+
+  if (!columns.length && !rows.length) {
+    return (
+      <div
+        className="flex items-center justify-center text-stone-gray text-body-sm"
+        style={{ height }}
+      >
+        暂无数据
+      </div>
+    );
+  }
+
+  const cols = columns.length ? columns : rows.length ? Object.keys(rows[0]) : [];
+
+  return (
+    <div
+      className={`overflow-auto rounded-comfortable ${className ?? ""}`}
+      style={{ maxHeight: height }}
+    >
+      <table className="w-full text-body-sm border-collapse">
+        <thead className="sticky top-0 bg-warm-sand">
+          <tr>
+            {cols.map((col) => (
+              <th
+                key={col}
+                className="px-3 py-2 text-left font-medium text-ink-dark border-b border-warm-sand whitespace-nowrap"
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-warm-sand/40"}>
+              {cols.map((col) => (
+                <td
+                  key={col}
+                  className="px-3 py-1.5 text-ink-light border-b border-warm-sand/60 whitespace-nowrap"
+                >
+                  {row[col] == null ? "—" : String(row[col])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
