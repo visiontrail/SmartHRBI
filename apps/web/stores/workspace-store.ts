@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import type { Workspace, WorkspaceNode, WorkspaceEdge, WorkspaceSnapshot } from "@/types/workspace";
+import {
+  DEFAULT_CANVAS_FORMAT,
+  normalizeCanvasFormat,
+} from "@/lib/workspace/canvas-formats";
+import type {
+  Workspace,
+  WorkspaceNode,
+  WorkspaceEdge,
+  WorkspaceSnapshot,
+  WorkspaceCanvasFormat,
+} from "@/types/workspace";
 
 type WorkspaceState = {
   workspaces: Workspace[];
@@ -7,6 +17,7 @@ type WorkspaceState = {
   nodes: WorkspaceNode[];
   edges: WorkspaceEdge[];
   viewport: { x: number; y: number; zoom: number };
+  canvasFormat: WorkspaceCanvasFormat;
   hasUnsavedChanges: boolean;
 
   setWorkspaces: (workspaces: Workspace[]) => void;
@@ -20,6 +31,7 @@ type WorkspaceState = {
   updateNode: (nodeId: string, data: Partial<WorkspaceNode>) => void;
   removeNode: (nodeId: string) => void;
   setViewport: (viewport: { x: number; y: number; zoom: number }) => void;
+  setCanvasFormat: (canvasFormat: WorkspaceCanvasFormat) => void;
   loadSnapshot: (snapshot: WorkspaceSnapshot) => void;
   getSnapshot: () => WorkspaceSnapshot | null;
   setHasUnsavedChanges: (value: boolean) => void;
@@ -31,6 +43,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   nodes: [],
   edges: [],
   viewport: { x: 0, y: 0, zoom: 1 },
+  canvasFormat: DEFAULT_CANVAS_FORMAT,
   hasUnsavedChanges: false,
 
   setWorkspaces: (workspaces) => set({ workspaces }),
@@ -61,6 +74,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       nodes: [],
       edges: [],
       viewport: { x: 0, y: 0, zoom: 1 },
+      canvasFormat: DEFAULT_CANVAS_FORMAT,
       hasUnsavedChanges: false,
     }),
 
@@ -91,18 +105,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   setViewport: (viewport) => set({ viewport }),
 
+  setCanvasFormat: (canvasFormat) =>
+    set((state) => {
+      const nextCanvasFormat = normalizeCanvasFormat(canvasFormat);
+      if (state.canvasFormat.id === nextCanvasFormat.id) {
+        return {};
+      }
+      return {
+        canvasFormat: nextCanvasFormat,
+        hasUnsavedChanges: true,
+      };
+    }),
+
   loadSnapshot: (snapshot) =>
     set({
       nodes: snapshot.nodes,
       edges: snapshot.edges,
       viewport: snapshot.viewport,
+      canvasFormat: normalizeCanvasFormat(snapshot.canvasFormat),
       hasUnsavedChanges: false,
     }),
 
   getSnapshot: () => {
-    const { activeWorkspaceId, nodes, edges, viewport } = get();
+    const { activeWorkspaceId, nodes, edges, viewport, canvasFormat } = get();
     if (!activeWorkspaceId) return null;
-    return { workspaceId: activeWorkspaceId, nodes, edges, viewport };
+    return { workspaceId: activeWorkspaceId, nodes, edges, viewport, canvasFormat };
   },
 
   setHasUnsavedChanges: (value) => set({ hasUnsavedChanges: value }),

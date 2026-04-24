@@ -1,17 +1,33 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, MessageSquare, Pencil, Save, Type, X } from "lucide-react";
+import {
+  Check,
+  LayoutTemplate,
+  Loader2,
+  MessageSquare,
+  Pencil,
+  Save,
+  Type,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useRenameWorkspace, useSaveWorkspace } from "@/hooks/use-workspace";
 import { generateId } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
+import { CANVAS_FORMAT_PRESETS, getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import type { TextNodeData } from "@/types/workspace";
 
 export function WorkspaceToolbar() {
@@ -21,6 +37,8 @@ export function WorkspaceToolbar() {
   const addNode = useWorkspaceStore((s) => s.addNode);
   const hasUnsavedChanges = useWorkspaceStore((s) => s.hasUnsavedChanges);
   const nodes = useWorkspaceStore((s) => s.nodes);
+  const canvasFormat = useWorkspaceStore((s) => s.canvasFormat);
+  const setCanvasFormat = useWorkspaceStore((s) => s.setCanvasFormat);
   const activePanel = useUIStore((s) => s.activePanel);
   const isSaving = useUIStore((s) => s.isSaving);
   const setActivePanel = useUIStore((s) => s.setActivePanel);
@@ -31,6 +49,7 @@ export function WorkspaceToolbar() {
   const isChatVisible = activePanel === "both";
 
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
+  const activeCanvasPreset = getCanvasFormatPreset(canvasFormat.id);
 
   useEffect(() => {
     setTitleDraft(workspace?.title ?? "");
@@ -92,9 +111,9 @@ export function WorkspaceToolbar() {
   };
 
   return (
-    <header className="flex items-center justify-between px-4 py-2 border-b border-border-cream bg-ivory shrink-0">
-      <div className="flex items-center gap-3">
-        <div>
+    <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-border-cream bg-ivory shrink-0">
+      <div className="flex min-w-[180px] flex-1 items-center gap-3">
+        <div className="min-w-0">
           {isEditingTitle ? (
             <form
               className="flex items-center gap-1"
@@ -139,8 +158,8 @@ export function WorkspaceToolbar() {
               </Button>
             </form>
           ) : (
-            <div className="flex items-center gap-1">
-              <h2 className="font-serif text-feature text-near-black">
+            <div className="flex min-w-0 items-center gap-1">
+              <h2 className="max-w-[220px] truncate font-serif text-feature text-near-black">
                 {workspace?.title ?? t("workspace.fallbackTitle")}
               </h2>
               <Tooltip>
@@ -167,7 +186,7 @@ export function WorkspaceToolbar() {
         </div>
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
         <Button
           variant="outline"
           size="sm"
@@ -176,6 +195,43 @@ export function WorkspaceToolbar() {
           <MessageSquare className="w-4 h-4" />
           {isChatVisible ? t("workspace.hideChat") : t("workspace.showChat")}
         </Button>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={t("workspace.canvasFormat.label")}
+              className="max-w-[180px]"
+            >
+              <LayoutTemplate className="w-4 h-4" />
+              <span className="truncate">{t(activeCanvasPreset.labelKey)}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            {CANVAS_FORMAT_PRESETS.map((preset) => (
+              <DropdownMenuItem
+                key={preset.id}
+                className="items-start justify-between gap-3"
+                onSelect={() => setCanvasFormat({ id: preset.id })}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-body-sm font-medium">
+                    {t(preset.labelKey)}
+                  </span>
+                  <span className="block truncate text-label text-stone-gray">
+                    {t(preset.descriptionKey)}
+                  </span>
+                </span>
+                {canvasFormat.id === preset.id && (
+                  <Check className="mt-1 h-4 w-4 shrink-0 text-terracotta" />
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <Separator orientation="vertical" className="h-6 mx-1" />
 

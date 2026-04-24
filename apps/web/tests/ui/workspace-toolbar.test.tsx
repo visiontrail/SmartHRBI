@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { TooltipProvider } from "../../components/ui/tooltip";
 import { WorkspaceToolbar } from "../../components/workspace/workspace-toolbar";
+import { DEFAULT_CANVAS_FORMAT } from "../../lib/workspace/canvas-formats";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -39,6 +40,7 @@ describe("WorkspaceToolbar", () => {
       nodes: [],
       edges: [],
       viewport: { x: 0, y: 0, zoom: 1 },
+      canvasFormat: DEFAULT_CANVAS_FORMAT,
       hasUnsavedChanges: false,
     });
   });
@@ -50,6 +52,7 @@ describe("WorkspaceToolbar", () => {
       nodes: [],
       edges: [],
       viewport: { x: 0, y: 0, zoom: 1 },
+      canvasFormat: DEFAULT_CANVAS_FORMAT,
       hasUnsavedChanges: false,
     });
   });
@@ -67,6 +70,19 @@ describe("WorkspaceToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText("Renamed Canvas")).toBeInTheDocument();
       expect(useWorkspaceStore.getState().workspaces[0].title).toBe("Renamed Canvas");
+    });
+  });
+
+  it("switches the workspace canvas format from the toolbar", async () => {
+    renderWithProviders(<WorkspaceToolbar />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Canvas size" }));
+    await userEvent.click(screen.getByText("A4 landscape"));
+
+    await waitFor(() => {
+      expect(screen.getByText("A4 landscape")).toBeInTheDocument();
+      expect(useWorkspaceStore.getState().canvasFormat.id).toBe("a4-landscape");
+      expect(useWorkspaceStore.getState().hasUnsavedChanges).toBe(true);
     });
   });
 });

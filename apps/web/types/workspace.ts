@@ -42,11 +42,24 @@ export type WorkspaceNodeData = ChartNodeData | TextNodeData | SectionNodeData;
 export type WorkspaceNode = Node<WorkspaceNodeData>;
 export type WorkspaceEdge = Edge;
 
+export type WorkspaceCanvasFormatId =
+  | "infinite"
+  | "a4-portrait"
+  | "a4-landscape"
+  | "a3-portrait"
+  | "letter-portrait"
+  | "wide-16-9";
+
+export type WorkspaceCanvasFormat = {
+  id: WorkspaceCanvasFormatId;
+};
+
 export type WorkspaceSnapshot = {
   workspaceId: string;
   nodes: WorkspaceNode[];
   edges: WorkspaceEdge[];
   viewport: { x: number; y: number; zoom: number };
+  canvasFormat?: WorkspaceCanvasFormat;
 };
 
 export type TableCatalogBusinessType = "roster" | "project_progress" | "attendance" | "other";

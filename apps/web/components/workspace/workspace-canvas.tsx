@@ -6,6 +6,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  ViewportPortal,
   useNodesState,
   useEdgesState,
   applyNodeChanges,
@@ -20,6 +21,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useSaveWorkspace } from "@/hooks/use-workspace";
+import { getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import { ChartNode } from "./nodes/chart-node";
 import { TextNode } from "./nodes/text-node";
 import type { WorkspaceNode } from "@/types/workspace";
@@ -33,6 +35,7 @@ export function WorkspaceCanvas() {
   const storeNodes = useWorkspaceStore((s) => s.nodes);
   const storeEdges = useWorkspaceStore((s) => s.edges);
   const storeViewport = useWorkspaceStore((s) => s.viewport);
+  const canvasFormat = useWorkspaceStore((s) => s.canvasFormat);
   const setStoreNodes = useWorkspaceStore((s) => s.setNodes);
   const setViewport = useWorkspaceStore((s) => s.setViewport);
 
@@ -41,6 +44,7 @@ export function WorkspaceCanvas() {
   const nodesRef = useRef<Node[]>(storeNodes as Node[]);
 
   const saveWorkspace = useSaveWorkspace();
+  const canvasPreset = getCanvasFormatPreset(canvasFormat.id);
 
   useEffect(() => {
     const nextNodes = storeNodes as Node[];
@@ -114,6 +118,20 @@ export function WorkspaceCanvas() {
           size={1}
           color="#d1cfc5"
         />
+        {canvasPreset.width && canvasPreset.height && (
+          <ViewportPortal>
+            <div
+              aria-hidden="true"
+              className="workspace-page-frame"
+              style={{
+                left: 0,
+                top: 0,
+                width: canvasPreset.width,
+                height: canvasPreset.height,
+              }}
+            />
+          </ViewportPortal>
+        )}
         <Controls
           showInteractive={false}
         />
