@@ -109,6 +109,30 @@ describe("WebDesignCanvas state", () => {
     expect(firstSection.children[0].children).toHaveLength(0);
   });
 
+  it("does not render the old unplaced charts tray", () => {
+    renderWithProviders(<WebDesignCanvas />);
+
+    expect(screen.queryByText("Unplaced charts")).not.toBeInTheDocument();
+    expect(screen.queryByText("All charts are placed.")).not.toBeInTheDocument();
+  });
+
+  it("adds reusable chart copies directly to the Web Page Design grid", () => {
+    useWorkspaceStore.setState({ nodes: [], webDesign: { ...useWorkspaceStore.getState().webDesign, zones: [] } });
+
+    useWorkspaceStore.getState().addNodeToWebDesign({ ...chartNode, id: "node-chart-a" });
+    useWorkspaceStore.getState().addNodeToWebDesign({ ...chartNode, id: "node-chart-b" });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.canvasFormat.id).toBe("web-design");
+    expect(state.nodes.map((node) => node.id)).toEqual(["node-chart-a", "node-chart-b"]);
+    expect(state.webDesign.zones).toHaveLength(2);
+    expect(state.webDesign.zones.map((zone) => zone.chartId)).toEqual(["chart-1", "chart-1"]);
+    expect(state.webDesign.zones.map((zone) => [zone.column, zone.row])).toEqual([
+      [0, 0],
+      [1, 0],
+    ]);
+  });
+
   it("allows publishing charts whose data is stored in an ECharts dataset", () => {
     useWorkspaceStore.setState({
       nodes: [

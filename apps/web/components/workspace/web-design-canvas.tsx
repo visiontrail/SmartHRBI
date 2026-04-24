@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronUp,
   Eye,
-  Grip,
   Minus,
   PanelLeft,
   Plus,
@@ -32,7 +31,6 @@ export function WebDesignCanvas() {
   const setColumns = useWorkspaceStore((s) => s.setWebDesignColumns);
   const addRow = useWorkspaceStore((s) => s.addWebDesignRow);
   const setRowHeight = useWorkspaceStore((s) => s.setWebDesignRowHeight);
-  const placeZone = useWorkspaceStore((s) => s.placeWebDesignZone);
   const resizeZone = useWorkspaceStore((s) => s.resizeWebDesignZone);
   const removeZone = useWorkspaceStore((s) => s.removeWebDesignZone);
   const setPreview = useWorkspaceStore((s) => s.setWebDesignPreview);
@@ -44,8 +42,6 @@ export function WebDesignCanvas() {
     () => nodes.filter((node): node is WorkspaceNode & { data: ChartNodeData } => node.data.type === "chart"),
     [nodes]
   );
-  const placedNodeIds = new Set(layout.zones.map((zone) => zone.nodeId));
-  const unplaced = chartNodes.filter((node) => !placedNodeIds.has(node.id));
   const publishBlocked = layout.zones.some((zone) => {
     const node = chartNodes.find((item) => item.id === zone.nodeId);
     return !node || extractChartRows(node.data).length === 0;
@@ -82,34 +78,6 @@ export function WebDesignCanvas() {
 
   return (
     <div className="flex h-full min-h-0 bg-[#f7f4eb] text-[#2f332f]">
-      {!layout.preview && (
-        <aside className="flex w-72 shrink-0 flex-col border-r border-[#d8d1c1] bg-[#fbfaf5]">
-          <div className="border-b border-[#d8d1c1] p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Grip className="h-4 w-4 text-[#996b35]" />
-              Unplaced charts
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
-            {unplaced.length === 0 ? (
-              <p className="text-sm text-[#777166]">All charts are placed.</p>
-            ) : (
-              unplaced.map((node) => (
-                <button
-                  key={node.id}
-                  draggable
-                  onDragStart={(event) => event.dataTransfer.setData("application/x-node-id", node.id)}
-                  className="w-full rounded-md border border-[#d8d1c1] bg-white p-3 text-left text-sm shadow-sm hover:border-[#ad7d3d]"
-                >
-                  <span className="block truncate font-medium">{node.data.title}</span>
-                  <span className="text-xs text-[#777166]">{node.data.chartType}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </aside>
-      )}
-
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#d8d1c1] bg-[#fffdf7] px-4 py-2">
           <div className="flex items-center gap-2">
@@ -202,7 +170,6 @@ export function WebDesignCanvas() {
                     rowIndex={rowIndex}
                     columnIndex={columnIndex}
                     preview={layout.preview}
-                    onDropNode={(nodeId) => placeZone(nodeId, columnIndex, rowIndex)}
                   />
                 ))
               )}
@@ -247,26 +214,17 @@ function GridCell({
   rowIndex,
   columnIndex,
   preview,
-  onDropNode,
 }: {
   rowId: string;
   rowIndex: number;
   columnIndex: number;
   preview: boolean;
-  onDropNode: (nodeId: string) => void;
 }) {
   return (
     <div
       id={columnIndex === 0 ? rowId : undefined}
       className={cn("border border-dashed border-[#e2dccf]", preview && "border-transparent")}
       style={{ gridColumn: columnIndex + 1, gridRow: rowIndex + 1 }}
-      onDragOver={(event) => {
-        if (!preview) event.preventDefault();
-      }}
-      onDrop={(event) => {
-        const nodeId = event.dataTransfer.getData("application/x-node-id");
-        if (nodeId) onDropNode(nodeId);
-      }}
     />
   );
 }

@@ -27,14 +27,14 @@ type ChartMessageCardProps = {
 export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCardProps) {
   const { t } = useI18n();
   const getAsset = useAssetStore((s) => s.getAsset);
-  const addNode = useWorkspaceStore((s) => s.addNode);
+  const addNodeToWebDesign = useWorkspaceStore((s) => s.addNodeToWebDesign);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const nodes = useWorkspaceStore((s) => s.nodes);
   const setActivePanel = useUIStore((s) => s.setActivePanel);
 
   const asset = getAsset(assetId);
 
-  const handleAddToCanvas = useCallback(() => {
+  const handleAddToWebDesign = useCallback(() => {
     if (!asset) {
       toast.error(t("chat.toast.chartAssetNotFound"));
       return;
@@ -58,7 +58,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
       height: DEFAULT_CHART_NODE_HEIGHT,
     };
 
-    addNode({
+    addNodeToWebDesign({
       id: `node-${generateId()}`,
       type: "chartNode",
       position: { x: offsetX, y: offsetY },
@@ -71,7 +71,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
 
     setActivePanel("both");
     toast.success(t("chat.toast.addedToWorkspace", { title: asset.title }));
-  }, [asset, activeWorkspaceId, nodes.length, addNode, setActivePanel, t]);
+  }, [asset, activeWorkspaceId, nodes.length, addNodeToWebDesign, setActivePanel, t]);
 
   return (
     <Card className="w-full max-w-lg overflow-hidden animate-fade-in">
@@ -97,7 +97,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
         <div className="flex items-center gap-2 mt-3">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="default" size="sm" onClick={handleAddToCanvas}>
+              <Button variant="default" size="sm" onClick={handleAddToWebDesign}>
                 <LayoutDashboard className="w-3.5 h-3.5" />
                 {t("chat.addToCanvas")}
               </Button>

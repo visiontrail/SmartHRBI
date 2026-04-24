@@ -44,6 +44,7 @@ type WorkspaceState = {
   setNodes: (nodes: WorkspaceNode[]) => void;
   setEdges: (edges: WorkspaceEdge[]) => void;
   addNode: (node: WorkspaceNode) => void;
+  addNodeToWebDesign: (node: WorkspaceNode) => void;
   updateNode: (nodeId: string, data: Partial<WorkspaceNode>) => void;
   removeNode: (nodeId: string) => void;
   setViewport: (viewport: { x: number; y: number; zoom: number }) => void;
@@ -116,6 +117,40 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       nodes: [...state.nodes, node],
       hasUnsavedChanges: true,
     })),
+
+  addNodeToWebDesign: (node) =>
+    set((state) => {
+      if (node.data.type !== "chart") return {};
+
+      const placement = findNextWebDesignCell(state.webDesign);
+      const rows =
+        placement.row < state.webDesign.grid.rows.length
+          ? state.webDesign.grid.rows
+          : [...state.webDesign.grid.rows, { id: `row-${state.webDesign.grid.rows.length + 1}`, height: 400 }];
+
+      return {
+        nodes: [...state.nodes, node],
+        canvasFormat: { id: "web-design" },
+        webDesign: {
+          ...state.webDesign,
+          preview: false,
+          grid: { ...state.webDesign.grid, rows },
+          zones: [
+            ...state.webDesign.zones,
+            {
+              id: `zone-${node.id}`,
+              nodeId: node.id,
+              chartId: node.data.assetId,
+              column: placement.column,
+              row: placement.row,
+              colSpan: 1,
+              rowSpan: 1,
+            },
+          ],
+        },
+        hasUnsavedChanges: true,
+      };
+    }),
 
   updateNode: (nodeId, data) =>
     set((state) => ({
@@ -336,6 +371,25 @@ function normalizeWebDesignLayout(value: unknown): WebDesignLayout {
     sidebar: Array.isArray(layout.sidebar) ? layout.sidebar : DEFAULT_WEB_DESIGN_LAYOUT.sidebar,
     preview: Boolean(layout.preview),
   };
+}
+
+function findNextWebDesignCell(layout: WebDesignLayout): { column: number; row: number } {
+  const occupied = new Set<string>();
+  for (const zone of layout.zones) {
+    for (let row = zone.row; row < zone.row + zone.rowSpan; row += 1) {
+      for (let column = zone.column; column < zone.column + zone.colSpan; column += 1) {
+        occupied.add(`${column}:${row}`);
+      }
+    }
+  }
+
+  for (let row = 0; row < layout.grid.rows.length; row += 1) {
+    for (let column = 0; column < layout.grid.columns; column += 1) {
+      if (!occupied.has(`${column}:${row}`)) return { column, row };
+    }
+  }
+
+  return { column: 0, row: layout.grid.rows.length };
 }
 
 function clampLayoutToColumns(layout: WebDesignLayout, columns: number): WebDesignLayout {
