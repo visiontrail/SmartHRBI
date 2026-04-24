@@ -331,7 +331,7 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "sidebar.footerTagline": "AI 原生 HR BI 平台",
 
     "chat.title": "对话",
-    "chat.subtitle": "针对 HR 与项目数据进行提问",
+    "chat.subtitle": "围绕你的业务与数据发起提问",
     "chat.workspaceLabel": "工作空间：{{name}}",
     "chat.workspaceUnselected": "未选择",
     "chat.showCanvas": "显示画布",
@@ -378,7 +378,7 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.ingestion.approvalCustomInputHint": "已开启自定义输入，请输入审批指令后发送。",
     "chat.ingestion.approvalInputLocked": "当前存在待审批流程，请先选择选项，或点“自定义输入”后再手动输入。",
     "chat.emptyStartTitle": "开始一段会话",
-    "chat.emptyDescription": "你可以围绕 HR 与项目数据提问，AI 会自动分析并生成可交互图表，直接加入你的报告工作空间。",
+    "chat.emptyDescription": "你可以围绕业务问题与数据内容提问，AI 会自动分析并生成可交互图表，直接加入你的报告工作空间。",
     "chat.emptyPrompt1": "按部门展示人数分布",
     "chat.emptyPrompt2": "最近每月离职率趋势如何？",
     "chat.emptyPrompt3": "分析项目里程碑进度",
