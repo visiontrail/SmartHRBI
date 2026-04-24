@@ -267,7 +267,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
           </div>
         ) : null}
 
-        <div className="flex items-end gap-3">
+        <div className="flex items-center gap-2">
           <input
             ref={fileInputRef}
             type="file"
@@ -283,7 +283,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             type="button"
             variant="outline"
             size="icon-sm"
-            className="h-[44px] w-[44px] shrink-0"
+            className="h-[44px] w-[44px] shrink-0 self-center"
             onClick={() => fileInputRef.current?.click()}
             disabled={isSending || Boolean(pendingApproval)}
             aria-label={t("chat.attachFile")}
@@ -319,14 +319,14 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
               }
               rows={1}
               disabled={isSending || inputLockedByApproval}
-              className="w-full resize-none rounded-generous border border-border-cream bg-parchment px-4 py-3 pr-12 text-body-sm text-near-black placeholder:text-stone-gray focus:outline-none focus:ring-2 focus:ring-focus-blue focus:border-focus-blue transition-colors disabled:opacity-50 min-h-[44px] max-h-[160px] scrollbar-thin"
+              className="w-full resize-none rounded-generous border border-border-cream bg-parchment px-4 py-3 text-body-sm text-near-black placeholder:text-stone-gray focus:outline-none focus:ring-2 focus:ring-focus-blue focus:border-focus-blue transition-colors disabled:opacity-50 min-h-[44px] max-h-[160px] scrollbar-thin"
               style={{
-                height: "auto",
+                height: "44px",
                 minHeight: "44px",
               }}
               onInput={(e) => {
                 const target = e.target as HTMLTextAreaElement;
-                target.style.height = "auto";
+                target.style.height = "44px";
                 target.style.height = Math.min(target.scrollHeight, 160) + "px";
               }}
             />
@@ -347,7 +347,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
             variant="default"
             onClick={handleSubmit}
             disabled={(!composerText.trim() && !selectedFile) || isSending || inputLockedByApproval}
-            className="shrink-0 h-[44px] w-[44px] rounded-generous p-0"
+            className="shrink-0 h-[44px] w-[44px] rounded-generous p-0 self-center"
             aria-label={t("chat.send")}
           >
             {isSending ? (
