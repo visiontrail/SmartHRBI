@@ -3,6 +3,11 @@ import {
   DEFAULT_CANVAS_FORMAT,
   normalizeCanvasFormat,
 } from "@/lib/workspace/canvas-formats";
+import {
+  WORKSPACE_SELECTION_STORAGE_KEY,
+  safeLoadFromStorage,
+  safeSaveToStorage,
+} from "@/lib/chat/session-storage";
 import type {
   Workspace,
   WorkspaceNode,
@@ -25,6 +30,11 @@ const DEFAULT_WEB_DESIGN_LAYOUT: WebDesignLayout = {
   zones: [],
   sidebar: [{ id: "section-1", label: "Section 1", anchorRowId: "row-1", children: [] }],
   preview: false,
+};
+
+type PersistedWorkspaceSelection = {
+  version: 1;
+  activeWorkspaceId: string | null;
 };
 
 type WorkspaceState = {
@@ -69,9 +79,30 @@ type WorkspaceState = {
   setHasUnsavedChanges: (value: boolean) => void;
 };
 
+function loadPersistedWorkspaceSelection(): PersistedWorkspaceSelection | null {
+  const state = safeLoadFromStorage<Partial<PersistedWorkspaceSelection>>(WORKSPACE_SELECTION_STORAGE_KEY);
+  if (!state || state.version !== 1) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    activeWorkspaceId: typeof state.activeWorkspaceId === "string" ? state.activeWorkspaceId : null,
+  };
+}
+
+function persistWorkspaceSelection(activeWorkspaceId: string | null): void {
+  safeSaveToStorage<PersistedWorkspaceSelection>(WORKSPACE_SELECTION_STORAGE_KEY, {
+    version: 1,
+    activeWorkspaceId,
+  });
+}
+
+const persistedWorkspaceSelection = loadPersistedWorkspaceSelection();
+
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
-  activeWorkspaceId: null,
+  activeWorkspaceId: persistedWorkspaceSelection?.activeWorkspaceId ?? null,
   nodes: [],
   edges: [],
   nodesByFormat: {},
@@ -81,7 +112,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
   hasUnsavedChanges: false,
 
-  setWorkspaces: (workspaces) => set({ workspaces }),
+  setWorkspaces: (workspaces) =>
+    set((state) => {
+      const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+      const activeWorkspaceId =
+        state.activeWorkspaceId && workspaceIds.has(state.activeWorkspaceId)
+          ? state.activeWorkspaceId
+          : null;
+      persistWorkspaceSelection(activeWorkspaceId);
+      return { workspaces, activeWorkspaceId };
+    }),
 
   addWorkspace: (workspace) =>
     set((state) => ({
@@ -98,22 +138,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     })),
 
   removeWorkspace: (workspaceId) =>
-    set((state) => ({
-      workspaces: state.workspaces.filter((w) => w.id !== workspaceId),
-      activeWorkspaceId: state.activeWorkspaceId === workspaceId ? null : state.activeWorkspaceId,
-    })),
+    set((state) => {
+      const workspaces = state.workspaces.filter((w) => w.id !== workspaceId);
+      const activeWorkspaceId = state.activeWorkspaceId === workspaceId ? null : state.activeWorkspaceId;
+      persistWorkspaceSelection(activeWorkspaceId);
+      return { workspaces, activeWorkspaceId };
+    }),
 
   setActiveWorkspace: (workspaceId) =>
-    set({
-      activeWorkspaceId: workspaceId,
-      nodes: [],
-      edges: [],
-      nodesByFormat: {},
-      edgesByFormat: {},
-      viewport: { x: 0, y: 0, zoom: 1 },
-      canvasFormat: DEFAULT_CANVAS_FORMAT,
-      webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
-      hasUnsavedChanges: false,
+    set(() => {
+      persistWorkspaceSelection(workspaceId);
+      return {
+        activeWorkspaceId: workspaceId,
+        nodes: [],
+        edges: [],
+        nodesByFormat: {},
+        edgesByFormat: {},
+        viewport: { x: 0, y: 0, zoom: 1 },
+        canvasFormat: DEFAULT_CANVAS_FORMAT,
+        webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
+        hasUnsavedChanges: false,
+      };
     }),
 
   setNodes: (nodes) => set({ nodes, hasUnsavedChanges: true }),
