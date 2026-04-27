@@ -12,6 +12,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
 import { generateId } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
+import { getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import { toast } from "sonner";
 import type { ChartNodeData } from "@/types/workspace";
 
@@ -27,14 +28,17 @@ type ChartMessageCardProps = {
 export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCardProps) {
   const { t } = useI18n();
   const getAsset = useAssetStore((s) => s.getAsset);
+  const addNode = useWorkspaceStore((s) => s.addNode);
   const addNodeToWebDesign = useWorkspaceStore((s) => s.addNodeToWebDesign);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const nodes = useWorkspaceStore((s) => s.nodes);
+  const canvasFormat = useWorkspaceStore((s) => s.canvasFormat);
   const setActivePanel = useUIStore((s) => s.setActivePanel);
 
   const asset = getAsset(assetId);
+  const canvasName = t(getCanvasFormatPreset(canvasFormat.id).labelKey);
 
-  const handleAddToWebDesign = useCallback(() => {
+  const handleAddToCanvas = useCallback(() => {
     if (!asset) {
       toast.error(t("chat.toast.chartAssetNotFound"));
       return;
@@ -58,7 +62,7 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
       height: DEFAULT_CHART_NODE_HEIGHT,
     };
 
-    addNodeToWebDesign({
+    const node = {
       id: `node-${generateId()}`,
       type: "chartNode",
       position: { x: offsetX, y: offsetY },
@@ -67,11 +71,17 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
       initialWidth: DEFAULT_CHART_NODE_WIDTH,
       initialHeight: DEFAULT_CHART_NODE_HEIGHT,
       data: nodeData,
-    });
+    };
+
+    if (canvasFormat.id === "web-design") {
+      addNodeToWebDesign(node);
+    } else {
+      addNode(node);
+    }
 
     setActivePanel("both");
-    toast.success(t("chat.toast.addedToWorkspace", { title: asset.title }));
-  }, [asset, activeWorkspaceId, nodes.length, addNodeToWebDesign, setActivePanel, t]);
+    toast.success(t("chat.toast.addedToWorkspace", { title: asset.title, canvasName }));
+  }, [asset, activeWorkspaceId, nodes.length, canvasFormat.id, addNode, addNodeToWebDesign, setActivePanel, t, canvasName]);
 
   return (
     <Card className="w-full max-w-lg overflow-hidden animate-fade-in">
@@ -97,12 +107,12 @@ export function ChartMessageCard({ assetId, title, chartType }: ChartMessageCard
         <div className="flex items-center gap-2 mt-3">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="default" size="sm" onClick={handleAddToWebDesign}>
+              <Button variant="default" size="sm" onClick={handleAddToCanvas}>
                 <LayoutDashboard className="w-3.5 h-3.5" />
-                {t("chat.addToCanvas")}
+                {t("chat.addToCanvas", { canvasName })}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t("chat.addToCanvasTooltip")}</TooltipContent>
+            <TooltipContent>{t("chat.addToCanvasTooltip", { canvasName })}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
