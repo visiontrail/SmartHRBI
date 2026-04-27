@@ -32,6 +32,7 @@ export function WebDesignCanvas() {
   const layout = useWorkspaceStore((s) => s.webDesign);
   const setColumns = useWorkspaceStore((s) => s.setWebDesignColumns);
   const addRow = useWorkspaceStore((s) => s.addWebDesignRow);
+  const removeRow = useWorkspaceStore((s) => s.removeWebDesignRow);
   const setRowHeight = useWorkspaceStore((s) => s.setWebDesignRowHeight);
   const moveZone = useWorkspaceStore((s) => s.moveWebDesignZone);
   const resizeZone = useWorkspaceStore((s) => s.resizeWebDesignZone);
@@ -112,10 +113,30 @@ export function WebDesignCanvas() {
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <Button variant="outline" size="sm" onClick={addRow}>
-                  <Plus className="h-4 w-4" />
-                  Add Row
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    disabled={layout.grid.rows.length <= 1}
+                    onClick={() => removeRow(layout.grid.rows[layout.grid.rows.length - 1].id)}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="w-12 text-center text-sm">{layout.grid.rows.length} rows</span>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => {
+                      if (layout.grid.rows.length >= 10) {
+                        toast.error("最多只能添加 10 行");
+                        return;
+                      }
+                      addRow();
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </>
             )}
           </div>
