@@ -93,14 +93,24 @@ export type WebDesignZone = {
 export type WebDesignSidebarItem = {
   id: string;
   label: string;
+  pageId?: string;
   anchorRowId: string;
   children: WebDesignSidebarItem[];
+};
+
+export type WebDesignPage = {
+  id: string;
+  title: string;
+  grid: WebDesignGridConfig;
+  zones: WebDesignZone[];
 };
 
 export type WebDesignLayout = {
   grid: WebDesignGridConfig;
   zones: WebDesignZone[];
   sidebar: WebDesignSidebarItem[];
+  pages?: WebDesignPage[];
+  activePageId?: string;
   preview: boolean;
 };
 

@@ -18,9 +18,18 @@ export type PublishedManifest = {
   layout: {
     grid: { columns: number; rows: { id: string; height: number }[] };
     zones: PublishedZone[];
+    pages?: PublishedPageLayout[];
+    activePageId?: string;
   };
   sidebar: PublishedSidebarItem[];
   charts: PublishedChartEntry[];
+};
+
+export type PublishedPageLayout = {
+  id: string;
+  title: string;
+  grid: { columns: number; rows: { id: string; height: number }[] };
+  zones: PublishedZone[];
 };
 
 export type PublishedZone = {
@@ -44,6 +53,7 @@ export type PublishedChartEntry = {
 export type PublishedSidebarItem = {
   id: string;
   label: string;
+  pageId?: string;
   anchorRowId: string;
   children: PublishedSidebarItem[];
 };

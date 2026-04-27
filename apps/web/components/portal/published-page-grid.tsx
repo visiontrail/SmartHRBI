@@ -8,15 +8,25 @@ import type { ChartSpec } from "@/types/chart";
 export function PublishedPageGrid({
   pageId,
   manifest,
+  activePageId,
   activeChartId,
   onSelectChart,
 }: {
   pageId: string;
   manifest: PublishedManifest;
+  activePageId?: string;
   activeChartId: string | null;
   onSelectChart: (chartId: string | null, title?: string) => void;
 }) {
-  const grid = manifest.layout.grid;
+  const pageLayout =
+    manifest.layout.pages?.find((page) => page.id === activePageId) ??
+    manifest.layout.pages?.[0] ?? {
+      id: manifest.layout.activePageId ?? "section-1",
+      title: "Section 1",
+      grid: manifest.layout.grid,
+      zones: manifest.layout.zones,
+    };
+  const grid = pageLayout.grid;
   return (
     <div className="min-w-0 flex-1 overflow-auto p-5">
       <div
@@ -29,7 +39,7 @@ export function PublishedPageGrid({
         {grid.rows.map((row, rowIndex) => (
           <div key={row.id} id={row.id} style={{ gridColumn: "1 / -1", gridRow: rowIndex + 1 }} />
         ))}
-        {manifest.layout.zones.map((zone) => (
+        {pageLayout.zones.map((zone) => (
           <PublishedChartZone
             key={zone.id}
             pageId={pageId}

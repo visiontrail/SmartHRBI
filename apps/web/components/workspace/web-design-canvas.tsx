@@ -23,7 +23,7 @@ import { useI18n } from "@/lib/i18n/context";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
 import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem } from "@/lib/workspace/publish";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import type { ChartNodeData, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
+import type { ChartNodeData, WebDesignPage, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
 
 const WEB_DESIGN_ZONE_MIME = "application/x-web-design-zone";
 
@@ -40,6 +40,7 @@ export function WebDesignCanvas() {
   const resizeZone = useWorkspaceStore((s) => s.resizeWebDesignZone);
   const removeZone = useWorkspaceStore((s) => s.removeWebDesignZone);
   const setPreview = useWorkspaceStore((s) => s.setWebDesignPreview);
+  const activePage = getActivePage(layout);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -48,10 +49,12 @@ export function WebDesignCanvas() {
     () => nodes.filter((node): node is WorkspaceNode & { data: ChartNodeData } => node.data.type === "chart"),
     [nodes]
   );
-  const publishBlocked = layout.zones.some((zone) => {
+  const pages = getPages(layout);
+  const publishBlocked = pages.flatMap((page) => page.zones).some((zone) => {
     const node = chartNodes.find((item) => item.id === zone.nodeId);
     return !node || extractChartRows(node.data).length === 0;
   });
+  const publishZoneCount = pages.reduce((sum, page) => sum + page.zones.length, 0);
 
   const handlePublish = async () => {
     if (!activeWorkspaceId) return;
@@ -102,23 +105,23 @@ export function WebDesignCanvas() {
                   <Button
                     variant="outline"
                     size="icon-sm"
-                    disabled={layout.grid.columns <= 2}
-                    onClick={() => setColumns(layout.grid.columns - 1)}
+                    disabled={activePage.grid.columns <= 2}
+                    onClick={() => setColumns(activePage.grid.columns - 1)}
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
                   <span className="w-20 whitespace-nowrap text-center text-sm">
-                    {t("workspace.webDesign.columnsCount", { count: layout.grid.columns })}
+                    {t("workspace.webDesign.columnsCount", { count: activePage.grid.columns })}
                   </span>
                   <Button
                     variant="outline"
                     size="icon-sm"
                     onClick={() => {
-                      if (layout.grid.columns >= 10) {
+                      if (activePage.grid.columns >= 10) {
                         toast.error(t("workspace.webDesign.maxColumns"));
                         return;
                       }
-                      setColumns(layout.grid.columns + 1);
+                      setColumns(activePage.grid.columns + 1);
                     }}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -128,19 +131,19 @@ export function WebDesignCanvas() {
                   <Button
                     variant="outline"
                     size="icon-sm"
-                    disabled={layout.grid.rows.length <= 1}
-                    onClick={() => removeRow(layout.grid.rows[layout.grid.rows.length - 1].id)}
+                    disabled={activePage.grid.rows.length <= 1}
+                    onClick={() => removeRow(activePage.grid.rows[activePage.grid.rows.length - 1].id)}
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
                   <span className="w-20 whitespace-nowrap text-center text-sm">
-                    {t("workspace.webDesign.rowsCount", { count: layout.grid.rows.length })}
+                    {t("workspace.webDesign.rowsCount", { count: activePage.grid.rows.length })}
                   </span>
                   <Button
                     variant="outline"
                     size="icon-sm"
                     onClick={() => {
-                      if (layout.grid.rows.length >= 10) {
+                      if (activePage.grid.rows.length >= 10) {
                         toast.error(t("workspace.webDesign.maxRows"));
                         return;
                       }
@@ -164,7 +167,7 @@ export function WebDesignCanvas() {
                   <Button
                     size="sm"
                     onClick={handlePublish}
-                    disabled={publishBlocked || isPublishing || !layout.zones.length}
+                    disabled={publishBlocked || isPublishing || publishZoneCount === 0}
                   >
                     <Send className="h-4 w-4" />
                     {isPublishing ? t("workspace.webDesign.publishing") : t("workspace.webDesign.publish")}
@@ -208,12 +211,12 @@ export function WebDesignCanvas() {
                   layout.preview && "border-transparent shadow-none"
                 )}
                 style={{
-                  gridTemplateColumns: `repeat(${layout.grid.columns}, minmax(180px, 1fr))`,
-                  gridTemplateRows: layout.grid.rows.map((row) => `${row.height}px`).join(" "),
+                  gridTemplateColumns: `repeat(${activePage.grid.columns}, minmax(180px, 1fr))`,
+                  gridTemplateRows: activePage.grid.rows.map((row) => `${row.height}px`).join(" "),
                 }}
               >
-                {layout.grid.rows.map((row, rowIndex) =>
-                  Array.from({ length: layout.grid.columns }).map((_, columnIndex) => (
+                {activePage.grid.rows.map((row, rowIndex) =>
+                  Array.from({ length: activePage.grid.columns }).map((_, columnIndex) => (
                     <GridCell
                       key={`${row.id}-${columnIndex}`}
                       rowId={row.id}
@@ -224,7 +227,7 @@ export function WebDesignCanvas() {
                     />
                   ))
                 )}
-                {layout.zones.map((zone) => (
+                {activePage.zones.map((zone) => (
                   <GridZone
                     key={zone.id}
                     zone={zone}
@@ -236,8 +239,8 @@ export function WebDesignCanvas() {
                 ))}
               </div>
               {!layout.preview &&
-                layout.grid.rows.map((row, index) => {
-                  const topPx = layout.grid.rows
+                activePage.grid.rows.map((row, index) => {
+                  const topPx = activePage.grid.rows
                     .slice(0, index + 1)
                     .reduce((sum, r) => sum + r.height, 0);
                   return (
@@ -394,19 +397,37 @@ function SidebarEditor({ preview }: { preview: boolean }) {
   const addItem = useWorkspaceStore((s) => s.addWebDesignSidebarItem);
   const updateItem = useWorkspaceStore((s) => s.updateWebDesignSidebarItem);
   const removeItem = useWorkspaceStore((s) => s.removeWebDesignSidebarItem);
+  const setActivePage = useWorkspaceStore((s) => s.setActiveWebDesignPage);
 
   if (preview) {
     return (
       <nav className="border-r border-[#e2dccf] bg-[#fbfaf5] p-4">
         {layout.sidebar.map((item) => (
-          <a key={item.id} href={`#${item.anchorRowId}`} className="block py-2 text-sm font-medium">
-            {formatSidebarLabel(item.label, t)}
+          <div key={item.id} className="py-1">
+            <button
+              type="button"
+              onClick={() => setActivePage(item.pageId ?? item.id)}
+              className={cn(
+                "block w-full rounded-md px-2 py-1 text-left text-sm font-medium",
+                layout.activePageId === (item.pageId ?? item.id) && "bg-[#eadfca] text-[#6f4d24]"
+              )}
+            >
+              {formatSidebarLabel(item.label, t)}
+            </button>
             {item.children.map((child) => (
-              <span key={child.id} className="ml-4 block py-1 text-xs font-normal text-[#777166]">
+              <button
+                key={child.id}
+                type="button"
+                onClick={() => setActivePage(child.pageId ?? child.id)}
+                className={cn(
+                  "ml-4 block w-[calc(100%-1rem)] rounded-md px-2 py-1 text-left text-xs font-normal text-[#777166]",
+                  layout.activePageId === (child.pageId ?? child.id) && "bg-[#eadfca] text-[#6f4d24]"
+                )}
+              >
                 {formatSidebarLabel(child.label, t)}
-              </span>
+              </button>
             ))}
-          </a>
+          </div>
         ))}
       </nav>
     );
@@ -435,7 +456,7 @@ function SidebarEditor({ preview }: { preview: boolean }) {
           <SidebarItemEditor
             key={item.id}
             item={item}
-            rows={layout.grid.rows}
+            activePageId={layout.activePageId}
             onAddChild={() =>
               addItem(item.id, {
                 sectionLabel: t("workspace.webDesign.defaultSection", { count: layout.sidebar.length + 1 }),
@@ -444,6 +465,7 @@ function SidebarEditor({ preview }: { preview: boolean }) {
             }
             onUpdate={updateItem}
             onRemove={removeItem}
+            onSelectPage={setActivePage}
           />
         ))}
       </div>
@@ -509,36 +531,41 @@ function RowResizeHandle({
 
 function SidebarItemEditor({
   item,
-  rows,
+  activePageId,
   onAddChild,
   onUpdate,
   onRemove,
+  onSelectPage,
 }: {
   item: WebDesignSidebarItem;
-  rows: { id: string }[];
+  activePageId?: string;
   onAddChild: () => void;
   onUpdate: (itemId: string, updates: Partial<Omit<WebDesignSidebarItem, "id" | "children">>) => void;
   onRemove: (itemId: string) => void;
+  onSelectPage: (pageId: string) => void;
 }) {
   const { t } = useI18n();
+  const pageId = item.pageId ?? item.id;
   return (
-    <div className="space-y-2 rounded-md border border-[#d8d1c1] bg-white p-2">
+    <div
+      className={cn(
+        "space-y-2 rounded-md border bg-white p-2",
+        activePageId === pageId ? "border-[#ad7d3d] ring-2 ring-[#eadfca]" : "border-[#d8d1c1]"
+      )}
+    >
+      <button
+        type="button"
+        className="w-full rounded-md bg-[#fbfaf5] px-2 py-1 text-left text-xs font-semibold text-[#6f4d24]"
+        onClick={() => onSelectPage(pageId)}
+      >
+        {t("workspace.webDesign.webPage")}
+      </button>
       <Input
         aria-label={t("workspace.webDesign.aria.sidebarLabel")}
         value={formatSidebarLabel(item.label, t)}
         onChange={(event) => onUpdate(item.id, { label: event.target.value })}
+        onFocus={() => onSelectPage(pageId)}
       />
-      <select
-        className="h-8 w-full rounded-md border border-[#d8d1c1] bg-white px-2 text-sm"
-        value={item.anchorRowId}
-        onChange={(event) => onUpdate(item.id, { anchorRowId: event.target.value })}
-      >
-        {rows.map((row) => (
-          <option key={row.id} value={row.id}>
-            {row.id}
-          </option>
-        ))}
-      </select>
       <div className="flex gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -558,11 +585,25 @@ function SidebarItemEditor({
         </Button>
       </div>
       {item.children.map((child) => (
-        <div key={child.id} className="ml-3 border-l border-[#d8d1c1] pl-2">
+        <div
+          key={child.id}
+          className={cn(
+            "ml-3 space-y-2 border-l pl-2",
+            activePageId === (child.pageId ?? child.id) ? "border-[#ad7d3d]" : "border-[#d8d1c1]"
+          )}
+        >
+          <button
+            type="button"
+            className="w-full rounded-md bg-[#fbfaf5] px-2 py-1 text-left text-xs font-semibold text-[#6f4d24]"
+            onClick={() => onSelectPage(child.pageId ?? child.id)}
+          >
+            {t("workspace.webDesign.webPage")}
+          </button>
           <Input
             aria-label={t("workspace.webDesign.aria.sidebarChildLabel")}
             value={formatSidebarLabel(child.label, t)}
             onChange={(event) => onUpdate(child.id, { label: event.target.value })}
+            onFocus={() => onSelectPage(child.pageId ?? child.id)}
           />
         </div>
       ))}
@@ -579,4 +620,20 @@ function formatSidebarLabel(label: string, t: (key: string, params?: Record<stri
     return t("workspace.webDesign.defaultSubsection");
   }
   return label;
+}
+
+function getPages(layout: { grid: WebDesignPage["grid"]; zones: WebDesignPage["zones"]; pages?: WebDesignPage[] }) {
+  return layout.pages?.length
+    ? layout.pages
+    : [{ id: "section-1", title: "Section 1", grid: layout.grid, zones: layout.zones }];
+}
+
+function getActivePage(layout: {
+  grid: WebDesignPage["grid"];
+  zones: WebDesignPage["zones"];
+  pages?: WebDesignPage[];
+  activePageId?: string;
+}) {
+  const pages = getPages(layout);
+  return pages.find((page) => page.id === layout.activePageId) ?? pages[0];
 }

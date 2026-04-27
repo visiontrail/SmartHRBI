@@ -16,6 +16,7 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
   const [workspaces, setWorkspaces] = useState<PortalWorkspace[]>([]);
   const [pageId, setPageId] = useState<string | null>(initialPageId || null);
   const [page, setPage] = useState<PortalManifestResponse | null>(null);
+  const [activePublishedPageId, setActivePublishedPageId] = useState<string | undefined>();
   const [activeChartId, setActiveChartId] = useState<string | null>(null);
   const [activeChartTitle, setActiveChartTitle] = useState<string | undefined>();
 
@@ -30,6 +31,12 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
     if (!pageId) return;
     fetchPortalManifest(pageId).then((payload) => {
       setPage(payload);
+      const firstSidebarPageId = payload.manifest.sidebar?.[0]?.pageId ?? payload.manifest.sidebar?.[0]?.id;
+      setActivePublishedPageId(
+        payload.manifest.layout.activePageId ??
+          payload.manifest.layout.pages?.[0]?.id ??
+          firstSidebarPageId
+      );
       setActiveChartId(null);
       setActiveChartTitle(undefined);
     });
@@ -45,10 +52,19 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
           </div>
         ) : (
           <>
-            <PublishedPageSidebar items={page.manifest.sidebar || []} />
+            <PublishedPageSidebar
+              items={page.manifest.sidebar || []}
+              activePageId={activePublishedPageId}
+              onSelectPage={(nextPageId) => {
+                setActivePublishedPageId(nextPageId);
+                setActiveChartId(null);
+                setActiveChartTitle(undefined);
+              }}
+            />
             <PublishedPageGrid
               pageId={page.page_id}
               manifest={page.manifest}
+              activePageId={activePublishedPageId}
               activeChartId={activeChartId}
               onSelectChart={(chartId, title) => {
                 setActiveChartId(chartId);

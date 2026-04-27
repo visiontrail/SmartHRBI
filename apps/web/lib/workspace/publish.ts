@@ -37,9 +37,19 @@ export async function publishWorkspace(
     node.data.type === "chart"
   );
   const chartByNodeId = new Map(chartNodes.map((node) => [node.id, node]));
-  const charts = layout.zones
+  const pages = layout.pages?.length
+    ? layout.pages
+    : [{ id: layout.activePageId ?? "section-1", title: "Section 1", grid: layout.grid, zones: layout.zones }];
+  const zones = pages.flatMap((page) => page.zones);
+  const chartIds = new Set<string>();
+  const charts = zones
     .map((zone) => chartByNodeId.get(zone.nodeId))
     .filter((node): node is WorkspaceNode & { data: ChartNodeData } => Boolean(node))
+    .filter((node) => {
+      if (chartIds.has(node.data.assetId)) return false;
+      chartIds.add(node.data.assetId);
+      return true;
+    })
     .map((node) => ({
       chart_id: node.data.assetId,
       title: node.data.title,
@@ -58,6 +68,8 @@ export async function publishWorkspace(
       layout: {
         grid: layout.grid,
         zones: layout.zones,
+        pages,
+        activePageId: layout.activePageId,
       },
       sidebar: layout.sidebar,
       charts,
