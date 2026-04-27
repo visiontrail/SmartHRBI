@@ -157,7 +157,6 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
             className="h-full min-h-[92px] w-full resize-none rounded-subtle border border-border-cream bg-transparent p-2 focus:outline-none"
             style={textStyle}
             autoFocus
-            onBlur={handleSave}
             onKeyDown={(e) => {
               if (e.key === "Enter" && e.metaKey) handleSave();
               if (e.key === "Escape") {
