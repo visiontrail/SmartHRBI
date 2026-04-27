@@ -269,8 +269,16 @@ function mapWorkspace(
     title: asString(value.name) || "Untitled Workspace",
     createdAt: asString(value.created_at) || new Date().toISOString(),
     updatedAt: asString(value.updated_at) || new Date().toISOString(),
-    nodeCount: snapshots[workspaceId]?.nodes?.length ?? 0,
+    nodeCount: countSnapshotNodes(snapshots[workspaceId]),
   };
+}
+
+function countSnapshotNodes(snapshot: WorkspaceSnapshot | undefined): number {
+  if (!snapshot) return 0;
+  if (snapshot.nodesByFormat) {
+    return Object.values(snapshot.nodesByFormat).reduce((sum, arr) => sum + (arr?.length ?? 0), 0);
+  }
+  return snapshot.nodes?.length ?? 0;
 }
 
 function mapTableCatalogEntry(value: Record<string, unknown>): TableCatalogEntry | null {

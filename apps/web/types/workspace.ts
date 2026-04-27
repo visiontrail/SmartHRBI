@@ -59,8 +59,12 @@ export type WorkspaceCanvasFormat = {
 
 export type WorkspaceSnapshot = {
   workspaceId: string;
-  nodes: WorkspaceNode[];
-  edges: WorkspaceEdge[];
+  /** @deprecated use nodesByFormat instead; kept for backward-compat migration */
+  nodes?: WorkspaceNode[];
+  /** @deprecated use edgesByFormat instead; kept for backward-compat migration */
+  edges?: WorkspaceEdge[];
+  nodesByFormat?: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>>;
+  edgesByFormat?: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>>;
   viewport: { x: number; y: number; zoom: number };
   canvasFormat?: WorkspaceCanvasFormat;
   webDesign?: WebDesignLayout;

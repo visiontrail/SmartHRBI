@@ -9,6 +9,7 @@ import type {
   WorkspaceEdge,
   WorkspaceSnapshot,
   WorkspaceCanvasFormat,
+  WorkspaceCanvasFormatId,
   WebDesignLayout,
   WebDesignSidebarItem,
 } from "@/types/workspace";
@@ -31,6 +32,8 @@ type WorkspaceState = {
   activeWorkspaceId: string | null;
   nodes: WorkspaceNode[];
   edges: WorkspaceEdge[];
+  nodesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>>;
+  edgesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>>;
   viewport: { x: number; y: number; zoom: number };
   canvasFormat: WorkspaceCanvasFormat;
   webDesign: WebDesignLayout;
@@ -71,6 +74,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeWorkspaceId: null,
   nodes: [],
   edges: [],
+  nodesByFormat: {},
+  edgesByFormat: {},
   viewport: { x: 0, y: 0, zoom: 1 },
   canvasFormat: DEFAULT_CANVAS_FORMAT,
   webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
@@ -103,6 +108,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       activeWorkspaceId: workspaceId,
       nodes: [],
       edges: [],
+      nodesByFormat: {},
+      edgesByFormat: {},
       viewport: { x: 0, y: 0, zoom: 1 },
       canvasFormat: DEFAULT_CANVAS_FORMAT,
       webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
@@ -123,6 +130,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) => {
       if (node.data.type !== "chart") return {};
 
+      // Persist the current format's nodes before switching away from it
+      const nodesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>> = {
+        ...state.nodesByFormat,
+        [state.canvasFormat.id]: state.nodes,
+      };
+      const edgesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>> = {
+        ...state.edgesByFormat,
+        [state.canvasFormat.id]: state.edges,
+      };
+
+      // Add the node exclusively to the web-design format bucket
+      const webDesignNodes = [...(nodesByFormat["web-design"] ?? []), node];
+      nodesByFormat["web-design"] = webDesignNodes;
+
       const placement = findNextWebDesignCell(state.webDesign);
       const rows =
         placement.row < state.webDesign.grid.rows.length
@@ -130,7 +151,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           : [...state.webDesign.grid.rows, { id: `row-${state.webDesign.grid.rows.length + 1}`, height: 400 }];
 
       return {
-        nodes: [...state.nodes, node],
+        nodes: webDesignNodes,
+        edges: edgesByFormat["web-design"] ?? [],
+        nodesByFormat,
+        edgesByFormat,
         canvasFormat: { id: "web-design" },
         webDesign: {
           ...state.webDesign,
@@ -176,8 +200,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (state.canvasFormat.id === nextCanvasFormat.id) {
         return {};
       }
+
+      // Persist current format's nodes before switching
+      const nodesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>> = {
+        ...state.nodesByFormat,
+        [state.canvasFormat.id]: state.nodes,
+      };
+      const edgesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>> = {
+        ...state.edgesByFormat,
+        [state.canvasFormat.id]: state.edges,
+      };
+
       return {
         canvasFormat: nextCanvasFormat,
+        nodes: nodesByFormat[nextCanvasFormat.id] ?? [],
+        edges: edgesByFormat[nextCanvasFormat.id] ?? [],
+        nodesByFormat,
+        edgesByFormat,
         hasUnsavedChanges: true,
       };
     }),
@@ -356,19 +395,61 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     })),
 
   loadSnapshot: (snapshot) =>
-    set({
-      nodes: snapshot.nodes,
-      edges: snapshot.edges,
-      viewport: snapshot.viewport,
-      canvasFormat: normalizeCanvasFormat(snapshot.canvasFormat),
-      webDesign: normalizeWebDesignLayout(snapshot.webDesign),
-      hasUnsavedChanges: false,
+    set(() => {
+      const canvasFormat = normalizeCanvasFormat(snapshot.canvasFormat);
+
+      // Start from per-format maps if available
+      const nodesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>> = {
+        ...(snapshot.nodesByFormat ?? {}),
+      };
+      const edgesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>> = {
+        ...(snapshot.edgesByFormat ?? {}),
+      };
+
+      // Migrate legacy flat nodes/edges into the saved canvas-format bucket
+      if (snapshot.nodes?.length && !nodesByFormat[canvasFormat.id]) {
+        nodesByFormat[canvasFormat.id] = snapshot.nodes;
+      }
+      if (snapshot.edges?.length && !edgesByFormat[canvasFormat.id]) {
+        edgesByFormat[canvasFormat.id] = snapshot.edges;
+      }
+
+      return {
+        nodes: nodesByFormat[canvasFormat.id] ?? [],
+        edges: edgesByFormat[canvasFormat.id] ?? [],
+        nodesByFormat,
+        edgesByFormat,
+        viewport: snapshot.viewport,
+        canvasFormat,
+        webDesign: normalizeWebDesignLayout(snapshot.webDesign),
+        hasUnsavedChanges: false,
+      };
     }),
 
   getSnapshot: () => {
-    const { activeWorkspaceId, nodes, edges, viewport, canvasFormat, webDesign } = get();
+    const { activeWorkspaceId, nodes, edges, nodesByFormat, edgesByFormat, viewport, canvasFormat, webDesign } = get();
     if (!activeWorkspaceId) return null;
-    return { workspaceId: activeWorkspaceId, nodes, edges, viewport, canvasFormat, webDesign };
+
+    // Flush active format's nodes into the per-format maps before saving
+    const snapshotNodesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceNode[]>> = {
+      ...nodesByFormat,
+      [canvasFormat.id]: nodes,
+    };
+    const snapshotEdgesByFormat: Partial<Record<WorkspaceCanvasFormatId, WorkspaceEdge[]>> = {
+      ...edgesByFormat,
+      [canvasFormat.id]: edges,
+    };
+
+    return {
+      workspaceId: activeWorkspaceId,
+      nodes,
+      edges,
+      nodesByFormat: snapshotNodesByFormat,
+      edgesByFormat: snapshotEdgesByFormat,
+      viewport,
+      canvasFormat,
+      webDesign,
+    };
   },
 
   setHasUnsavedChanges: (value) => set({ hasUnsavedChanges: value }),
