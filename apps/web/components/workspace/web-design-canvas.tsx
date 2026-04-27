@@ -325,14 +325,37 @@ function GridZone({
     >
       {!preview && (
         <div className="absolute right-2 top-2 z-20 flex gap-1 rounded-md bg-white/90 p-1 shadow">
-          <Button variant="ghost" size="icon-sm" onClick={() => onResize(zone.colSpan + 1, zone.rowSpan)}>
+          <Button
+            aria-label="Increase column span"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onResize(zone.colSpan + 1, zone.rowSpan)}
+          >
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => onResize(zone.colSpan - 1, zone.rowSpan)}>
+          <Button
+            aria-label="Decrease column span"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onResize(zone.colSpan - 1, zone.rowSpan)}
+          >
             <Minus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => onResize(zone.colSpan, zone.rowSpan + 1)}>
+          <Button
+            aria-label="Increase row span"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onResize(zone.colSpan, zone.rowSpan + 1)}
+          >
             <ChevronDown className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            aria-label="Decrease row span"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onResize(zone.colSpan, zone.rowSpan - 1)}
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={onRemove}>
             <Trash2 className="h-3.5 w-3.5" />

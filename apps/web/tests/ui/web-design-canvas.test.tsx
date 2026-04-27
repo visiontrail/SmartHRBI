@@ -157,6 +157,17 @@ describe("WebDesignCanvas state", () => {
     expect(zone.row).toBe(1);
   });
 
+  it("renders a control to reduce a chart zone row span", async () => {
+    useWorkspaceStore.getState().placeWebDesignZone("node-chart", 0, 0);
+    const zoneId = useWorkspaceStore.getState().webDesign.zones[0].id;
+    useWorkspaceStore.getState().resizeWebDesignZone(zoneId, 1, 2);
+    renderWithProviders(<WebDesignCanvas />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Decrease row span" }));
+
+    expect(useWorkspaceStore.getState().webDesign.zones[0].rowSpan).toBe(1);
+  });
+
   it("keeps sidebar nesting at two levels", () => {
     const store = useWorkspaceStore.getState();
     store.addWebDesignSidebarItem("section-1");
