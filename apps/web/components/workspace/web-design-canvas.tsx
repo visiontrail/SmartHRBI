@@ -223,7 +223,7 @@ export function WebDesignCanvas() {
                 ))}
               </div>
               {!layout.preview &&
-                layout.grid.rows.slice(0, -1).map((row, index) => {
+                layout.grid.rows.map((row, index) => {
                   const topPx = layout.grid.rows
                     .slice(0, index + 1)
                     .reduce((sum, r) => sum + r.height, 0);
