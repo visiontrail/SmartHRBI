@@ -1,8 +1,127 @@
-# Cognitrix 识枢
+# Cognitrix 识枢 — AI-Native 智能商业智能平台
 
 [English](README.md) | 简体中文
 
-Cognitrix（识枢）是一个面向任意结构化数据场景的 AI-Native BI 平台。项目当前由 FastAPI 后端、Next.js 前端、DuckDB 会话数据层和本地 SQLite 状态存储组成，支持 Excel 数据上传、语义指标查询、Agentic Query 流式对话、图表生成、可视化画布、视图保存、版本回滚与分享重水化。
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-green.svg)](https://nodejs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
+[![DuckDB](https://img.shields.io/badge/DuckDB-powered-yellow.svg)](https://duckdb.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+> **上传 Excel → 用自然语言提问 → 获取图表与分析看板。**
+> 一个开源的 AI-Native 商业智能平台，把任意结构化表格变成可交互的分析工作台 —— 无需 SQL、无需数据仓库、无需预先搭建看板。
+
+---
+
+## Cognitrix 是什么？
+
+**Cognitrix（识枢）** 是一个面向结构化数据分析的 AI-Native BI 平台。它用一个懂业务问题、能自动生成图表的对话式 AI Agent，替代传统 BI 工具链（ETL 管道 + 固定看板 + SQL 门槛）。
+
+与传统 BI 工具（Tableau、Power BI、Metabase）的核心差异：
+
+| 能力 | 传统 BI | Cognitrix |
+|---|---|---|
+| 数据接入 | 数据仓库 + ETL | 直接上传 Excel |
+| 查询方式 | 拖拽配置 / 手写 SQL | 自然语言对话 |
+| 图表生成 | 手动配置 | AI 自动生成（Spec 驱动）|
+| 即席分析 | 依赖分析师 | 业务人员自助，即时响应 |
+| 访问控制 | 看板级别 | 行级别安全（RLS）+ 角色隔离 |
+| 分享协作 | 静态链接 | 版本化视图，RBAC 权限门控 |
+
+---
+
+## 核心功能
+
+- **自然语言分析（Natural Language Analytics）** — 直接提问"按部门看离职率""找出高风险项目"，即时获得图表、表格和业务洞察。
+- **Excel 即席入库（Excel to Insights）** — 上传任意结构化表格，Agentic Ingestion 流程自动推断 Schema、解析列名，生成可查询的 DuckDB 数据集。
+- **Agentic Query 引擎** — 基于 ReAct 循环（兼容 Claude/DeepSeek），Agent 自动探索表结构、选择语义指标、生成只读 SQL，全过程透明流式推送到 UI。
+- **语义指标层（Semantic Metric Layer）** — YAML 驱动的指标定义，防止 AI 在计算业务 KPI 时产生幻觉（人员总数、离职率、项目 Velocity、预算消耗比等）。
+- **AI 自动生成图表** — JSON Spec 流式输出，经 ECharts（热力图、Sankey、仪表盘、关系图）和 Recharts（柱状图、折线图、饼图、散点图、漏斗图、KPI 卡片）渲染。
+- **可视化工作台** — 基于 React Flow 的拖拽画布，把图表组合为可分享的分析看板。
+- **版本化视图与分享** — 保存、版本化、按角色脱敏后共享分析视图。
+- **企业级安全** — JWT 鉴权、RBAC 权限范围、行级安全注入、SQL 只读校验、审计日志、越狱防护。
+- **LLM 供应商无关** — 一个环境变量切换 DeepSeek、Claude（Anthropic）、Kimi 或任意 OpenAI 兼容接口。
+- **自托管开源** — 本地或 Docker 部署，无云厂商绑定，无 SaaS 费用。
+
+---
+
+## 典型应用场景
+
+- **HR 分析（HR Analytics）** — 人员编制、离职趋势、薪酬基准、绩效分布、部门钻取。
+- **项目管理 BI（Project Management BI）** — Sprint Velocity、预算消耗率、任务完成率、资源利用率、风险热力图。
+- **销售与营收** — 销售漏斗、赢率分析、配额完成率、区域对比（来自 CRM 导出的 Excel）。
+- **财务与运营** — 成本中心拆解、预算对比、运营 KPI —— 均可从现有 Excel 报表直接加载。
+- **管理驾驶舱** — 组合多图表工作台，保存为版本化视图，按权限分享给不同受众。
+
+---
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Next.js 前端（端口 3000）                        │
+│  ChatPanel · WorkspaceCanvas · CatalogView · ShareView       │
+│  Zustand · TanStack Query · React Flow · ECharts · Recharts  │
+└───────────────────────────┬─────────────────────────────────┘
+                            │  SSE 流（planning/tool_use/spec/final）
+┌───────────────────────────▼─────────────────────────────────┐
+│              FastAPI 后端（端口 8000）                        │
+│                                                              │
+│  AgentRuntime ──► ReAct 循环 ──► ToolCallingService          │
+│       │               │               │                      │
+│  AgentGuardrails  LLM Client     SemanticLayer (YAML)        │
+│  (SQL/越狱防护)   (OpenAI 兼容)   MetricCompiler             │
+│       │               │               │                      │
+│  ChartStrategyRouter ◄─────── secure_query_sql()             │
+│  (ECharts / Recharts)         RLS · RBAC · 审计              │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│              数据层                                          │
+│  DuckDB（用户会话级）· SQLite（视图、会话状态）               │
+│  UPLOAD_DIR/state/  ·  sample_data/*.xlsx                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 技术栈
+
+| 层次 | 技术 |
+|---|---|
+| **后端** | FastAPI, Pydantic Settings, Python 3.11+ |
+| **分析引擎** | DuckDB（进程内 OLAP），Pandas，sqlglot |
+| **Agent 运行时** | Claude Agent SDK / DeepSeek（OpenAI 兼容）|
+| **前端** | Next.js 15 App Router, React 18, TypeScript |
+| **状态管理** | Zustand, TanStack Query |
+| **可视化** | ECharts, Recharts, React Flow |
+| **认证与安全** | JWT, RBAC, 行级安全, SQL 只读校验 |
+| **存储** | DuckDB（分析）, SQLite（状态）, 文件系统（上传）|
+| **交付** | Docker Compose, Makefile |
+
+---
+
+## 快速开始
+
+**环境要求：** Python 3.11+、Node.js 20+、npm 10+、GNU Make
+
+```bash
+# 1. 安装所有依赖，生成 .env 文件
+make bootstrap
+
+# 2. 校验环境变量
+make env-check
+
+# 3. 启动 API（8000 端口）和 Web（3000 端口）
+make dev
+```
+
+打开 **http://127.0.0.1:3000** —— 上传示例 Excel 文件即可开始查询。
+
+> 详细配置见 [本地配置](#本地配置) 章节。
+
+---
 
 ## 当前进展
 
@@ -14,7 +133,9 @@ Cognitrix（识枢）是一个面向任意结构化数据场景的 AI-Native BI 
 - 后端已经具备上传、语义层、受控 BI 工具面、Claude Agent SDK Agentic Query、权限控制、审计、视图版本化、Agent 会话恢复等核心能力。
 - 仍处于原型/内测阶段：前端 Conversations / Workspaces / Chart Assets 的列表与画布状态当前主要通过 mock API 和 localStorage 管理；后端已承担真实数据上传、查询、Agent 对话流和分享视图存储。
 
-## 核心能力
+---
+
+## 核心能力详解
 
 ### 把 Excel 变成可分析的数据资产
 
@@ -23,19 +144,19 @@ Cognitrix（识枢）是一个面向任意结构化数据场景的 AI-Native BI 
 - 上传后会给出数据质量反馈，帮助团队判断这份数据是否完整、是否适合进一步分析。
 - 内置可扩展的语义指标层（YAML 驱动），支持跨领域指标口径定义，让各类业务问题可以直接被理解和计算。
 
-### 用对话完成即席分析
+### 用对话完成即席分析（Conversational Analytics）
 
-- 用户可以像问业务分析师一样提问，例如“按部门看离职率”“找出高风险项目”“展示入职年份分布”。
+- 用户可以像问业务分析师一样提问，例如"按部门看离职率""找出高风险项目""展示入职年份分布"。
 - Agent 会根据问题自动探索表结构、读取样例、选择语义指标或生成只读 SQL，减少人工反复试表和改口径。
 - 对于标准指标，系统会优先使用稳定口径；对于临时问题，也能让 AI 分析助手完成更灵活的数据探索。
 - 回答不仅给出结果，还会配套生成图表和简短结论，帮助用户快速判断下一步该看哪里。
-- 多轮对话会保留 `agent_session_id` 和最近一次结构化结果，支持类似“改成折线图”“再按部门拆一下”的追问。
+- 多轮对话会保留 `agent_session_id` 和最近一次结构化结果，支持类似"改成折线图""再按部门拆一下"的追问。
 
 ### 从洞察到可视化工作台
 
 - 对话中生成的图表可以沉淀为图表资产，继续放入工作台里组合、拖拽和整理。
 - 用户可以在对话、画布和分屏模式之间切换，把一次问答延展成可复用的分析看板。
-- 当前支持柱状图、折线图、饼图、面积图、散点图、漏斗图、表格、单指标卡等常见业务图表。
+- 当前支持柱状图、折线图、饼图、面积图、散点图、漏斗图、表格、单指标卡、热力图、仪表盘、Sankey、旭日图、箱线图、关系图等。
 - 分析过程可以保留上下文，让后续追问、补充筛选和图表调整更自然。
 
 ### 让视图按权限被看见
@@ -46,28 +167,24 @@ Cognitrix（识枢）是一个面向任意结构化数据场景的 AI-Native BI 
 - 同一份视图支持版本更新和回滚，适合持续迭代周报、项目复盘和管理驾驶舱。
 - 上传、查询、分析操作、权限调整和回滚都会留下记录，方便团队追踪数据使用与分析过程。
 
-## 技术栈
-
-- Backend：FastAPI、Pydantic Settings、DuckDB、Pandas、sqlglot、SQLite。
-- Agent Runtime：Claude Agent SDK `ClaudeSDKClient`、in-process SDK MCP BI tools、SDK permission callback + hooks、SQLite 持久化 agent sessions、Guardrails、结构化输出、SSE tool trace。
-- Frontend：Next.js App Router、React 18、TypeScript、Tailwind CSS、Zustand、TanStack Query、React Flow、ECharts。
-- Testing：pytest、Vitest / Playwright 测试文件、k6 压测脚本、smoke flow。
-- Delivery：Makefile、Dockerfile、Docker Compose。
+---
 
 ## 目录结构
 
 ```text
 .
-├── apps/api              # FastAPI 后端
-├── apps/web              # Next.js 前端
-├── models                # HR / PM 语义模型
-├── sample_data           # 示例 Excel 数据
-├── tests                 # 后端、集成、安全、smoke 测试
+├── apps/api              # FastAPI 后端（Agent 运行时、语义层、安全）
+├── apps/web              # Next.js 前端（Chat、Workspace、Share、Catalog）
+├── models                # HR / PM 语义指标定义（YAML）
+├── sample_data           # 示例 Excel 数据（用于本地测试）
+├── tests                 # 后端、集成、安全、评测、smoke 测试
 ├── scripts               # 本地开发、构建、测试、重置脚本
 ├── docs/adr              # 架构决策记录
-├── infra/docker          # 备用 Docker Compose 文件
+├── infra/docker          # 备用 Docker Compose 配置
 └── packages/shared       # 共享包占位
 ```
+
+---
 
 ## 环境要求
 
@@ -77,33 +194,7 @@ Cognitrix（识枢）是一个面向任意结构化数据场景的 AI-Native BI 
 - GNU Make
 - Docker Desktop，可选，仅容器交付和 Docker smoke 需要
 
-## 快速开始
-
-安装依赖并生成本地环境文件：
-
-```bash
-make bootstrap
-```
-
-校验环境变量：
-
-```bash
-make env-check
-```
-
-启动本地 API 与 Web：
-
-```bash
-make dev
-```
-
-默认访问地址：
-
-- Web：http://127.0.0.1:3000
-- API：http://127.0.0.1:8000
-- Health Check：http://127.0.0.1:8000/healthz
-
-`make dev` 会启动本地 web/api 进程，不会安装或启动 PostgreSQL；当前默认状态存储使用本地 SQLite，上传数据、DuckDB 文件、AI view state 和 Agent session state 都位于 `apps/api/data/uploads` 下。
+---
 
 ## 常用命令
 
@@ -126,7 +217,7 @@ make docker-up         # 构建并启动 Docker Compose
 make docker-down       # 停止 Docker Compose
 ```
 
-注意：`scripts/test.sh` 默认只跑后端 pytest。设置 `RUN_WEB_TESTS=1` 时会执行 `npm run --prefix apps/web test`，但当前 `apps/web/package.json` 尚未挂载 `test` 脚本；如需运行前端测试，可先补齐 package script，或直接按 Vitest / Playwright 配置运行对应测试。
+---
 
 ## 本地配置
 
@@ -153,8 +244,6 @@ UPLOAD_DIR=./data/uploads
 CORS_ALLOW_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 ```
 
-Excel 上传始终走 Agentic ingestion；`AGENTIC_INGESTION_ENABLED` 仅保留为兼容旧环境文件的配置项，不再关闭 `/ingestion/*`。
-
 前端关键变量：
 
 ```env
@@ -175,6 +264,8 @@ NEXT_PUBLIC_DEFAULT_DATASET_TABLE=employees_wide
 ```
 
 Agentic Query 通过 Claude Agent SDK 运行，但默认接入 DeepSeek 的 Anthropic 兼容接口；`AI_API_KEY` 会传给 SDK CLI 作为 `ANTHROPIC_API_KEY` 与 `ANTHROPIC_AUTH_TOKEN`，`ANTHROPIC_BASE_URL` 默认指向 `https://api.deepseek.com/anthropic`，`AI_MODEL` 默认使用 `deepseek-chat`。如果需要单独覆盖 Claude Code CLI 的 token，可填写 `ANTHROPIC_AUTH_TOKEN`。
+
+---
 
 ## Agentic Query
 
@@ -213,19 +304,18 @@ Agent 工具面限制在 BI 相关操作：
 - `final`
 - `error`
 
-兼容事件：
-
-- `reasoning`
-- `tool`
+兼容事件：`reasoning`、`tool`
 
 设计细节见 `docs/adr/0001-agentic-query-runtime.md`。
+
+---
 
 ## API 概览
 
 所有业务 API 除 `/healthz` 和 `/auth/login` 外都需要 `Authorization: Bearer <token>`。前端会自动调用 `/auth/login` 获取并缓存 token。
 
 | Method | Path | 说明 |
-| --- | --- | --- |
+|---|---|---|
 | `GET` | `/healthz` | 服务健康检查 |
 | `POST` | `/auth/login` | 签发访问 token |
 | `POST` | `/auth/roles/{user_id}` | 管理用户角色覆盖 |
@@ -243,6 +333,8 @@ Agent 工具面限制在 BI 相关操作：
 | `GET` | `/share/{view_id}` | 读取分享 view |
 | `POST` | `/views/{view_id}/rollback/{version}` | 回滚 view 版本 |
 
+---
+
 ## 端到端验证
 
 本地 smoke flow：
@@ -254,7 +346,7 @@ make smoke-local
 覆盖链路：
 
 ```text
-healthz -> auth/login -> upload Excel -> semantic query -> chat stream -> save view -> share view
+healthz → auth/login → upload Excel → semantic query → chat stream → save view → share view
 ```
 
 完整测试门禁：
@@ -263,14 +355,7 @@ healthz -> auth/login -> upload Excel -> semantic query -> chat stream -> save v
 make test-all
 ```
 
-也可以按需运行更细的测试：
-
-```bash
-.venv/bin/python -m pytest tests -q
-.venv/bin/python -m pytest tests/security -q
-.venv/bin/python -m pytest tests/integration -q
-npm run --prefix apps/web build
-```
+---
 
 ## Docker 交付
 
@@ -302,31 +387,7 @@ make smoke-docker
 
 上传与状态数据保存在 Docker named volume `cognitrix_upload_data`。
 
-## 数据重置
-
-清理本地运行数据、上传文件、DuckDB / SQLite 状态、日志和测试产物：
-
-```bash
-make reset-local-data
-```
-
-预览将删除的内容：
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --dry-run
-```
-
-同时重置 `apps/api/.env` 指向的数据库：
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --with-db-reset
-```
-
-同时移除 Docker Compose named volumes：
-
-```bash
-.venv/bin/python scripts/reset_local_data.py --include-docker-volumes
-```
+---
 
 ## 示例数据
 
@@ -337,6 +398,14 @@ make reset-local-data
 - `sample_data/hr_workforce_upload_sample_zh.xlsx`
 
 上传后，API 会返回 `batch_id`、`dataset_table`、`quality_report`、`diagnostics` 等信息。后续语义查询和对话请求需要使用返回的 `dataset_table`。
+
+---
+
+## 参与贡献
+
+欢迎参与贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解提交 Issue、提议功能和发起 Pull Request 的相关规范。
+
+---
 
 ## 已知边界
 
