@@ -89,7 +89,7 @@ export function WebDesignCanvas() {
             <span className="text-sm font-semibold">Web Page Design</span>
             {!layout.preview && (
               <>
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   <Button
                     variant="outline"
                     size="icon-sm"
@@ -98,7 +98,7 @@ export function WebDesignCanvas() {
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
-                  <span className="w-16 text-center text-sm">{layout.grid.columns} columns</span>
+                  <span className="w-20 whitespace-nowrap text-center text-sm">{layout.grid.columns} columns</span>
                   <Button
                     variant="outline"
                     size="icon-sm"
@@ -113,7 +113,7 @@ export function WebDesignCanvas() {
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   <Button
                     variant="outline"
                     size="icon-sm"
@@ -122,7 +122,7 @@ export function WebDesignCanvas() {
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
-                  <span className="w-12 text-center text-sm">{layout.grid.rows.length} rows</span>
+                  <span className="w-20 whitespace-nowrap text-center text-sm">{layout.grid.rows.length} rows</span>
                   <Button
                     variant="outline"
                     size="icon-sm"
