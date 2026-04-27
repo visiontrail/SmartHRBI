@@ -85,4 +85,13 @@ describe("WorkspaceToolbar", () => {
       expect(useWorkspaceStore.getState().hasUnsavedChanges).toBe(true);
     });
   });
+
+  it("does not render a manual canvas save button", () => {
+    useWorkspaceStore.setState({ hasUnsavedChanges: true });
+
+    renderWithProviders(<WorkspaceToolbar />);
+
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Unsaved changes/i)).toBeInTheDocument();
+  });
 });

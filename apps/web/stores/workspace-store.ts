@@ -71,7 +71,7 @@ type WorkspaceState = {
   resizeWebDesignZone: (zoneId: string, colSpan: number, rowSpan: number) => void;
   removeWebDesignZone: (zoneId: string) => void;
   setWebDesignPreview: (preview: boolean) => void;
-  addWebDesignSidebarItem: (parentId?: string) => void;
+  addWebDesignSidebarItem: (parentId?: string, labels?: { sectionLabel: string; childLabel: string }) => void;
   updateWebDesignSidebarItem: (itemId: string, updates: Partial<Omit<WebDesignSidebarItem, "id" | "children">>) => void;
   removeWebDesignSidebarItem: (itemId: string) => void;
   loadSnapshot: (snapshot: WorkspaceSnapshot) => void;
@@ -410,11 +410,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       hasUnsavedChanges: true,
     })),
 
-  addWebDesignSidebarItem: (parentId) =>
+  addWebDesignSidebarItem: (parentId, labels) =>
     set((state) => ({
       webDesign: {
         ...state.webDesign,
-        sidebar: addSidebarItem(state.webDesign.sidebar, parentId, state.webDesign.grid.rows[0]?.id ?? "row-1"),
+        sidebar: addSidebarItem(
+          state.webDesign.sidebar,
+          parentId,
+          state.webDesign.grid.rows[0]?.id ?? "row-1",
+          labels
+        ),
       },
       hasUnsavedChanges: true,
     })),
@@ -576,18 +581,19 @@ function clampLayoutToColumns(layout: WebDesignLayout, columns: number): WebDesi
 function addSidebarItem(
   items: WebDesignSidebarItem[],
   parentId: string | undefined,
-  anchorRowId: string
+  anchorRowId: string,
+  labels?: { sectionLabel: string; childLabel: string }
 ): WebDesignSidebarItem[] {
   const nextItem = {
     id: `section-${Date.now().toString(36)}`,
-    label: `Section ${items.length + 1}`,
+    label: labels?.sectionLabel ?? `Section ${items.length + 1}`,
     anchorRowId,
     children: [],
   };
   if (!parentId) return [...items, nextItem];
   return items.map((item) =>
     item.id === parentId
-      ? { ...item, children: [...item.children, { ...nextItem, label: "Sub-section" }] }
+      ? { ...item, children: [...item.children, { ...nextItem, label: labels?.childLabel ?? "Sub-section" }] }
       : item
   );
 }

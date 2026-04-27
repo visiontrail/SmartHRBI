@@ -1,7 +1,7 @@
 "use client";
 
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import { useWorkspaceSnapshot } from "@/hooks/use-workspace";
+import { useAutoSaveWorkspace, useWorkspaceSnapshot } from "@/hooks/use-workspace";
 import { WorkspaceCanvas } from "./workspace-canvas";
 import { WorkspaceEmptyState } from "./workspace-empty-state";
 import { WorkspaceToolbar } from "./workspace-toolbar";
@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function WorkspacePanel() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const { isLoading } = useWorkspaceSnapshot(activeWorkspaceId);
+  useAutoSaveWorkspace({ enabled: Boolean(activeWorkspaceId) && !isLoading });
 
   if (!activeWorkspaceId) {
     return <WorkspaceEmptyState />;

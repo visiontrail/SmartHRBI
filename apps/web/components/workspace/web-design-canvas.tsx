@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChartPreview } from "@/components/charts/chart-preview";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n/context";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
 import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem } from "@/lib/workspace/publish";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -27,6 +28,7 @@ import type { ChartNodeData, WebDesignSidebarItem, WebDesignZone, WorkspaceNode 
 const WEB_DESIGN_ZONE_MIME = "application/x-web-design-zone";
 
 export function WebDesignCanvas() {
+  const { t } = useI18n();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const nodes = useWorkspaceStore((s) => s.nodes);
   const layout = useWorkspaceStore((s) => s.webDesign);
@@ -56,17 +58,20 @@ export function WebDesignCanvas() {
     setIsPublishing(true);
     try {
       const result = await publishWorkspace(activeWorkspaceId, layout, nodes);
-      toast.success("Published", {
-        description: `Version ${result.version} is ready.`,
+      toast.success(t("workspace.webDesign.toast.published"), {
+        description: t("workspace.webDesign.toast.versionReady", { version: result.version }),
         action: {
-          label: "View Published Page",
+          label: t("workspace.webDesign.viewPublishedPage"),
           onClick: () => {
             window.location.href = `/portal?page=${encodeURIComponent(result.published_page_id)}`;
           },
         },
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Publish failed");
+      const message = error instanceof Error && error.message !== "Publish failed"
+        ? error.message
+        : t("workspace.webDesign.toast.publishFailed");
+      toast.error(message);
     } finally {
       setIsPublishing(false);
     }
@@ -76,7 +81,11 @@ export function WebDesignCanvas() {
     if (!activeWorkspaceId) return;
     setHistoryOpen((value) => !value);
     if (!historyOpen) {
-      setHistory(await fetchPublishHistory(activeWorkspaceId));
+      try {
+        setHistory(await fetchPublishHistory(activeWorkspaceId));
+      } catch {
+        toast.error(t("workspace.webDesign.toast.historyFailed"));
+      }
     }
   };
 
@@ -86,7 +95,7 @@ export function WebDesignCanvas() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#d8d1c1] bg-[#fffdf7] px-4 py-2">
           <div className="flex items-center gap-2">
             <PanelLeft className="h-4 w-4 text-[#996b35]" />
-            <span className="text-sm font-semibold">Web Page Design</span>
+            <span className="text-sm font-semibold">{t("workspace.webDesign.title")}</span>
             {!layout.preview && (
               <>
                 <div className="flex shrink-0 items-center gap-1">
@@ -98,13 +107,15 @@ export function WebDesignCanvas() {
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
-                  <span className="w-20 whitespace-nowrap text-center text-sm">{layout.grid.columns} columns</span>
+                  <span className="w-20 whitespace-nowrap text-center text-sm">
+                    {t("workspace.webDesign.columnsCount", { count: layout.grid.columns })}
+                  </span>
                   <Button
                     variant="outline"
                     size="icon-sm"
                     onClick={() => {
                       if (layout.grid.columns >= 10) {
-                        toast.error("最多只能添加 10 列");
+                        toast.error(t("workspace.webDesign.maxColumns"));
                         return;
                       }
                       setColumns(layout.grid.columns + 1);
@@ -122,13 +133,15 @@ export function WebDesignCanvas() {
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
-                  <span className="w-20 whitespace-nowrap text-center text-sm">{layout.grid.rows.length} rows</span>
+                  <span className="w-20 whitespace-nowrap text-center text-sm">
+                    {t("workspace.webDesign.rowsCount", { count: layout.grid.rows.length })}
+                  </span>
                   <Button
                     variant="outline"
                     size="icon-sm"
                     onClick={() => {
                       if (layout.grid.rows.length >= 10) {
-                        toast.error("最多只能添加 10 行");
+                        toast.error(t("workspace.webDesign.maxRows"));
                         return;
                       }
                       addRow();
@@ -143,7 +156,7 @@ export function WebDesignCanvas() {
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => setPreview(!layout.preview)}>
               {layout.preview ? <Check className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              {layout.preview ? "Edit" : "Preview"}
+              {layout.preview ? t("workspace.webDesign.edit") : t("workspace.webDesign.preview")}
             </Button>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -154,17 +167,17 @@ export function WebDesignCanvas() {
                     disabled={publishBlocked || isPublishing || !layout.zones.length}
                   >
                     <Send className="h-4 w-4" />
-                    Publish
+                    {isPublishing ? t("workspace.webDesign.publishing") : t("workspace.webDesign.publish")}
                   </Button>
                 </span>
               </TooltipTrigger>
               {publishBlocked && (
-                <TooltipContent>All charts must have data before publishing</TooltipContent>
+                <TooltipContent>{t("workspace.webDesign.publishBlocked")}</TooltipContent>
               )}
             </Tooltip>
             <Button variant="ghost" size="sm" onClick={loadHistory}>
               {historyOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              History
+              {t("workspace.webDesign.history")}
             </Button>
           </div>
         </div>
@@ -172,7 +185,7 @@ export function WebDesignCanvas() {
         {historyOpen && (
           <div className="border-b border-[#d8d1c1] bg-[#fffaf0] px-4 py-2 text-sm">
             {history.length === 0 ? (
-              <span className="text-[#777166]">No published versions yet.</span>
+              <span className="text-[#777166]">{t("workspace.webDesign.noPublishedVersions")}</span>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {history.map((item) => (
@@ -258,6 +271,7 @@ function GridCell({
   preview: boolean;
   onDropZone: (zoneId: string) => void;
 }) {
+  const { t } = useI18n();
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
     if (preview) return;
     event.preventDefault();
@@ -276,7 +290,7 @@ function GridCell({
   return (
     <div
       id={columnIndex === 0 ? rowId : undefined}
-      aria-label={`Grid cell row ${rowIndex + 1} column ${columnIndex + 1}`}
+      aria-label={t("workspace.webDesign.aria.gridCell", { row: rowIndex + 1, column: columnIndex + 1 })}
       className={cn("border border-dashed border-[#e2dccf]", preview && "border-transparent")}
       style={{ gridColumn: columnIndex + 1, gridRow: rowIndex + 1 }}
       onDragOver={handleDragOver}
@@ -298,6 +312,7 @@ function GridZone({
   onResize: (colSpan: number, rowSpan: number) => void;
   onRemove: () => void;
 }) {
+  const { t } = useI18n();
   if (!node) return null;
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     if (preview) {
@@ -311,7 +326,7 @@ function GridZone({
 
   return (
     <section
-      aria-label={`Chart zone ${node.data.title}`}
+      aria-label={t("workspace.webDesign.aria.chartZone", { title: node.data.title })}
       draggable={!preview}
       onDragStart={handleDragStart}
       className={cn(
@@ -326,7 +341,7 @@ function GridZone({
       {!preview && (
         <div className="absolute right-2 top-2 z-20 flex gap-1 rounded-md bg-white/90 p-1 shadow">
           <Button
-            aria-label="Increase column span"
+            aria-label={t("workspace.webDesign.aria.increaseColumnSpan")}
             variant="ghost"
             size="icon-sm"
             onClick={() => onResize(zone.colSpan + 1, zone.rowSpan)}
@@ -334,7 +349,7 @@ function GridZone({
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button
-            aria-label="Decrease column span"
+            aria-label={t("workspace.webDesign.aria.decreaseColumnSpan")}
             variant="ghost"
             size="icon-sm"
             onClick={() => onResize(zone.colSpan - 1, zone.rowSpan)}
@@ -342,7 +357,7 @@ function GridZone({
             <Minus className="h-3.5 w-3.5" />
           </Button>
           <Button
-            aria-label="Increase row span"
+            aria-label={t("workspace.webDesign.aria.increaseRowSpan")}
             variant="ghost"
             size="icon-sm"
             onClick={() => onResize(zone.colSpan, zone.rowSpan + 1)}
@@ -350,14 +365,19 @@ function GridZone({
             <ChevronDown className="h-3.5 w-3.5" />
           </Button>
           <Button
-            aria-label="Decrease row span"
+            aria-label={t("workspace.webDesign.aria.decreaseRowSpan")}
             variant="ghost"
             size="icon-sm"
             onClick={() => onResize(zone.colSpan, zone.rowSpan - 1)}
           >
             <ChevronUp className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={onRemove}>
+          <Button
+            aria-label={t("workspace.webDesign.aria.removeZone")}
+            variant="ghost"
+            size="icon-sm"
+            onClick={onRemove}
+          >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -369,6 +389,7 @@ function GridZone({
 }
 
 function SidebarEditor({ preview }: { preview: boolean }) {
+  const { t } = useI18n();
   const layout = useWorkspaceStore((s) => s.webDesign);
   const addItem = useWorkspaceStore((s) => s.addWebDesignSidebarItem);
   const updateItem = useWorkspaceStore((s) => s.updateWebDesignSidebarItem);
@@ -379,10 +400,10 @@ function SidebarEditor({ preview }: { preview: boolean }) {
       <nav className="border-r border-[#e2dccf] bg-[#fbfaf5] p-4">
         {layout.sidebar.map((item) => (
           <a key={item.id} href={`#${item.anchorRowId}`} className="block py-2 text-sm font-medium">
-            {item.label}
+            {formatSidebarLabel(item.label, t)}
             {item.children.map((child) => (
               <span key={child.id} className="ml-4 block py-1 text-xs font-normal text-[#777166]">
-                {child.label}
+                {formatSidebarLabel(child.label, t)}
               </span>
             ))}
           </a>
@@ -394,8 +415,18 @@ function SidebarEditor({ preview }: { preview: boolean }) {
   return (
     <aside className="overflow-auto border-r border-[#d8d1c1] bg-[#fbfaf5] p-3">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-semibold">Page sidebar</span>
-        <Button variant="outline" size="icon-sm" onClick={() => addItem()}>
+        <span className="text-sm font-semibold">{t("workspace.webDesign.pageSidebar")}</span>
+        <Button
+          aria-label={t("workspace.webDesign.addSidebarSection")}
+          variant="outline"
+          size="icon-sm"
+          onClick={() =>
+            addItem(undefined, {
+              sectionLabel: t("workspace.webDesign.defaultSection", { count: layout.sidebar.length + 1 }),
+              childLabel: t("workspace.webDesign.defaultSubsection"),
+            })
+          }
+        >
           <Plus className="h-4 w-4" />
         </Button>
       </div>
@@ -405,7 +436,12 @@ function SidebarEditor({ preview }: { preview: boolean }) {
             key={item.id}
             item={item}
             rows={layout.grid.rows}
-            onAddChild={() => addItem(item.id)}
+            onAddChild={() =>
+              addItem(item.id, {
+                sectionLabel: t("workspace.webDesign.defaultSection", { count: layout.sidebar.length + 1 }),
+                childLabel: t("workspace.webDesign.defaultSubsection"),
+              })
+            }
             onUpdate={updateItem}
             onRemove={removeItem}
           />
@@ -426,6 +462,7 @@ function RowResizeHandle({
   currentHeight: number;
   onSetHeight: (height: number) => void;
 }) {
+  const { t } = useI18n();
   const [dragging, setDragging] = useState(false);
 
   const handleMouseDown = (e: ReactMouseEvent) => {
@@ -452,7 +489,7 @@ function RowResizeHandle({
 
   return (
     <div
-      aria-label={`Resize ${rowId}`}
+      aria-label={t("workspace.webDesign.aria.resizeRow", { rowId })}
       className={cn(
         "group absolute inset-x-0 z-30 flex h-3 cursor-row-resize select-none items-center",
         dragging && "z-40"
@@ -483,9 +520,14 @@ function SidebarItemEditor({
   onUpdate: (itemId: string, updates: Partial<Omit<WebDesignSidebarItem, "id" | "children">>) => void;
   onRemove: (itemId: string) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="space-y-2 rounded-md border border-[#d8d1c1] bg-white p-2">
-      <Input value={item.label} onChange={(event) => onUpdate(item.id, { label: event.target.value })} />
+      <Input
+        aria-label={t("workspace.webDesign.aria.sidebarLabel")}
+        value={formatSidebarLabel(item.label, t)}
+        onChange={(event) => onUpdate(item.id, { label: event.target.value })}
+      />
       <select
         className="h-8 w-full rounded-md border border-[#d8d1c1] bg-white px-2 text-sm"
         value={item.anchorRowId}
@@ -504,17 +546,37 @@ function SidebarItemEditor({
               <Plus className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Sidebar supports two levels only</TooltipContent>
+          <TooltipContent>{t("workspace.webDesign.sidebarTwoLevelsOnly")}</TooltipContent>
         </Tooltip>
-        <Button variant="ghost" size="icon-sm" onClick={() => onRemove(item.id)}>
+        <Button
+          aria-label={t("workspace.webDesign.removeSidebarItem")}
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onRemove(item.id)}
+        >
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
       {item.children.map((child) => (
         <div key={child.id} className="ml-3 border-l border-[#d8d1c1] pl-2">
-          <Input value={child.label} onChange={(event) => onUpdate(child.id, { label: event.target.value })} />
+          <Input
+            aria-label={t("workspace.webDesign.aria.sidebarChildLabel")}
+            value={formatSidebarLabel(child.label, t)}
+            onChange={(event) => onUpdate(child.id, { label: event.target.value })}
+          />
         </div>
       ))}
     </div>
   );
+}
+
+function formatSidebarLabel(label: string, t: (key: string, params?: Record<string, string | number>) => string) {
+  const sectionMatch = /^Section\s+(\d+)$/i.exec(label);
+  if (sectionMatch) {
+    return t("workspace.webDesign.defaultSection", { count: Number(sectionMatch[1]) });
+  }
+  if (label === "Sub-section") {
+    return t("workspace.webDesign.defaultSubsection");
+  }
+  return label;
 }

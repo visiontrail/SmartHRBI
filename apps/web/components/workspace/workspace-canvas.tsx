@@ -20,7 +20,6 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import { useSaveWorkspace } from "@/hooks/use-workspace";
 import { getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
 import { ChartNode } from "./nodes/chart-node";
 import { TextNode } from "./nodes/text-node";
@@ -50,7 +49,6 @@ export function WorkspaceCanvas() {
   const [edges, setEdges] = useEdgesState(storeEdges as Edge[]);
   const nodesRef = useRef<Node[]>(storeNodes as Node[]);
 
-  const saveWorkspace = useSaveWorkspace();
   const canvasPreset = getCanvasFormatPreset(canvasFormat.id);
 
   useEffect(() => {
@@ -85,17 +83,6 @@ export function WorkspaceCanvas() {
     },
     [setEdges]
   );
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        saveWorkspace.mutate();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [saveWorkspace]);
 
   if (canvasFormat.id === "web-design") {
     return <WebDesignCanvas />;

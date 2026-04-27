@@ -1,10 +1,17 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useI18n } from "@/lib/i18n/context";
 import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
+import type { WorkspaceSnapshot } from "@/types/workspace";
 import * as api from "@/lib/workspace/api";
+
+const AUTO_SAVE_DELAY_MS = 900;
+const AUTO_SAVE_RETRY_DELAY_MS = 5000;
 
 export function useWorkspaceList() {
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
@@ -143,15 +150,72 @@ export function useSaveWorkspace() {
     mutationFn: async () => {
       const snapshot = useWorkspaceStore.getState().getSnapshot();
       if (!snapshot) throw new Error("No active workspace to save");
+      const savedSnapshotKey = serializeWorkspaceSnapshot(snapshot);
       setIsSaving(true);
-      return api.saveWorkspaceSnapshot(snapshot);
+      await api.saveWorkspaceSnapshot(snapshot);
+      return { savedSnapshotKey };
     },
-    onSuccess: () => {
-      setHasUnsavedChanges(false);
+    onSuccess: ({ savedSnapshotKey }) => {
+      const currentSnapshot = useWorkspaceStore.getState().getSnapshot();
+      if (currentSnapshot && serializeWorkspaceSnapshot(currentSnapshot) === savedSnapshotKey) {
+        setHasUnsavedChanges(false);
+      }
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onSettled: () => {
       setIsSaving(false);
     },
   });
+}
+
+export function useAutoSaveWorkspace(options: { enabled?: boolean } = {}) {
+  const { t } = useI18n();
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const hasUnsavedChanges = useWorkspaceStore((s) => s.hasUnsavedChanges);
+  const nodes = useWorkspaceStore((s) => s.nodes);
+  const edges = useWorkspaceStore((s) => s.edges);
+  const viewport = useWorkspaceStore((s) => s.viewport);
+  const canvasFormat = useWorkspaceStore((s) => s.canvasFormat);
+  const webDesign = useWorkspaceStore((s) => s.webDesign);
+  const { mutate, isPending } = useSaveWorkspace();
+  const retryAfterFailureRef = useRef(false);
+
+  useEffect(() => {
+    if (!options.enabled || !activeWorkspaceId || !hasUnsavedChanges || isPending) {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => {
+        mutate(undefined, {
+          onSuccess: () => {
+            retryAfterFailureRef.current = false;
+          },
+          onError: () => {
+            retryAfterFailureRef.current = true;
+            toast.error(t("workspace.toast.autosaveFailed"));
+          },
+        });
+      },
+      retryAfterFailureRef.current ? AUTO_SAVE_RETRY_DELAY_MS : AUTO_SAVE_DELAY_MS
+    );
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeWorkspaceId,
+    canvasFormat,
+    edges,
+    hasUnsavedChanges,
+    isPending,
+    mutate,
+    nodes,
+    options.enabled,
+    t,
+    viewport,
+    webDesign,
+  ]);
+}
+
+function serializeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): string {
+  return JSON.stringify(snapshot);
 }

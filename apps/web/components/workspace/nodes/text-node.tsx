@@ -87,6 +87,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
             <Button
               variant="ghost"
               size="icon-sm"
+              aria-label={t("workspace.textBlock.done")}
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleSave}
             >
@@ -95,6 +96,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
             <Button
               variant="ghost"
               size="icon-sm"
+              aria-label={t("workspace.textBlock.delete")}
               onClick={() => removeNode(id)}
               className="hover:text-error-crimson"
             >
@@ -110,7 +112,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Decrease text size"
+            aria-label={t("workspace.textBlock.decreaseTextSize")}
             onClick={() => handleStyleChange({ fontSize: Math.max(12, fontSize - 2) })}
           >
             <Minus className="h-3 w-3" />
@@ -119,7 +121,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Increase text size"
+            aria-label={t("workspace.textBlock.increaseTextSize")}
             onClick={() => handleStyleChange({ fontSize: Math.min(48, fontSize + 2) })}
           >
             <Plus className="h-3 w-3" />
@@ -127,7 +129,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
           <Button
             variant={fontWeight === "bold" ? "secondary" : "ghost"}
             size="icon-sm"
-            aria-label="Toggle bold"
+            aria-label={t("workspace.textBlock.toggleBold")}
             onClick={() =>
               handleStyleChange({ fontWeight: fontWeight === "bold" ? "normal" : "bold" })
             }
@@ -139,7 +141,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
               <button
                 key={item}
                 type="button"
-                aria-label={`Set text color ${item}`}
+                aria-label={t("workspace.textBlock.setTextColor", { color: item })}
                 className={`h-5 w-5 rounded-full border ${
                   color === item ? "border-near-black ring-2 ring-focus-blue" : "border-border-cream"
                 }`}
@@ -182,7 +184,7 @@ function TextNodeComponent({ id, data, selected, width, height }: NodeProps) {
         <div className="pointer-events-none absolute inset-y-0 left-0 flex -translate-x-full items-start pr-2 pt-1">
           <button
             type="button"
-            aria-label="Edit text block"
+            aria-label={t("workspace.textBlock.edit")}
             className="nodrag pointer-events-auto flex h-7 w-7 items-center justify-center rounded-comfortable border border-border-cream bg-ivory text-stone-gray shadow-whisper hover:bg-warm-sand hover:text-near-black"
             onClick={() => setIsEditing(true)}
           >

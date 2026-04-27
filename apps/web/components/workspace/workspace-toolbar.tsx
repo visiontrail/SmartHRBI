@@ -7,7 +7,6 @@ import {
   Loader2,
   MessageSquare,
   Pencil,
-  Save,
   Type,
   X,
 } from "lucide-react";
@@ -23,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
-import { useRenameWorkspace, useSaveWorkspace } from "@/hooks/use-workspace";
+import { useRenameWorkspace } from "@/hooks/use-workspace";
 import { generateId } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
@@ -45,7 +44,6 @@ export function WorkspaceToolbar() {
   const activePanel = useUIStore((s) => s.activePanel);
   const isSaving = useUIStore((s) => s.isSaving);
   const setActivePanel = useUIStore((s) => s.setActivePanel);
-  const saveWorkspace = useSaveWorkspace();
   const renameWorkspace = useRenameWorkspace();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -58,13 +56,6 @@ export function WorkspaceToolbar() {
     setTitleDraft(workspace?.title ?? "");
     setIsEditingTitle(false);
   }, [workspace?.id, workspace?.title]);
-
-  const handleSave = () => {
-    saveWorkspace.mutate(undefined, {
-      onSuccess: () => toast.success(t("workspace.toast.saved")),
-      onError: () => toast.error(t("workspace.toast.saveFailed")),
-    });
-  };
 
   const handleRename = () => {
     if (!activeWorkspaceId) return;
@@ -190,8 +181,10 @@ export function WorkspaceToolbar() {
           )}
           <p className="text-label text-stone-gray">
             {t("sidebar.itemCount", { count: nodes.length })}
-            {hasUnsavedChanges && (
-              <span className="text-terracotta ml-1">• {t("workspace.unsavedChanges")}</span>
+            {(hasUnsavedChanges || isSaving) && (
+              <span className="ml-1 text-terracotta">
+                • {isSaving ? t("workspace.autosaving") : t("workspace.unsavedChanges")}
+              </span>
             )}
           </p>
         </div>
@@ -253,27 +246,6 @@ export function WorkspaceToolbar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent>{t("workspace.addTextBlock")}</TooltipContent>
-        </Tooltip>
-
-        <Separator orientation="vertical" className="h-6 mx-1" />
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={hasUnsavedChanges ? "default" : "secondary"}
-              size="sm"
-              onClick={handleSave}
-              disabled={isSaving || !hasUnsavedChanges}
-            >
-              {isSaving ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Save className="w-4 h-4" />
-              )}
-              {t("workspace.save")}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t("workspace.saveShortcut")}</TooltipContent>
         </Tooltip>
       </div>
     </header>
