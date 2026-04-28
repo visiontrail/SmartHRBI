@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore } from "@/stores/ui-store";
-import { useRenameWorkspace } from "@/hooks/use-workspace";
+import { useRenameWorkspace, useWorkspaceCatalog } from "@/hooks/use-workspace";
 import { generateId } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
@@ -53,6 +53,10 @@ export function WorkspaceToolbar() {
   const isSaving = useUIStore((s) => s.isSaving);
   const setActivePanel = useUIStore((s) => s.setActivePanel);
   const renameWorkspace = useRenameWorkspace();
+  const catalogQuery = useWorkspaceCatalog(activeWorkspaceId);
+  const tableCount = (catalogQuery.data ?? []).length;
+  const hasNoTables = !catalogQuery.isLoading && tableCount === 0;
+  const hasTables = !catalogQuery.isLoading && tableCount > 0;
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [isExporting, setIsExporting] = useState(false);
@@ -225,6 +229,34 @@ export function WorkspaceToolbar() {
                 </TooltipTrigger>
                 <TooltipContent>{t("workspace.rename")}</TooltipContent>
               </Tooltip>
+              {hasNoTables && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      onClick={() => setActivePanel("catalog")}
+                      className="ml-1 h-7 bg-red-600 px-2 text-xs text-white hover:bg-red-700 focus-visible:ring-red-500"
+                    >
+                      {t("workspace.catalog.noTableAlert")}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("workspace.catalog.noTableTooltip")}</TooltipContent>
+                </Tooltip>
+              )}
+              {hasTables && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      onClick={() => setActivePanel("catalog")}
+                      className="ml-1 h-7 bg-green-600 px-2 text-xs text-white hover:bg-green-700 focus-visible:ring-green-500"
+                    >
+                      {t("workspace.catalog.hasTableAlert", { count: tableCount })}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("workspace.catalog.hasTableTooltip", { count: tableCount })}</TooltipContent>
+                </Tooltip>
+              )}
             </div>
           )}
           <p className="text-label text-stone-gray">

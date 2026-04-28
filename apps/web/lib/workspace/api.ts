@@ -1,5 +1,5 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
-import { safeLoadFromStorage, safeSaveToStorage } from "@/lib/chat/session-storage";
+import { safeLoadFromStorage, safeSaveToStorage, WORKSPACE_SNAPSHOT_STORAGE_KEY } from "@/lib/chat/session-storage";
 import type { IngestionCatalogSetupSeed } from "@/types/ingestion";
 import type {
   TableCatalogDataColumn,
@@ -21,8 +21,6 @@ const DEFAULT_AUTH_CONTEXT = {
   department: process.env.NEXT_PUBLIC_DEFAULT_DEPARTMENT ?? "HR",
   clearance: DEFAULT_CLEARANCE,
 };
-
-const WORKSPACE_SNAPSHOT_STORAGE_KEY = "cognitrix:workspace-snapshots:v1";
 
 type WorkspaceApiErrorShape = {
   code?: string;

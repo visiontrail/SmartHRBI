@@ -254,6 +254,10 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "workspace.catalog.dataPreviewPage": "Showing rows {{start}}-{{end}}",
     "workspace.catalog.previousPage": "Previous",
     "workspace.catalog.nextPage": "Next",
+    "workspace.catalog.noTableAlert": "Data Table Definition Required",
+    "workspace.catalog.noTableTooltip": "This workspace has no data tables. Click to set up your first table.",
+    "workspace.catalog.hasTableAlert": "{{count}} Data Table(s) Defined",
+    "workspace.catalog.hasTableTooltip": "This workspace has {{count}} data table(s) defined. Click to view.",
 
     "ingestion.lifecycle.title": "Agentic Ingestion",
     "ingestion.lifecycle.description":
@@ -653,6 +657,10 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "workspace.catalog.dataPreviewPage": "当前显示第 {{start}}-{{end}} 行",
     "workspace.catalog.previousPage": "上一页",
     "workspace.catalog.nextPage": "下一页",
+    "workspace.catalog.noTableAlert": "需创建数据表定义",
+    "workspace.catalog.noTableTooltip": "当前工作空间尚未配置数据表，点击前往创建第一张数据表。",
+    "workspace.catalog.hasTableAlert": "已定义{{count}}张数据表",
+    "workspace.catalog.hasTableTooltip": "当前工作空间已定义{{count}}张数据表，点击查看详情。",
 
     "ingestion.lifecycle.title": "智能导入流程",
     "ingestion.lifecycle.description": "工作空间绑定导入流程：上传、配置、方案确认与执行回执。",

@@ -5,6 +5,7 @@ import {
 } from "@/lib/workspace/canvas-formats";
 import {
   WORKSPACE_SELECTION_STORAGE_KEY,
+  WORKSPACE_SNAPSHOT_STORAGE_KEY,
   safeLoadFromStorage,
   safeSaveToStorage,
 } from "@/lib/chat/session-storage";
@@ -162,21 +163,36 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return { workspaces, activeWorkspaceId };
     }),
 
-  setActiveWorkspace: (workspaceId) =>
-    set(() => {
-      persistWorkspaceSelection(workspaceId);
-      return {
-        activeWorkspaceId: workspaceId,
-        nodes: [],
-        edges: [],
-        nodesByFormat: {},
-        edgesByFormat: {},
-        viewport: { x: 0, y: 0, zoom: 1 },
-        canvasFormat: DEFAULT_CANVAS_FORMAT,
-        webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
-        hasUnsavedChanges: false,
-      };
-    }),
+  setActiveWorkspace: (workspaceId) => {
+    // Flush unsaved changes to localStorage before clearing state for the new workspace.
+    // The auto-save debounce (900ms) may not have fired yet, so we save synchronously here
+    // to prevent losing canvas format selection and node placement on workspace switch.
+    const currentState = get();
+    if (currentState.hasUnsavedChanges && currentState.activeWorkspaceId) {
+      const snapshot = currentState.getSnapshot();
+      if (snapshot) {
+        const persisted = safeLoadFromStorage<{ version: 1; snapshots: Record<string, unknown> }>(
+          WORKSPACE_SNAPSHOT_STORAGE_KEY
+        );
+        safeSaveToStorage(WORKSPACE_SNAPSHOT_STORAGE_KEY, {
+          version: 1,
+          snapshots: { ...(persisted?.snapshots ?? {}), [snapshot.workspaceId]: snapshot },
+        });
+      }
+    }
+    persistWorkspaceSelection(workspaceId);
+    set({
+      activeWorkspaceId: workspaceId,
+      nodes: [],
+      edges: [],
+      nodesByFormat: {},
+      edgesByFormat: {},
+      viewport: { x: 0, y: 0, zoom: 1 },
+      canvasFormat: DEFAULT_CANVAS_FORMAT,
+      webDesign: DEFAULT_WEB_DESIGN_LAYOUT,
+      hasUnsavedChanges: false,
+    });
+  },
 
   setNodes: (nodes) => set({ nodes, hasUnsavedChanges: true }),
 
