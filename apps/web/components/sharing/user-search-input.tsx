@@ -117,7 +117,7 @@ export function UserSearchInput({ onSelect, excludeIds = [], placeholder = "æœç
       )}
       {open && results.length > 0 && (
         <ul
-          className="absolute z-50 mt-1 w-full rounded-md border border-border bg-card shadow-sm max-h-48 overflow-auto"
+          className="absolute z-50 mt-1 w-full rounded-md border border-[#d8d1c1] bg-white shadow-md max-h-48 overflow-auto"
           role="listbox"
         >
           {results.map((user, idx) => (

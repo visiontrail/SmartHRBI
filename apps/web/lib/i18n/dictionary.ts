@@ -383,8 +383,11 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "appMode.viewer": "Viewer",
 
     "visibility.private": "Private (collaborators only)",
+    "visibility.private.desc": "Only workspace collaborators can view",
     "visibility.registered": "All registered users",
+    "visibility.registered.desc": "Anyone with an account can view",
     "visibility.allowlist": "Specific users",
+    "visibility.allowlist.desc": "Only the users you select can view",
 
     "collab.collaborators": "Collaborators",
     "collab.invite": "Invite",
@@ -781,8 +784,11 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "appMode.viewer": "查看者",
 
     "visibility.private": "私密",
+    "visibility.private.desc": "仅工作区协作者可见",
     "visibility.registered": "所有已注册用户可见",
+    "visibility.registered.desc": "拥有账户的任何人均可查看",
     "visibility.allowlist": "指定用户可见",
+    "visibility.allowlist.desc": "仅您选择的特定用户可查看",
 
     "collab.collaborators": "协作者",
     "collab.invite": "邀请",

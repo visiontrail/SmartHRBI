@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useMemo, useRef, useState, useEffect, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   BotMessageSquare,
   Check,
@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
 import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem, type VisibilityPayload } from "@/lib/workspace/publish";
-import { PublishDialog, type PublishDialogResult } from "@/components/workspace/publish-dialog";
+import { PublishPanel, type PublishDialogResult } from "@/components/workspace/publish-dialog";
 import { ShareDialog } from "@/components/sharing/share-dialog";
 import { useSession } from "@/lib/auth/use-session";
 import { Share2 } from "lucide-react";
@@ -48,8 +48,20 @@ export function WebDesignCanvas() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishPanelOpen, setPublishPanelOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const publishPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!publishPanelOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (publishPanelRef.current && !publishPanelRef.current.contains(e.target as Node)) {
+        setPublishPanelOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [publishPanelOpen]);
   const { user } = useSession();
   const activeWorkspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === activeWorkspaceId));
   const userWorkspaceRole = useWorkspaceStore((s) =>
@@ -69,7 +81,7 @@ export function WebDesignCanvas() {
   const publishZoneCount = pages.reduce((sum, page) => sum + page.zones.length, 0);
 
   const handlePublishClick = () => {
-    setPublishDialogOpen(true);
+    setPublishPanelOpen((prev) => !prev);
   };
 
   const handlePublishConfirm = async (dialogResult: PublishDialogResult) => {
@@ -81,7 +93,7 @@ export function WebDesignCanvas() {
         visibility_user_ids: dialogResult.visibility_user_ids,
       };
       const result = await publishWorkspace(activeWorkspaceId, layout, nodes, visibility);
-      setPublishDialogOpen(false);
+      setPublishPanelOpen(false);
       toast.success(t("workspace.webDesign.toast.published"), {
         description: t("workspace.webDesign.toast.versionReady", { version: result.version }),
         action: {
@@ -182,23 +194,31 @@ export function WebDesignCanvas() {
               {layout.preview ? <Check className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               {layout.preview ? t("workspace.webDesign.edit") : t("workspace.webDesign.preview")}
             </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button
-                    size="sm"
-                    onClick={handlePublishClick}
-                    disabled={publishBlocked || isPublishing || publishZoneCount === 0}
-                  >
-                    <Send className="h-4 w-4" />
-                    {isPublishing ? t("workspace.webDesign.publishing") : t("workspace.webDesign.publish")}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {publishBlocked && (
-                <TooltipContent>{t("workspace.webDesign.publishBlocked")}</TooltipContent>
+            <div className="relative" ref={publishPanelRef}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      size="sm"
+                      onClick={handlePublishClick}
+                      disabled={publishBlocked || isPublishing || publishZoneCount === 0}
+                    >
+                      <Send className="h-4 w-4" />
+                      {isPublishing ? t("workspace.webDesign.publishing") : t("workspace.webDesign.publish")}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {publishBlocked && (
+                  <TooltipContent>{t("workspace.webDesign.publishBlocked")}</TooltipContent>
+                )}
+              </Tooltip>
+              {publishPanelOpen && (
+                <PublishPanel
+                  onPublish={handlePublishConfirm}
+                  isPublishing={isPublishing}
+                />
               )}
-            </Tooltip>
+            </div>
             {canEdit && (
               <Button variant="outline" size="sm" onClick={() => setShareDialogOpen(true)}>
                 <Share2 className="h-4 w-4" />
@@ -285,12 +305,7 @@ export function WebDesignCanvas() {
         </div>
       </main>
 
-      <PublishDialog
-        open={publishDialogOpen}
-        onClose={() => setPublishDialogOpen(false)}
-        onPublish={handlePublishConfirm}
-        isPublishing={isPublishing}
-      />
+
 
       {canEdit && (
         <ShareDialog

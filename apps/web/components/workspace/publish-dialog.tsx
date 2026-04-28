@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Globe, Lock, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
 import { UserSearchInput, type UserSearchResult } from "@/components/sharing/user-search-input";
 import { useI18n } from "@/lib/i18n/context";
+import { cn } from "@/lib/utils";
 
 export type VisibilityMode = "private" | "registered" | "allowlist";
 
@@ -14,13 +15,22 @@ export type PublishDialogResult = {
 };
 
 type Props = {
-  open: boolean;
-  onClose: () => void;
   onPublish: (result: PublishDialogResult) => void;
   isPublishing?: boolean;
 };
 
-export function PublishDialog({ open, onClose, onPublish, isPublishing }: Props) {
+const VISIBILITY_OPTIONS: {
+  mode: VisibilityMode;
+  icon: React.ElementType;
+  labelKey: string;
+  descKey: string;
+}[] = [
+  { mode: "private", icon: Lock, labelKey: "visibility.private", descKey: "visibility.private.desc" },
+  { mode: "registered", icon: Globe, labelKey: "visibility.registered", descKey: "visibility.registered.desc" },
+  { mode: "allowlist", icon: Users, labelKey: "visibility.allowlist", descKey: "visibility.allowlist.desc" },
+];
+
+export function PublishPanel({ onPublish, isPublishing }: Props) {
   const { t } = useI18n();
   const [visibilityMode, setVisibilityMode] = useState<VisibilityMode>("private");
   const [selectedUsers, setSelectedUsers] = useState<UserSearchResult[]>([]);
@@ -28,8 +38,7 @@ export function PublishDialog({ open, onClose, onPublish, isPublishing }: Props)
   function handlePublish() {
     onPublish({
       visibility_mode: visibilityMode,
-      visibility_user_ids:
-        visibilityMode === "allowlist" ? selectedUsers.map((u) => u.id) : [],
+      visibility_user_ids: visibilityMode === "allowlist" ? selectedUsers.map((u) => u.id) : [],
     });
   }
 
@@ -44,84 +53,97 @@ export function PublishDialog({ open, onClose, onPublish, isPublishing }: Props)
     setSelectedUsers((prev) => prev.filter((u) => u.id !== userId));
   }
 
-  if (!open) return null;
-
-  const canPublish =
-    visibilityMode !== "allowlist" || selectedUsers.length > 0;
+  const canPublish = visibilityMode !== "allowlist" || selectedUsers.length > 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      role="dialog"
-      aria-modal
-    >
-      <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg space-y-4">
-        <h2 className="text-lg font-semibold">发布设置</h2>
+    <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-lg border border-[#d8d1c1] bg-white shadow-lg">
+      <div className="border-b border-[#d8d1c1] px-4 py-3">
+        <p className="text-sm font-semibold text-[#2f332f]">发布设置</p>
+        <p className="mt-0.5 text-xs text-[#777166]">选择页面可见范围后确认发布</p>
+      </div>
 
-        {/* Visibility mode */}
-        <div className="space-y-2">
-          <p className="text-sm font-medium">可见性</p>
-          {(["private", "registered", "allowlist"] as VisibilityMode[]).map((mode) => (
-            <label key={mode} className="flex items-center gap-2 cursor-pointer text-sm">
-              <input
-                type="radio"
-                name="visibility"
-                value={mode}
-                checked={visibilityMode === mode}
-                onChange={() => {
-                  setVisibilityMode(mode);
-                  if (mode !== "allowlist") setSelectedUsers([]);
-                }}
-              />
-              {t(`visibility.${mode}`)}
-            </label>
-          ))}
-        </div>
-
-        {/* User search for allowlist */}
-        {visibilityMode === "allowlist" && (
-          <div className="space-y-2">
-            <p className="text-sm font-medium">搜索用户</p>
-            <UserSearchInput
-              onSelect={addUser}
-              excludeIds={selectedUsers.map((u) => u.id)}
-              placeholder="输入邮箱或姓名..."
-            />
-            {selectedUsers.length === 0 && (
-              <p className="text-xs text-destructive">请至少选择一位用户</p>
+      <div className="p-3 space-y-1">
+        {VISIBILITY_OPTIONS.map(({ mode, icon: Icon, labelKey, descKey }) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => {
+              setVisibilityMode(mode);
+              if (mode !== "allowlist") setSelectedUsers([]);
+            }}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors",
+              visibilityMode === mode
+                ? "bg-[#fff7ed] text-[#996b35]"
+                : "text-[#2f332f] hover:bg-[#f7f4eb]"
             )}
-            {selectedUsers.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {selectedUsers.map((u) => (
-                  <span
-                    key={u.id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warm-sand text-xs"
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium leading-tight">{t(labelKey)}</p>
+              <p className="text-xs text-[#777166] leading-tight mt-0.5">{t(descKey)}</p>
+            </div>
+            {visibilityMode === mode && (
+              <Check className="h-4 w-4 shrink-0 text-[#996b35]" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {visibilityMode === "allowlist" && (
+        <div className="border-t border-[#d8d1c1] px-4 py-3 space-y-2">
+          <p className="text-xs font-medium text-[#2f332f]">搜索并添加用户</p>
+          <UserSearchInput
+            onSelect={addUser}
+            excludeIds={selectedUsers.map((u) => u.id)}
+            placeholder="输入邮箱或姓名..."
+          />
+          {selectedUsers.length === 0 && (
+            <p className="text-xs text-red-500">请至少选择一位用户</p>
+          )}
+          {selectedUsers.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {selectedUsers.map((u) => (
+                <span
+                  key={u.id}
+                  className="inline-flex items-center gap-1 rounded-full bg-[#f7f4eb] px-2 py-0.5 text-xs text-[#2f332f]"
+                >
+                  {u.display_name}
+                  <button
+                    type="button"
+                    onClick={() => removeUser(u.id)}
+                    className="text-[#777166] hover:text-red-500"
+                    aria-label={`移除 ${u.display_name}`}
                   >
-                    {u.display_name}
-                    <button
-                      type="button"
-                      onClick={() => removeUser(u.id)}
-                      className="text-stone-gray hover:text-error-crimson"
-                      aria-label={`移除 ${u.display_name}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={onClose}>
-            取消
-          </Button>
-          <Button onClick={handlePublish} disabled={!canPublish || isPublishing}>
-            {isPublishing ? "发布中..." : "确认发布"}
-          </Button>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
+      )}
+
+      <div className="border-t border-[#d8d1c1] px-4 py-3">
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={handlePublish}
+          disabled={!canPublish || isPublishing}
+        >
+          {isPublishing ? "发布中..." : "确认发布"}
+        </Button>
       </div>
     </div>
   );
+}
+
+/** @deprecated Use PublishPanel instead */
+export function PublishDialog(_props: {
+  open: boolean;
+  onClose: () => void;
+  onPublish: (result: PublishDialogResult) => void;
+  isPublishing?: boolean;
+}) {
+  return null;
 }
