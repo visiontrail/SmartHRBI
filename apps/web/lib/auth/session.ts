@@ -76,6 +76,32 @@ export function getInMemoryToken(): string | null {
   return null;
 }
 
+export function getActiveAuthContext(fallback: AuthContext): AuthContext {
+  const token = getInMemoryToken();
+  if (!token) {
+    return fallback;
+  }
+
+  const payload = decodeJwtPayload(token);
+  if (!payload) {
+    return fallback;
+  }
+
+  const userId = readString(payload.sub);
+  const projectId = readString(payload.project_id);
+  if (!userId || !projectId) {
+    return fallback;
+  }
+
+  return {
+    userId,
+    projectId,
+    role: readString(payload.role) || fallback.role,
+    department: readNullableString(payload.department),
+    clearance: readInteger(payload.clearance, fallback.clearance),
+  };
+}
+
 const APP_MODE_STORAGE_KEY = "cognitrix_app_mode";
 
 export function getAppMode(): "designer" | "viewer" {
@@ -152,6 +178,37 @@ async function getLegacyAccessToken(apiBaseUrl: string, context: AuthContext): P
 
   saveCachedAccessToken({ accessToken, expiresAt, scopeKey });
   return accessToken;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  try {
+    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    const decoded = window.atob(padded);
+    const payload = JSON.parse(decoded) as unknown;
+    return isRecord(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readNullableString(value: unknown): string | null {
+  const text = readString(value);
+  return text || null;
+}
+
+function readInteger(value: unknown, fallback: number): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : fallback;
 }
 
 function normalizeAuthContext(context: AuthContext): AuthContext {

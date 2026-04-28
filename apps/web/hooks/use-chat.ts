@@ -13,7 +13,7 @@ import {
   requestGeneratedSessionTitle,
   shouldAutoGenerateSessionTitle,
 } from "@/lib/chat/session-title";
-import { getAuthorizationHeader } from "@/lib/auth/session";
+import { getActiveAuthContext, getAuthorizationHeader } from "@/lib/auth/session";
 import { useI18n } from "@/lib/i18n/context";
 import {
   approveIngestionProposal,
@@ -188,9 +188,10 @@ export function useSendMessage() {
         title: fallbackTitle,
       });
       if (shouldGenerateTitle) {
+        const authContext = getActiveAuthContext(DEFAULT_AUTH_CONTEXT);
         void requestGeneratedSessionTitle({
           apiBaseUrl: API_BASE_URL,
-          authContext: DEFAULT_AUTH_CONTEXT,
+          authContext,
           content: normalizedContent,
         })
           .then((title) => {
@@ -312,7 +313,8 @@ async function streamAssistantResponse({
   t: TranslateFn;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
   const aiMessage = buildMessageWithChartPreference({ content, preferredChartType });
-  const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const authContext = getActiveAuthContext(DEFAULT_AUTH_CONTEXT);
+  const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, authContext);
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: "POST",
     headers: {
@@ -320,12 +322,12 @@ async function streamAssistantResponse({
       ...authorizationHeader,
     },
     body: JSON.stringify({
-      user_id: DEFAULT_AUTH_CONTEXT.userId,
-      project_id: DEFAULT_AUTH_CONTEXT.projectId,
+      user_id: authContext.userId,
+      project_id: authContext.projectId,
       workspace_id: workspaceId,
-      role: DEFAULT_AUTH_CONTEXT.role,
-      department: DEFAULT_AUTH_CONTEXT.department,
-      clearance: DEFAULT_AUTH_CONTEXT.clearance,
+      role: authContext.role,
+      department: authContext.department,
+      clearance: authContext.clearance,
       dataset_table: DEFAULT_DATASET_TABLE,
       message: aiMessage,
       preferred_chart_type: preferredChartType ?? null,
