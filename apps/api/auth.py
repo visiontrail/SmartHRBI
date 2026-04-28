@@ -519,15 +519,34 @@ def handle_email_register(request: RegisterRequest, response: Response) -> dict[
 def handle_email_login(request: EmailLoginRequest, response: Response) -> dict[str, Any]:
     from .users import get_user_by_email, update_last_login, verify_password
 
+    submitted_email = request.email.strip().lower()
+    logger.info("[login] attempt email=%s", submitted_email)
+
     conn = _get_db_conn()
     try:
-        user = get_user_by_email(conn, request.email)
-        if user is None or user.password_hash is None:
+        user = get_user_by_email(conn, submitted_email)
+        if user is None:
+            logger.warning("[login] user not found email=%s", submitted_email)
             raise HTTPException(
                 status_code=401,
                 detail={"code": "invalid_credentials", "message": "邮箱或密码错误"},
             )
-        if not verify_password(request.password, user.password_hash):
+        logger.info(
+            "[login] user found id=%s email_col=%s email_lower=%s has_password=%s",
+            user.id,
+            user.email,
+            user.email_lower,
+            user.password_hash is not None,
+        )
+        if user.password_hash is None:
+            logger.warning("[login] no password_hash for user id=%s", user.id)
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_credentials", "message": "邮箱或密码错误"},
+            )
+        pw_ok = verify_password(request.password, user.password_hash)
+        logger.info("[login] password verify result=%s user_id=%s", pw_ok, user.id)
+        if not pw_ok:
             raise HTTPException(
                 status_code=401,
                 detail={"code": "invalid_credentials", "message": "邮箱或密码错误"},
@@ -538,13 +557,20 @@ def handle_email_login(request: EmailLoginRequest, response: Response) -> dict[s
 
     token, expires_at = issue_user_token(user_id=user.id)
     _set_session_cookie(response, token)
+    logger.info(
+        "[login] success user_id=%s email_lower=%s email_col=%s display_name=%s",
+        user.id,
+        user.email_lower,
+        user.email,
+        user.display_name,
+    )
     get_audit_logger().log(
         event_type="authentication",
         action="login",
         status="success",
         user_id=user.id,
         project_id="default",
-        detail={"email": user.email},
+        detail={"email": user.email_lower},
     )
     return {
         "access_token": token,
@@ -552,7 +578,7 @@ def handle_email_login(request: EmailLoginRequest, response: Response) -> dict[s
         "expires_at": expires_at,
         "user": {
             "id": user.id,
-            "email": user.email,
+            "email": user.email_lower,
             "display_name": user.display_name,
             "job_id": user.job_id,
         },
@@ -588,7 +614,7 @@ def handle_me(identity: AuthIdentity) -> dict[str, Any]:
 
     return {
         "id": user.id,
-        "email": user.email,
+        "email": user.email_lower,
         "display_name": user.display_name,
         "job_id": user.job_id,
         "last_login_at": user.last_login_at,
