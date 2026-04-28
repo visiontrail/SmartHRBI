@@ -554,7 +554,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }),
 
   loadSnapshot: (snapshot) =>
-    set(() => {
+    set((state) => {
+      // Reject stale background refetches for a workspace that is no longer active.
+      // This can happen when the user switches workspaces quickly and a previous
+      // queryFn resolves after the active workspace has already changed.
+      if (snapshot.workspaceId !== state.activeWorkspaceId) {
+        return {};
+      }
       const canvasFormat = normalizeCanvasFormat(snapshot.canvasFormat);
 
       // Start from per-format maps if available

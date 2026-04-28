@@ -38,6 +38,11 @@ export function useWorkspaceSnapshot(workspaceId: string | null) {
       return snapshot;
     },
     enabled: !!workspaceId,
+    // staleTime must be 0 so that switching back to a previously-visited workspace always
+    // re-runs the queryFn and calls loadSnapshot with the latest localStorage data.
+    // The global staleTime of 30s would serve a cached result without calling loadSnapshot,
+    // leaving the canvas at the cleared default state after setActiveWorkspace().
+    staleTime: 0,
   });
 }
 
