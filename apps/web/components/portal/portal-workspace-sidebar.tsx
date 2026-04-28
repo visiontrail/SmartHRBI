@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Globe, PenLine, LogOut, ChevronUp, Check } from "lucide-react";
+import { LayoutDashboard, Globe, PenLine, LogOut, ChevronUp, Check, BotMessageSquare } from "lucide-react";
 import { useI18n } from "@/lib/i18n/context";
 import { cn } from "@/lib/utils";
 import type { PortalWorkspace } from "@/lib/portal/api";
@@ -23,11 +23,13 @@ export function PortalWorkspaceSidebar({
   activePageId,
   onSelect,
   onOpenDesigner,
+  onOpenChat,
 }: {
   workspaces: PortalWorkspace[];
   activePageId: string | null;
   onSelect: (pageId: string) => void;
   onOpenDesigner: () => void;
+  onOpenChat: () => void;
 }) {
   const { t, locale, setLocale } = useI18n();
   const { user } = useSession();
@@ -70,6 +72,19 @@ export function PortalWorkspaceSidebar({
             ))}
           </div>
         )}
+      </div>
+
+      {/* New Chat fullscreen button */}
+      <div className="px-3 pb-2">
+        <button
+          type="button"
+          onClick={onOpenChat}
+          className="flex w-full items-center gap-2 rounded-full border border-[#d8d1c1] bg-white px-3 py-2 shadow-sm transition-colors hover:border-[#ad7d3d] hover:bg-[#f3eadb]"
+        >
+          <BotMessageSquare className="h-4 w-4 shrink-0 text-[#777166]" />
+          <span className="flex-1 text-left text-sm font-medium text-[#2f332f]">{t("portal.newChat")}</span>
+          <kbd className="rounded bg-[#f0ece2] px-1.5 py-0.5 text-xs text-[#777166]">⌘O</kbd>
+        </button>
       </div>
 
       {/* User settings footer */}

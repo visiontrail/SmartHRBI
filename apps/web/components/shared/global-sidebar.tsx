@@ -32,6 +32,7 @@ import {
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { useChatStore } from "@/stores/chat-store";
+import { useAssetStore } from "@/stores/asset-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useUIStore, type AppMode } from "@/stores/ui-store";
 import { useCreateSession, useDeleteSession } from "@/hooks/use-chat";
@@ -52,6 +53,8 @@ export function GlobalSidebar() {
   async function handleLogout() {
     await apiLogout().catch(() => {});
     clearInMemoryToken();
+    useChatStore.getState().clearForUser();
+    useAssetStore.getState().clearForUser();
     window.location.href = "/login";
   }
 

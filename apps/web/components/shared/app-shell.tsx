@@ -11,6 +11,9 @@ import { useChatSessions } from "@/hooks/use-chat";
 import { useCreateWorkspace, useWorkspaceList } from "@/hooks/use-workspace";
 import { useChartAssets } from "@/hooks/use-chart-assets";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useChatStore } from "@/stores/chat-store";
+import { useAssetStore } from "@/stores/asset-store";
+import { useSession } from "@/lib/auth/use-session";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 
@@ -19,6 +22,9 @@ const SPLIT_KEYBOARD_STEP = 0.02;
 
 export function AppShell() {
   const { t } = useI18n();
+  const { user } = useSession();
+  const initChatForUser = useChatStore((s) => s.initForUser);
+  const initAssetsForUser = useAssetStore((s) => s.initForUser);
   const activePanel = useUIStore((s) => s.activePanel);
   const chatSidebarOpen = useUIStore((s) => s.chatSidebarOpen);
   const appMode = useUIStore((s) => s.appMode);
@@ -30,6 +36,13 @@ export function AppShell() {
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const [isResizingSplit, setIsResizingSplit] = useState(false);
+
+  useEffect(() => {
+    if (user?.id) {
+      initChatForUser(user.id);
+      initAssetsForUser(user.id);
+    }
+  }, [user?.id, initChatForUser, initAssetsForUser]);
 
   useChatSessions();
   const workspaceListQuery = useWorkspaceList();

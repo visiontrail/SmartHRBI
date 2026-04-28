@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import {
   Check,
+  Download,
+  FileImage,
+  FileText,
   LayoutTemplate,
   Loader2,
   MessageSquare,
@@ -27,6 +30,11 @@ import { generateId } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { toast } from "sonner";
 import { CANVAS_FORMAT_PRESETS, getCanvasFormatPreset } from "@/lib/workspace/canvas-formats";
+import {
+  exportInfiniteCanvasToPng,
+  exportFixedCanvasToPng,
+  exportFixedCanvasToPdf,
+} from "@/lib/workspace/canvas-export";
 import type { TextNodeData } from "@/types/workspace";
 
 const DEFAULT_TEXT_NODE_WIDTH = 480;
@@ -47,6 +55,7 @@ export function WorkspaceToolbar() {
   const renameWorkspace = useRenameWorkspace();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
   const isChatVisible = activePanel === "both";
 
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
@@ -86,6 +95,45 @@ export function WorkspaceToolbar() {
   const handleCancelRename = () => {
     setTitleDraft(workspace?.title ?? "");
     setIsEditingTitle(false);
+  };
+
+  const workspaceTitle = workspace?.title ?? t("workspace.fallbackTitle");
+  const isWebDesign = canvasFormat.id === "web-design";
+  const isInfinite = canvasFormat.id === "infinite";
+
+  const handleExportPng = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      if (isInfinite) {
+        await exportInfiniteCanvasToPng(nodes, workspaceTitle);
+      } else {
+        await exportFixedCanvasToPng(activeCanvasPreset, workspaceTitle);
+      }
+      toast.success(t("workspace.export.success"));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg === "NO_CONTENT") {
+        toast.error(t("workspace.export.noContent"));
+      } else {
+        toast.error(t("workspace.export.error"));
+      }
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      await exportFixedCanvasToPdf(activeCanvasPreset, workspaceTitle);
+      toast.success(t("workspace.export.success"));
+    } catch {
+      toast.error(t("workspace.export.error"));
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleAddTextNode = () => {
@@ -247,6 +295,61 @@ export function WorkspaceToolbar() {
           </TooltipTrigger>
           <TooltipContent>{t("workspace.addTextBlock")}</TooltipContent>
         </Tooltip>
+
+        {!isWebDesign && (
+          <>
+            <Separator orientation="vertical" className="h-6 mx-1" />
+            {isInfinite ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportPng}
+                    disabled={isExporting}
+                    aria-label={t("workspace.export.png")}
+                  >
+                    {isExporting ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    {isExporting ? t("workspace.export.exporting") : t("workspace.export.button")}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.export.png")}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isExporting}
+                    aria-label={t("workspace.export.button")}
+                  >
+                    {isExporting ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    {isExporting ? t("workspace.export.exporting") : t("workspace.export.button")}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onSelect={handleExportPng}>
+                    <FileImage className="w-4 h-4 mr-2" />
+                    {t("workspace.export.png")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleExportPdf}>
+                    <FileText className="w-4 h-4 mr-2" />
+                    {t("workspace.export.pdf")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </>
+        )}
       </div>
     </header>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { PortalChatWindow } from "@/components/portal/portal-chat-window";
 import { PortalWorkspaceSidebar } from "@/components/portal/portal-workspace-sidebar";
 import { PublishedPageGrid } from "@/components/portal/published-page-grid";
@@ -25,14 +25,28 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
   const [activeChartId, setActiveChartId] = useState<string | null>(null);
   const [activeChartTitle, setActiveChartTitle] = useState<string | undefined>();
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [showChat, setShowChat] = useState(false);
 
   const openDesigner = () => {
     setStoredAppMode("designer");
     window.location.href = "/";
   };
 
+  const openChat = useCallback(() => setShowChat(true), []);
+
   useEffect(() => {
     setStoredAppMode("viewer");
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "o") {
+        e.preventDefault();
+        setShowChat(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
 
   useEffect(() => {
@@ -46,7 +60,7 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
         if (err instanceof PortalError && err.status === 401) {
           window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
         } else {
-          setWorkspaceError("加载失败");
+          setWorkspaceError(t("portal.loadError"));
         }
       });
   }, [pageId]);
@@ -83,6 +97,7 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
         activePageId={pageId}
         onSelect={setPageId}
         onOpenDesigner={openDesigner}
+        onOpenChat={openChat}
       />
       <main className="relative flex min-w-0 flex-1">
         {workspaces.length === 0 && !workspaceError ? (
@@ -96,38 +111,44 @@ export function PortalPageClient({ initialPageId }: { initialPageId?: string }) 
           </div>
         ) : !page ? (
           <div className="flex flex-1 items-center justify-center text-sm text-[#777166]">
-            Select a published workspace.
+            {t("portal.selectWorkspace")}
           </div>
         ) : (
           <>
-            <PublishedPageSidebar
-              items={page.manifest.sidebar || []}
-              activePageId={activePublishedPageId}
-              onSelectPage={(nextPageId) => {
-                setActivePublishedPageId(nextPageId);
-                setActiveChartId(null);
-                setActiveChartTitle(undefined);
-              }}
-            />
-            <PublishedPageGrid
-              pageId={page.page_id}
-              manifest={page.manifest}
-              activePageId={activePublishedPageId}
-              activeChartId={activeChartId}
-              onSelectChart={(chartId, title) => {
-                setActiveChartId(chartId);
-                setActiveChartTitle(title);
-              }}
-            />
-            <PortalChatWindow
-              pageId={page.page_id}
-              activeChartId={activeChartId}
-              activeChartTitle={activeChartTitle}
-              onClearChart={() => {
-                setActiveChartId(null);
-                setActiveChartTitle(undefined);
-              }}
-            />
+            {showChat ? (
+              <PortalChatWindow
+                pageId={page.page_id}
+                activeChartId={activeChartId}
+                activeChartTitle={activeChartTitle}
+                onClearChart={() => {
+                  setActiveChartId(null);
+                  setActiveChartTitle(undefined);
+                }}
+                onClose={() => setShowChat(false)}
+              />
+            ) : (
+              <>
+                <PublishedPageSidebar
+                  items={page.manifest.sidebar || []}
+                  activePageId={activePublishedPageId}
+                  onSelectPage={(nextPageId) => {
+                    setActivePublishedPageId(nextPageId);
+                    setActiveChartId(null);
+                    setActiveChartTitle(undefined);
+                  }}
+                />
+                <PublishedPageGrid
+                  pageId={page.page_id}
+                  manifest={page.manifest}
+                  activePageId={activePublishedPageId}
+                  activeChartId={activeChartId}
+                  onSelectChart={(chartId, title) => {
+                    setActiveChartId(chartId);
+                    setActiveChartTitle(title);
+                  }}
+                />
+              </>
+            )}
           </>
         )}
       </main>

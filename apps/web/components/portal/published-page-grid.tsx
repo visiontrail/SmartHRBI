@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChartPreview } from "@/components/charts/chart-preview";
 import { fetchPublishedChartData, type PublishedManifest, type PublishedZone } from "@/lib/portal/api";
 import type { ChartSpec } from "@/types/chart";
+import { useI18n } from "@/lib/i18n/context";
 
 export function PublishedPageGrid({
   pageId,
@@ -67,6 +68,7 @@ export function PublishedChartZone({
   selected: boolean;
   onSelect: (chartId: string | null, title?: string) => void;
 }) {
+  const { t } = useI18n();
   const chartId = chartIdFromZone(zone);
   const [spec, setSpec] = useState<ChartSpec | null>(null);
 
@@ -102,7 +104,7 @@ export function PublishedChartZone({
       {spec ? (
         <ChartPreview spec={spec} height={height} />
       ) : (
-        <div className="flex h-full items-center justify-center text-sm text-[#777166]">Loading chart...</div>
+        <div className="flex h-full items-center justify-center text-sm text-[#777166]">{t("portal.loadingChart")}</div>
       )}
     </button>
   );

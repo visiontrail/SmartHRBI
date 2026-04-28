@@ -3,7 +3,7 @@ import { normalizeSessionTitle } from "@/lib/chat/session-title";
 import type { ChatSession, ChatMessage } from "@/types/chat";
 import type { IngestionPlanAwaitingApproval, IngestionUploadResult } from "@/types/ingestion";
 import {
-  CHAT_STORAGE_KEY,
+  chatStorageKeyForUser,
   safeLoadFromStorage,
   safeSaveToStorage,
 } from "@/lib/chat/session-storage";
@@ -40,6 +40,8 @@ type ChatState = {
   setIsComposing: (value: boolean) => void;
 
   getActiveMessages: () => ChatMessage[];
+  initForUser: (userId: string) => void;
+  clearForUser: () => void;
 };
 
 type PersistedChatState = {
@@ -48,6 +50,10 @@ type PersistedChatState = {
   activeSessionId: string | null;
   messagesBySession: Record<string, ChatMessage[]>;
 };
+
+// Tracks the active user ID at module level — not in Zustand state to avoid re-renders.
+let _currentUserId: string | null = null;
+let _initializedUserId: string | null = null;
 
 function normalizeSession(session: ChatSession): ChatSession {
   return {
@@ -60,8 +66,8 @@ function normalizeSessions(sessions: ChatSession[]): ChatSession[] {
   return sessions.map(normalizeSession);
 }
 
-function loadPersistedChatState(): PersistedChatState | null {
-  const state = safeLoadFromStorage<Partial<PersistedChatState>>(CHAT_STORAGE_KEY);
+function loadPersistedChatState(userId: string): PersistedChatState | null {
+  const state = safeLoadFromStorage<Partial<PersistedChatState>>(chatStorageKeyForUser(userId));
   if (!state || !Array.isArray(state.sessions)) {
     return null;
   }
@@ -85,7 +91,8 @@ function loadPersistedChatState(): PersistedChatState | null {
 }
 
 function persistChatState(state: Pick<ChatState, "sessions" | "activeSessionId" | "messagesBySession">): void {
-  safeSaveToStorage<PersistedChatState>(CHAT_STORAGE_KEY, {
+  if (!_currentUserId) return;
+  safeSaveToStorage<PersistedChatState>(chatStorageKeyForUser(_currentUserId), {
     version: 1,
     sessions: state.sessions,
     activeSessionId: state.activeSessionId,
@@ -100,12 +107,10 @@ function isMessageMap(value: unknown): value is Record<string, ChatMessage[]> {
   return Object.values(value).every((messages) => Array.isArray(messages));
 }
 
-const persistedChatState = loadPersistedChatState();
-
 export const useChatStore = create<ChatState>((set, get) => ({
-  sessions: persistedChatState?.sessions ?? [],
-  activeSessionId: persistedChatState?.activeSessionId ?? null,
-  messagesBySession: persistedChatState?.messagesBySession ?? {},
+  sessions: [],
+  activeSessionId: null,
+  messagesBySession: {},
   pendingIngestionBySession: {},
   isComposing: false,
   composerText: "",
@@ -260,5 +265,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { activeSessionId, messagesBySession } = get();
     if (!activeSessionId) return [];
     return messagesBySession[activeSessionId] ?? [];
+  },
+
+  initForUser: (userId: string) => {
+    if (_initializedUserId === userId) return;
+    _currentUserId = userId;
+    _initializedUserId = userId;
+    const persisted = loadPersistedChatState(userId);
+    set({
+      sessions: persisted?.sessions ?? [],
+      activeSessionId: persisted?.activeSessionId ?? null,
+      messagesBySession: persisted?.messagesBySession ?? {},
+      pendingIngestionBySession: {},
+    });
+  },
+
+  clearForUser: () => {
+    _currentUserId = null;
+    _initializedUserId = null;
+    set({
+      sessions: [],
+      activeSessionId: null,
+      messagesBySession: {},
+      pendingIngestionBySession: {},
+    });
   },
 }));

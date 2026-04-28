@@ -3,6 +3,14 @@ export const CHAT_STORAGE_KEY = "cognitrix:chat:v1";
 export const CHART_ASSETS_STORAGE_KEY = "cognitrix:chart-assets:v1";
 export const WORKSPACE_SELECTION_STORAGE_KEY = "cognitrix:workspace-selection:v1";
 
+export function chatStorageKeyForUser(userId: string): string {
+  return `cognitrix:chat:v1:${userId}`;
+}
+
+export function assetStorageKeyForUser(userId: string): string {
+  return `cognitrix:chart-assets:v1:${userId}`;
+}
+
 export function safeLoadFromStorage<T>(key: string): T | null {
   if (typeof window === "undefined") {
     return null;
