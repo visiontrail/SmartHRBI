@@ -18,19 +18,30 @@ const DEFAULT_AUTH_CONTEXT = {
 export type PublishWorkspaceResponse = {
   published_page_id: string;
   version: number;
+  visibility_mode?: string;
 };
+
+export type VisibilityMode = "private" | "registered" | "allowlist";
 
 export type PublishHistoryItem = {
   page_id: string;
   version: number;
   published_at: string;
   published_by: string;
+  visibility_mode?: VisibilityMode;
+  visibility_user_count?: number | null;
+};
+
+export type VisibilityPayload = {
+  visibility_mode: VisibilityMode;
+  visibility_user_ids?: string[];
 };
 
 export async function publishWorkspace(
   workspaceId: string,
   layout: WebDesignLayout,
-  nodes: WorkspaceNode[]
+  nodes: WorkspaceNode[],
+  visibility?: VisibilityPayload
 ): Promise<PublishWorkspaceResponse> {
   const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const chartNodes = nodes.filter((node): node is WorkspaceNode & { data: ChartNodeData } =>
@@ -73,6 +84,8 @@ export async function publishWorkspace(
       },
       sidebar: layout.sidebar,
       charts,
+      visibility_mode: visibility?.visibility_mode ?? "private",
+      visibility_user_ids: visibility?.visibility_user_ids ?? [],
     }),
   });
   const payload = await response.json().catch(() => null);
@@ -83,6 +96,23 @@ export async function publishWorkspace(
     throw new Error(detail?.message || "Publish failed");
   }
   return payload as PublishWorkspaceResponse;
+}
+
+export async function updateVersionVisibility(
+  workspaceId: string,
+  version: number,
+  payload: VisibilityPayload
+): Promise<void> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const resp = await fetch(
+    `${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/published/${version}/visibility`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!resp.ok) throw new Error("Update visibility failed");
 }
 
 export async function fetchPublishHistory(workspaceId: string): Promise<PublishHistoryItem[]> {

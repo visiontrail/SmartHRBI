@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
@@ -13,14 +13,23 @@ from .audit import get_audit_logger
 from .auth import (
     AuthIdentity,
     AuthTokenError,
+    EmailLoginRequest,
     LoginRequest,
+    RegisterRequest,
     RoleUpdateRequest,
     can_access_owned_resource,
     ensure_scope,
+    get_current_identity,
     get_role_directory,
+    handle_email_login,
+    handle_email_register,
+    handle_logout,
+    handle_me,
     issue_access_token,
     require_permission,
 )
+from .jobs import router as jobs_router
+from .user_search import router as user_search_router
 from .chat import ChatStreamRequest, get_chat_stream_service
 from .config import get_settings
 from .data_policy import forbidden_sensitive_columns, redact_rows, redact_structure
@@ -52,6 +61,7 @@ from .views import (
     ViewStorageError,
     get_view_storage_service,
 )
+from .db_migrations import apply_migrations
 from .workspaces import WorkspaceError, get_workspace_service, router as workspaces_router
 
 app = FastAPI(title="Cognitrix API", version="0.1.0")
@@ -59,10 +69,12 @@ app.include_router(ingestion_router)
 app.include_router(workspaces_router)
 app.include_router(table_catalog_router)
 app.include_router(portal_router)
+app.include_router(jobs_router)
+app.include_router(user_search_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -143,6 +155,7 @@ async def on_startup() -> None:
     settings = get_settings()
     configure_application_logging(settings.log_level)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    apply_migrations()
     logger = logging.getLogger("cognitrix")
     logger.info(
         "application_logging_configured level=%s upload_dir=%s",
@@ -161,6 +174,26 @@ async def on_startup() -> None:
         "agentic_ingestion_forced_enabled=true configured_flag=%s",
         settings.agentic_ingestion_enabled,
     )
+
+
+@app.post("/auth/register")
+async def auth_register(request: RegisterRequest, response: Response) -> dict[str, Any]:
+    return handle_email_register(request, response)
+
+
+@app.post("/auth/email-login")
+async def auth_email_login(request: EmailLoginRequest, response: Response) -> dict[str, Any]:
+    return handle_email_login(request, response)
+
+
+@app.post("/auth/logout")
+async def auth_logout(response: Response) -> dict[str, str]:
+    return handle_logout(response)
+
+
+@app.get("/auth/me")
+async def auth_me(identity: AuthIdentity = Depends(get_current_identity)) -> dict[str, Any]:
+    return handle_me(identity)
 
 
 @app.post("/auth/login")
@@ -631,6 +664,44 @@ async def rollback_view(
     )
     result["share_url"] = result["share_path"]
     return result
+
+
+@app.post("/invites/{token}/accept")
+async def accept_invite(
+    token: str,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, Any]:
+    from .collaboration import accept_invite as _accept_invite
+    from .auth import _get_db_conn
+
+    conn = _get_db_conn()
+    try:
+        result = _accept_invite(conn, raw_token=token, user_id=identity.user_id)
+    except ValueError as exc:
+        code = str(exc)
+        status = 410 if code in ("invite_expired", "invite_revoked", "invite_exhausted") else 400
+        raise HTTPException(status_code=status, detail={"code": code, "message": code})
+    finally:
+        conn.close()
+
+    if result.get("already_member"):
+        return {"already_member": True, "workspace_id": result["workspace_id"], "role": result["role"]}
+
+    from .workspaces import get_workspace_service, WorkspaceError
+    try:
+        workspace = get_workspace_service().get_workspace_for_user(
+            workspace_id=result["workspace_id"],
+            user_id=identity.user_id,
+        )
+    except WorkspaceError:
+        workspace = {"workspace_id": result["workspace_id"]}
+
+    return {
+        "already_member": False,
+        "workspace_id": result["workspace_id"],
+        "role": result["role"],
+        "workspace": workspace,
+    }
 
 
 @app.get("/healthz")

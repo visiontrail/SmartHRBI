@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import hashlib
+import logging
+import sqlite3
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+from .config import get_settings
+
+logger = logging.getLogger("cognitrix.db_migrations")
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+SQLITE_RELATIVE_BASE = Path(__file__).resolve().parent
+
+MIGRATION_FILES = [
+    "0003_workspace_agentic_ingestion_init.sql",
+    "0004_published_pages_init.sql",
+    "0005_users_and_collab.sql",
+]
+
+_ALTER_STATEMENTS = [
+    "ALTER TABLE users ADD COLUMN password_hash",
+    "ALTER TABLE users ADD COLUMN email_lower",
+    "ALTER TABLE users ADD COLUMN job_id",
+    "ALTER TABLE users ADD COLUMN last_login_at",
+    "ALTER TABLE workspace_members ADD COLUMN added_by",
+    "ALTER TABLE published_pages ADD COLUMN visibility_mode",
+    "ALTER TABLE published_pages ADD COLUMN visibility_user_ids",
+]
+
+JOB_SEEDS = [
+    ("developer", "开发者", "Developer", 1),
+    ("pm", "项目经理", "Project Manager", 2),
+    ("team_leader", "Team Leader", "Team Leader", 3),
+    ("product_manager", "产品经理", "Product Manager", 4),
+    ("hr", "人力资源", "HR", 5),
+    ("data_analyst", "数据分析师", "Data Analyst", 6),
+    ("other", "其他", "Other", 7),
+]
+
+
+def _get_db_path() -> Path:
+    settings = get_settings()
+    db_url = settings.database_url.strip()
+    if db_url.startswith("sqlite://"):
+        parsed = urlparse(db_url)
+        raw_path = unquote(parsed.path)
+        if raw_path.startswith("//"):
+            return Path("/" + raw_path.lstrip("/")).resolve()
+        if raw_path.startswith("/") and len(raw_path) > 1 and raw_path[1] != ".":
+            return Path(raw_path).resolve()
+        if raw_path.startswith("/"):
+            raw_path = raw_path[1:]
+        return (SQLITE_RELATIVE_BASE / raw_path).resolve()
+    return (settings.upload_dir / "state" / "ai_views.sqlite3").resolve()
+
+
+def _connect(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = OFF")
+    return conn
+
+
+def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS _schema_migrations (
+            id TEXT PRIMARY KEY,
+            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+
+
+def _is_applied(conn: sqlite3.Connection, migration_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM _schema_migrations WHERE id = ?", (migration_id,)
+    ).fetchone()
+    return row is not None
+
+
+def _mark_applied(conn: sqlite3.Connection, migration_id: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO _schema_migrations (id) VALUES (?)", (migration_id,)
+    )
+    conn.commit()
+
+
+def _run_migration_sql(conn: sqlite3.Connection, sql_path: Path) -> None:
+    sql = sql_path.read_text(encoding="utf-8")
+    statements = [s.strip() for s in sql.split(";") if s.strip()]
+    for stmt in statements:
+        is_alter = any(stmt.upper().startswith(prefix.upper()) for prefix in _ALTER_STATEMENTS)
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            if is_alter and "duplicate column name" in str(exc).lower():
+                logger.debug("column already exists, skipping: %s", stmt[:80])
+            elif "already exists" in str(exc).lower():
+                logger.debug("object already exists, skipping: %s", stmt[:80])
+            else:
+                raise
+
+
+def _seed_jobs(conn: sqlite3.Connection) -> None:
+    for code, label_zh, label_en, sort_order in JOB_SEEDS:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_jobs (code, label_zh, label_en, sort_order)
+            VALUES (?, ?, ?, ?)
+            """,
+            (code, label_zh, label_en, sort_order),
+        )
+    conn.commit()
+
+
+def _bootstrap_admin(conn: sqlite3.Connection) -> None:
+    import bcrypt as _bcrypt_lib
+
+    settings = get_settings()
+    admin_email = settings.auth_bootstrap_admin_email.strip()
+    admin_password = settings.auth_bootstrap_admin_password.strip()
+    if not admin_email or not admin_password:
+        return
+
+    row = conn.execute("SELECT COUNT(*) AS cnt FROM users WHERE password_hash IS NOT NULL").fetchone()
+    if row and int(row["cnt"]) > 0:
+        return
+
+    salt = _bcrypt_lib.gensalt()
+    password_hash = _bcrypt_lib.hashpw(admin_password.encode("utf-8"), salt).decode("utf-8")
+    email_lower = admin_email.lower()
+
+    import uuid as _uuid
+    user_id = _uuid.uuid4().hex
+    job_row = conn.execute("SELECT id FROM user_jobs WHERE code = 'developer'").fetchone()
+    job_id = int(job_row["id"]) if job_row else None
+
+    conn.execute(
+        """
+        INSERT INTO users (id, email, email_lower, display_name, password_hash, job_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, 'Admin', ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(email_lower) DO NOTHING
+        """,
+        (user_id, admin_email, email_lower, password_hash, job_id),
+    )
+    conn.commit()
+    logger.info("bootstrap_admin_created email=%s", admin_email)
+
+
+def apply_migrations() -> None:
+    db_path = _get_db_path()
+    conn = _connect(db_path)
+    try:
+        _ensure_migrations_table(conn)
+        for filename in MIGRATION_FILES:
+            migration_id = filename
+            sql_path = MIGRATIONS_DIR / filename
+            if not sql_path.exists():
+                logger.warning("migration_file_missing path=%s", sql_path)
+                continue
+            if _is_applied(conn, migration_id):
+                logger.debug("migration_already_applied id=%s", migration_id)
+                continue
+            logger.info("applying_migration id=%s", migration_id)
+            _run_migration_sql(conn, sql_path)
+            _mark_applied(conn, migration_id)
+            logger.info("migration_applied id=%s", migration_id)
+
+        _seed_jobs(conn)
+        _bootstrap_admin(conn)
+    finally:
+        conn.close()

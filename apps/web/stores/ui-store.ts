@@ -1,6 +1,12 @@
 import { create } from "zustand";
+import { getAppMode, setStoredAppMode } from "@/lib/auth/session";
 
 export type ActivePanel = "chat" | "workspace" | "both" | "catalog";
+export type AppMode = "designer" | "viewer";
+
+function loadAppMode(): AppMode {
+  return getAppMode();
+}
 
 type UIState = {
   activePanel: ActivePanel;
@@ -9,6 +15,7 @@ type UIState = {
   chatCanvasSplitRatio: number;
   isSending: boolean;
   isSaving: boolean;
+  appMode: AppMode;
 
   setActivePanel: (panel: ActivePanel) => void;
   setChatSidebarOpen: (open: boolean) => void;
@@ -18,6 +25,7 @@ type UIState = {
   toggleWorkspaceSidebar: () => void;
   setIsSending: (value: boolean) => void;
   setIsSaving: (value: boolean) => void;
+  setAppMode: (mode: AppMode) => void;
 };
 
 export const useUIStore = create<UIState>((set) => ({
@@ -27,6 +35,7 @@ export const useUIStore = create<UIState>((set) => ({
   chatCanvasSplitRatio: 0.5,
   isSending: false,
   isSaving: false,
+  appMode: loadAppMode(),
 
   setActivePanel: (panel) => set({ activePanel: panel }),
   setChatSidebarOpen: (open) => set({ chatSidebarOpen: open }),
@@ -36,4 +45,8 @@ export const useUIStore = create<UIState>((set) => ({
   toggleWorkspaceSidebar: () => set((s) => ({ workspaceSidebarOpen: !s.workspaceSidebarOpen })),
   setIsSending: (value) => set({ isSending: value }),
   setIsSaving: (value) => set({ isSaving: value }),
+  setAppMode: (mode) => {
+    setStoredAppMode(mode);
+    set({ appMode: mode });
+  },
 }));

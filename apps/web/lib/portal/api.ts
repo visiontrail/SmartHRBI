@@ -72,29 +72,61 @@ export type PublishedChartData = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const DEFAULT_AUTH_CONTEXT = {
+  userId: process.env.NEXT_PUBLIC_DEFAULT_USER_ID ?? "demo-user",
+  projectId: process.env.NEXT_PUBLIC_DEFAULT_PROJECT_ID ?? "demo-project",
+  role: process.env.NEXT_PUBLIC_DEFAULT_ROLE ?? "hr",
+  department: null,
+  clearance: 1,
+};
+
+async function portalHeaders(): Promise<Record<string, string>> {
+  const { getAuthorizationHeader } = await import("@/lib/auth/session");
+  return getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+}
+
+export class PortalError extends Error {
+  status: number;
+  code?: string;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "PortalError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 export async function fetchPortalWorkspaces(): Promise<PortalWorkspace[]> {
-  const response = await fetch(`${API_BASE_URL}/portal/workspaces`, { cache: "no-store" });
+  const headers = await portalHeaders();
+  const response = await fetch(`${API_BASE_URL}/portal/workspaces`, { cache: "no-store", headers });
   const payload = await response.json();
+  if (response.status === 401) throw new PortalError("authentication_required", "Login required", 401);
   if (!response.ok) throw new Error("Unable to load portal workspaces");
   return Array.isArray(payload.workspaces) ? payload.workspaces : [];
 }
 
 export async function fetchPortalManifest(pageId: string): Promise<PortalManifestResponse> {
+  const headers = await portalHeaders();
   const response = await fetch(`${API_BASE_URL}/portal/pages/${encodeURIComponent(pageId)}/manifest`, {
     cache: "no-store",
+    headers,
   });
   const payload = await response.json();
+  if (response.status === 401) throw new PortalError("authentication_required", "Login required", 401);
+  if (response.status === 403) throw new PortalError(payload?.detail?.code ?? "page_not_visible", "No access", 403);
+  if (response.status === 404) throw new PortalError("page_not_found", "Page not found", 404);
   if (!response.ok) throw new Error("Unable to load published page");
   return payload;
 }
 
 export async function fetchPublishedChartData(pageId: string, chartId: string): Promise<PublishedChartData> {
+  const headers = await portalHeaders();
   const response = await fetch(
     `${API_BASE_URL}/portal/pages/${encodeURIComponent(pageId)}/charts/${encodeURIComponent(chartId)}/data`,
-    { cache: "no-store" }
+    { cache: "no-store", headers }
   );
   const payload = await response.json();
+  if (response.status === 403) throw new PortalError("page_not_visible", "No access", 403);
   if (!response.ok) throw new Error("Unable to load chart data");
   return payload;
 }

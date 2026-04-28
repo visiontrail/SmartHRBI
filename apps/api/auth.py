@@ -5,16 +5,18 @@ import hashlib
 import hmac
 import json
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
+from urllib.parse import unquote, urlparse
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .audit import get_audit_logger
 from .config import get_settings
@@ -82,6 +84,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 DEFAULT_TOKEN_TTL_SECONDS = 3600
 MAX_TOKEN_TTL_SECONDS = 24 * 3600
 
+SQLITE_RELATIVE_BASE = Path(__file__).resolve().parent
+
 _bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger("cognitrix.auth")
 
@@ -104,6 +108,34 @@ class LoginRequest(BaseModel):
     department: str | None = None
     clearance: int = 0
     expires_in: int = Field(default=DEFAULT_TOKEN_TTL_SECONDS, ge=60, le=MAX_TOKEN_TTL_SECONDS)
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: str
+    job_id: int
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or len(normalized) < 3:
+            raise ValueError("Invalid email address")
+        return normalized
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("display_name is required")
+        return normalized
 
 
 class RoleUpdateRequest(BaseModel):
@@ -372,6 +404,199 @@ def issue_access_token(payload: LoginRequest) -> dict[str, Any]:
     }
 
 
+def issue_user_token(
+    *,
+    user_id: str,
+    role: str = "admin",
+    department: str | None = None,
+    clearance: int = 0,
+) -> tuple[str, int]:
+    settings = get_settings()
+    expires_in = settings.access_token_ttl_min * 60
+    service = get_token_service()
+    return service.issue_token(
+        user_id=user_id,
+        project_id="default",
+        role=role,
+        department=department,
+        clearance=clearance,
+        expires_in=expires_in,
+    )
+
+
+def _get_db_conn() -> sqlite3.Connection:
+    settings = get_settings()
+    db_url = settings.database_url.strip()
+    if db_url.startswith("sqlite://"):
+        parsed = urlparse(db_url)
+        raw_path = unquote(parsed.path)
+        if raw_path.startswith("//"):
+            # 4-slash absolute path: sqlite:////abs/path
+            db_path = Path("/" + raw_path.lstrip("/")).resolve()
+        elif raw_path.startswith("/") and len(raw_path) > 1 and raw_path[1] != ".":
+            # absolute path like /abs/path
+            db_path = Path(raw_path).resolve()
+        else:
+            # relative path
+            if raw_path.startswith("/"):
+                raw_path = raw_path[1:]
+            db_path = (SQLITE_RELATIVE_BASE / raw_path).resolve()
+    else:
+        db_path = (settings.upload_dir / "state" / "ai_views.sqlite3").resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def handle_email_register(request: RegisterRequest, response: Response) -> dict[str, Any]:
+    from .users import create_user, get_user_by_email
+    from .jobs import validate_job_id
+
+    settings = get_settings()
+    if not settings.auth_registration_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "registration_disabled", "message": "Registration is currently disabled"},
+        )
+    if len(request.password) < settings.password_min_length:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "password_too_short",
+                "message": f"密码至少 {settings.password_min_length} 位",
+            },
+        )
+
+    conn = _get_db_conn()
+    try:
+        existing = get_user_by_email(conn, request.email)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "email_taken", "message": "该邮箱已被注册"},
+            )
+
+        if not validate_job_id(conn, request.job_id):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_job_id", "message": "Invalid job_id"},
+            )
+
+        user = create_user(
+            conn,
+            email=request.email,
+            display_name=request.display_name,
+            password=request.password,
+            job_id=request.job_id,
+        )
+    finally:
+        conn.close()
+
+    token, expires_at = issue_user_token(user_id=user.id)
+    _set_session_cookie(response, token)
+    get_audit_logger().log(
+        event_type="authentication",
+        action="register",
+        status="success",
+        user_id=user.id,
+        project_id="default",
+        detail={"email": user.email},
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "job_id": user.job_id,
+        },
+    }
+
+
+def handle_email_login(request: EmailLoginRequest, response: Response) -> dict[str, Any]:
+    from .users import get_user_by_email, update_last_login, verify_password
+
+    conn = _get_db_conn()
+    try:
+        user = get_user_by_email(conn, request.email)
+        if user is None or user.password_hash is None:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_credentials", "message": "邮箱或密码错误"},
+            )
+        if not verify_password(request.password, user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_credentials", "message": "邮箱或密码错误"},
+            )
+        update_last_login(conn, user.id)
+    finally:
+        conn.close()
+
+    token, expires_at = issue_user_token(user_id=user.id)
+    _set_session_cookie(response, token)
+    get_audit_logger().log(
+        event_type="authentication",
+        action="login",
+        status="success",
+        user_id=user.id,
+        project_id="default",
+        detail={"email": user.email},
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "job_id": user.job_id,
+        },
+    }
+
+
+def handle_logout(response: Response) -> dict[str, str]:
+    response.delete_cookie("cognitrix_session", samesite="lax")
+    return {"status": "ok"}
+
+
+def handle_me(identity: AuthIdentity) -> dict[str, Any]:
+    from .users import get_user_by_id
+    from .workspaces import get_workspace_service
+
+    conn = _get_db_conn()
+    try:
+        user = get_user_by_id(conn, identity.user_id)
+    finally:
+        conn.close()
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "authentication_required", "message": "User not found"},
+        )
+
+    available_workspaces = get_workspace_service().list_workspaces_for_user(user_id=identity.user_id)
+    has_designer_workspace = any(
+        w.get("role") in ("owner", "editor") for w in available_workspaces
+    )
+    default_app_mode = "designer" if has_designer_workspace else "viewer"
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "job_id": user.job_id,
+        "last_login_at": user.last_login_at,
+        "available_workspaces": available_workspaces,
+        "default_app_mode": default_app_mode,
+    }
+
+
 def get_current_identity(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
@@ -379,7 +604,16 @@ def get_current_identity(
     audit = get_audit_logger()
     header_snapshot = _authorization_header_snapshot(request)
 
-    if credentials is None or credentials.scheme.lower() != "bearer":
+    # Cookie fallback: read from cognitrix_session cookie if no bearer token
+    token_str: str | None = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        token_str = credentials.credentials
+    else:
+        cookie_token = request.cookies.get("cognitrix_session")
+        if cookie_token:
+            token_str = cookie_token
+
+    if token_str is None:
         reason = "missing_token"
         if header_snapshot["has_auth_header"] and header_snapshot["auth_scheme"] != "bearer":
             reason = "invalid_auth_scheme"
@@ -413,7 +647,7 @@ def get_current_identity(
         )
 
     try:
-        identity = get_token_service().verify_token(credentials.credentials)
+        identity = get_token_service().verify_token(token_str)
     except TokenExpiredError as exc:
         audit.log(
             event_type="authentication",
@@ -428,8 +662,8 @@ def get_current_identity(
             request.url.path,
             request.method,
             exc.code,
-            _token_fingerprint(credentials.credentials),
-            len(credentials.credentials),
+            _token_fingerprint(token_str),
+            len(token_str),
         )
         raise HTTPException(status_code=401, detail={"code": exc.code, "message": exc.message}) from exc
     except AuthTokenError as exc:
@@ -446,8 +680,8 @@ def get_current_identity(
             request.url.path,
             request.method,
             exc.code,
-            _token_fingerprint(credentials.credentials),
-            len(credentials.credentials),
+            _token_fingerprint(token_str),
+            len(token_str),
         )
         raise HTTPException(status_code=401, detail={"code": exc.code, "message": exc.message}) from exc
 
@@ -466,6 +700,16 @@ def get_current_identity(
 
     request.state.identity = identity
     return identity
+
+
+def get_optional_identity(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> AuthIdentity | None:
+    try:
+        return get_current_identity(request, credentials)
+    except HTTPException:
+        return None
 
 
 def get_role_directory() -> RoleDirectory:
@@ -492,6 +736,19 @@ def _cached_role_directory(path_key: str) -> RoleDirectory:
 def clear_auth_cache() -> None:
     _cached_token_service.cache_clear()
     _cached_role_directory.cache_clear()
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    settings = get_settings()
+    max_age = settings.access_token_ttl_min * 60
+    response.set_cookie(
+        key="cognitrix_session",
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Set True in production behind HTTPS
+    )
 
 
 def _optional_string(value: Any) -> str | None:

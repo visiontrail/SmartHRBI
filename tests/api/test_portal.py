@@ -80,20 +80,20 @@ def test_publish_workspace_writes_snapshot_and_serves_portal_assets(monkeypatch,
         assert history_payload["count"] == 1
         assert history_payload["published_pages"][0]["page_id"] == page_id
 
-        portal_workspaces_response = client.get("/portal/workspaces")
+        portal_workspaces_response = client.get("/portal/workspaces", headers=headers)
         assert portal_workspaces_response.status_code == 200
         portal_workspaces = portal_workspaces_response.json()
         assert portal_workspaces["count"] == 1
         assert portal_workspaces["workspaces"][0]["latest_page_id"] == page_id
         assert portal_workspaces["workspaces"][0]["name"] == "Portal Workspace"
 
-        manifest_response = client.get(f"/portal/pages/{page_id}/manifest")
+        manifest_response = client.get(f"/portal/pages/{page_id}/manifest", headers=headers)
         assert manifest_response.status_code == 200
         manifest = manifest_response.json()["manifest"]
         assert manifest["workspace_id"] == workspace_id
         assert manifest["charts"][0]["data_truncated"] is True
 
-        chart_response = client.get(f"/portal/pages/{page_id}/charts/headcount/data")
+        chart_response = client.get(f"/portal/pages/{page_id}/charts/headcount/data", headers=headers)
         assert chart_response.status_code == 200
         chart_payload = chart_response.json()
         assert chart_payload["data_truncated"] is True
@@ -121,5 +121,6 @@ def test_portal_missing_page_returns_404(monkeypatch, tmp_path: Path) -> None:
     _set_minimal_env(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
-        response = client.get("/portal/pages/missing/manifest")
+        headers = auth_headers(client, user_id="alice", project_id="north", role="viewer", clearance=1)
+        response = client.get("/portal/pages/missing/manifest", headers=headers)
         expect_error_code(response, "PUBLISHED_PAGE_NOT_FOUND", status_code=404)

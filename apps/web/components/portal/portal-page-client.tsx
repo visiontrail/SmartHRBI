@@ -8,45 +8,93 @@ import { PublishedPageSidebar } from "@/components/portal/published-page-sidebar
 import {
   fetchPortalManifest,
   fetchPortalWorkspaces,
+  PortalError,
   type PortalManifestResponse,
   type PortalWorkspace,
 } from "@/lib/portal/api";
+import { useI18n } from "@/lib/i18n/context";
+import { setStoredAppMode } from "@/lib/auth/session";
 
 export function PortalPageClient({ initialPageId }: { initialPageId?: string }) {
+  const { t } = useI18n();
   const [workspaces, setWorkspaces] = useState<PortalWorkspace[]>([]);
   const [pageId, setPageId] = useState<string | null>(initialPageId || null);
   const [page, setPage] = useState<PortalManifestResponse | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [activePublishedPageId, setActivePublishedPageId] = useState<string | undefined>();
   const [activeChartId, setActiveChartId] = useState<string | null>(null);
   const [activeChartTitle, setActiveChartTitle] = useState<string | undefined>();
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+
+  const openDesigner = () => {
+    setStoredAppMode("designer");
+    window.location.href = "/";
+  };
 
   useEffect(() => {
-    fetchPortalWorkspaces().then((items) => {
-      setWorkspaces(items);
-      if (!pageId && items[0]) setPageId(items[0].latest_page_id);
-    });
+    setStoredAppMode("viewer");
+  }, []);
+
+  useEffect(() => {
+    fetchPortalWorkspaces()
+      .then((items) => {
+        setWorkspaces(items);
+        setWorkspaceError(null);
+        if (!pageId && items[0]) setPageId(items[0].latest_page_id);
+      })
+      .catch((err) => {
+        if (err instanceof PortalError && err.status === 401) {
+          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        } else {
+          setWorkspaceError("加载失败");
+        }
+      });
   }, [pageId]);
 
   useEffect(() => {
     if (!pageId) return;
-    fetchPortalManifest(pageId).then((payload) => {
-      setPage(payload);
-      const firstSidebarPageId = payload.manifest.sidebar?.[0]?.pageId ?? payload.manifest.sidebar?.[0]?.id;
-      setActivePublishedPageId(
-        payload.manifest.layout.activePageId ??
-          payload.manifest.layout.pages?.[0]?.id ??
-          firstSidebarPageId
-      );
-      setActiveChartId(null);
-      setActiveChartTitle(undefined);
-    });
+    setPageError(null);
+    fetchPortalManifest(pageId)
+      .then((payload) => {
+        setPage(payload);
+        const firstSidebarPageId = payload.manifest.sidebar?.[0]?.pageId ?? payload.manifest.sidebar?.[0]?.id;
+        setActivePublishedPageId(
+          payload.manifest.layout.activePageId ??
+            payload.manifest.layout.pages?.[0]?.id ??
+            firstSidebarPageId
+        );
+        setActiveChartId(null);
+        setActiveChartTitle(undefined);
+      })
+      .catch((err) => {
+        if (err instanceof PortalError && err.code === "page_not_visible") {
+          setPageError("no_access");
+        } else {
+          setPageError("error");
+        }
+        setPage(null);
+      });
   }, [pageId]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f7f4eb] text-[#2f332f]">
-      <PortalWorkspaceSidebar workspaces={workspaces} activePageId={pageId} onSelect={setPageId} />
+      <PortalWorkspaceSidebar
+        workspaces={workspaces}
+        activePageId={pageId}
+        onSelect={setPageId}
+        onOpenDesigner={openDesigner}
+      />
       <main className="relative flex min-w-0 flex-1">
-        {!page ? (
+        {workspaces.length === 0 && !workspaceError ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-[#777166]">
+            {t("portal.emptyList")}
+          </div>
+        ) : pageError === "no_access" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2">
+            <p className="font-medium text-[#777166]">{t("portal.noAccess")}</p>
+            <p className="text-sm text-[#777166]">{t("portal.noAccessDesc")}</p>
+          </div>
+        ) : !page ? (
           <div className="flex flex-1 items-center justify-center text-sm text-[#777166]">
             Select a published workspace.
           </div>

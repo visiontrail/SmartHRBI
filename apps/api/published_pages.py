@@ -52,10 +52,22 @@ class PublishedChartSnapshot(BaseModel):
         return normalized
 
 
+VISIBILITY_MODES = {"private", "registered", "allowlist"}
+
+
 class PublishWorkspaceRequest(BaseModel):
     layout: dict[str, Any] = Field(default_factory=dict)
     sidebar: list[dict[str, Any]] = Field(default_factory=list)
     charts: list[PublishedChartSnapshot] = Field(default_factory=list)
+    visibility_mode: str = Field(default="private")
+    visibility_user_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("visibility_mode")
+    @classmethod
+    def validate_visibility_mode(cls, value: str) -> str:
+        if value not in VISIBILITY_MODES:
+            raise ValueError(f"visibility_mode must be one of {VISIBILITY_MODES}")
+        return value
 
 
 class PublishedPage(BaseModel):
@@ -65,15 +77,33 @@ class PublishedPage(BaseModel):
     published_at: str
     published_by: str
     manifest_path: str
+    visibility_mode: str = "private"
+    visibility_user_ids: list[int] = Field(default_factory=list)
 
     def to_history_item(self) -> dict[str, Any]:
+        user_count = len(self.visibility_user_ids) if self.visibility_mode == "allowlist" else None
         return {
             "page_id": self.id,
             "version": self.version,
             "published_at": self.published_at,
             "published_by": self.published_by,
             "manifest_path": self.manifest_path,
+            "visibility_mode": self.visibility_mode,
+            "visibility_user_count": user_count,
         }
+
+    def is_visible_to(self, *, user_id: str, workspace_member_roles: set[str]) -> bool:
+        if self.visibility_mode == "registered":
+            return True
+        if self.visibility_mode == "private":
+            return bool(workspace_member_roles & {"owner", "editor"})
+        if self.visibility_mode == "allowlist":
+            if bool(workspace_member_roles & {"owner", "editor"}):
+                return True
+            if user_id and any(str(uid) == user_id for uid in self.visibility_user_ids):
+                return True
+            return False
+        return False
 
 
 @dataclass(slots=True)
@@ -197,6 +227,8 @@ class PublishedPageStore:
         published_by: str,
         manifest_path: Path,
         published_at: str | None = None,
+        visibility_mode: str = "private",
+        visibility_user_ids: list[int] | None = None,
     ) -> PublishedPage:
         normalized_workspace_id = workspace_id.strip()
         normalized_publisher = published_by.strip()
@@ -215,12 +247,14 @@ class PublishedPageStore:
 
         page_id = uuid.uuid4().hex
         now = published_at or _utc_now()
+        vis_user_ids_json = json.dumps(visibility_user_ids or [])
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO published_pages (
-                    id, workspace_id, version, published_at, published_by, manifest_path
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    id, workspace_id, version, published_at, published_by, manifest_path,
+                    visibility_mode, visibility_user_ids
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     page_id,
@@ -229,6 +263,8 @@ class PublishedPageStore:
                     now,
                     normalized_publisher,
                     str(manifest_path),
+                    visibility_mode,
+                    vis_user_ids_json,
                 ),
             )
             conn.commit()
@@ -240,6 +276,8 @@ class PublishedPageStore:
             published_at=now,
             published_by=normalized_publisher,
             manifest_path=str(manifest_path),
+            visibility_mode=visibility_mode,
+            visibility_user_ids=visibility_user_ids or [],
         )
 
     def get(self, *, page_id: str) -> PublishedPage:
@@ -247,7 +285,9 @@ class PublishedPageStore:
         with self._lock, self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, workspace_id, version, published_at, published_by, manifest_path
+                SELECT id, workspace_id, version, published_at, published_by, manifest_path,
+                       COALESCE(visibility_mode, 'private') AS visibility_mode,
+                       visibility_user_ids
                 FROM published_pages
                 WHERE id = ?
                 """,
@@ -266,7 +306,9 @@ class PublishedPageStore:
         with self._lock, self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, workspace_id, version, published_at, published_by, manifest_path
+                SELECT id, workspace_id, version, published_at, published_by, manifest_path,
+                       COALESCE(visibility_mode, 'private') AS visibility_mode,
+                       visibility_user_ids
                 FROM published_pages
                 WHERE workspace_id = ?
                 ORDER BY version DESC
@@ -287,7 +329,9 @@ class PublishedPageStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, workspace_id, version, published_at, published_by, manifest_path
+                SELECT id, workspace_id, version, published_at, published_by, manifest_path,
+                       COALESCE(visibility_mode, 'private') AS visibility_mode,
+                       visibility_user_ids
                 FROM published_pages
                 WHERE workspace_id = ?
                 ORDER BY version DESC
@@ -300,7 +344,10 @@ class PublishedPageStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT pp.id, pp.workspace_id, pp.version, pp.published_at, pp.published_by, pp.manifest_path
+                SELECT pp.id, pp.workspace_id, pp.version, pp.published_at, pp.published_by,
+                       pp.manifest_path,
+                       COALESCE(pp.visibility_mode, 'private') AS visibility_mode,
+                       pp.visibility_user_ids
                 FROM published_pages AS pp
                 JOIN (
                     SELECT workspace_id, MAX(version) AS version
@@ -314,10 +361,40 @@ class PublishedPageStore:
             ).fetchall()
         return [self._serialize(row) for row in rows]
 
+    def update_visibility(
+        self,
+        *,
+        page_id: str,
+        visibility_mode: str,
+        visibility_user_ids: list[int],
+    ) -> PublishedPage:
+        vis_user_ids_json = json.dumps(visibility_user_ids)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE published_pages
+                SET visibility_mode = ?, visibility_user_ids = ?
+                WHERE id = ?
+                """,
+                (visibility_mode, vis_user_ids_json, page_id),
+            )
+            conn.commit()
+        return self.get(page_id=page_id)
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(PUBLISHED_SCHEMA_PATH.read_text(encoding="utf-8"))
             conn.commit()
+            # Add visibility columns (idempotent)
+            for stmt in [
+                "ALTER TABLE published_pages ADD COLUMN visibility_mode TEXT NOT NULL DEFAULT 'private'",
+                "ALTER TABLE published_pages ADD COLUMN visibility_user_ids TEXT",
+            ]:
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                except Exception:
+                    pass  # Column already exists
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -326,6 +403,13 @@ class PublishedPageStore:
 
     @staticmethod
     def _serialize(row: sqlite3.Row) -> PublishedPage:
+        raw_ids = row["visibility_user_ids"]
+        try:
+            vis_ids = json.loads(raw_ids) if raw_ids else []
+            if not isinstance(vis_ids, list):
+                vis_ids = []
+        except (json.JSONDecodeError, TypeError):
+            vis_ids = []
         return PublishedPage(
             id=str(row["id"]),
             workspace_id=str(row["workspace_id"]),
@@ -333,6 +417,8 @@ class PublishedPageStore:
             published_at=str(row["published_at"]),
             published_by=str(row["published_by"]),
             manifest_path=str(row["manifest_path"]),
+            visibility_mode=str(row["visibility_mode"]) if row["visibility_mode"] else "private",
+            visibility_user_ids=[int(x) for x in vis_ids if x is not None],
         )
 
 

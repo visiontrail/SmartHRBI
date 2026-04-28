@@ -19,9 +19,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--web-base-url", default="http://127.0.0.1:3000")
     parser.add_argument("--timeout-seconds", type=int, default=90)
+    # Legacy service-token auth
     parser.add_argument("--user-id", default="smoke-hr")
     parser.add_argument("--project-id", default="smoke-project")
     parser.add_argument("--role", default="hr")
+    # New email/password auth (used when --email is provided)
+    parser.add_argument("--email", default="")
+    parser.add_argument("--password", default="SmokePwd123!")
     return parser.parse_args()
 
 
@@ -132,18 +136,44 @@ def main() -> int:
         wait_for_http_ok(client, f"{api_base_url}/healthz", args.timeout_seconds)
         wait_for_http_ok(client, web_base_url, args.timeout_seconds)
 
-        login_response = client.post(
-            f"{api_base_url}/auth/login",
-            json={
-                "user_id": args.user_id,
-                "project_id": args.project_id,
-                "role": args.role,
-                "department": "HR",
-                "clearance": 2,
-            },
-        )
-        login_response.raise_for_status()
-        token = login_response.json().get("access_token")
+        if args.email:
+            # New email+password flow
+            smoke_email = args.email
+            smoke_password = args.password
+            # Try register first (idempotent: if exists, login)
+            reg_resp = client.post(f"{api_base_url}/auth/register", json={
+                "email": smoke_email,
+                "password": smoke_password,
+                "display_name": "Smoke User",
+                "job_id": 1,
+            })
+            if reg_resp.status_code == 409:
+                # Already registered, login
+                login_response = client.post(f"{api_base_url}/auth/email-login", json={
+                    "email": smoke_email,
+                    "password": smoke_password,
+                })
+                login_response.raise_for_status()
+                token = login_response.json().get("access_token")
+            elif reg_resp.status_code == 200:
+                token = reg_resp.json().get("access_token")
+            else:
+                reg_resp.raise_for_status()
+                token = None
+        else:
+            # Legacy service-token flow
+            login_response = client.post(
+                f"{api_base_url}/auth/login",
+                json={
+                    "user_id": args.user_id,
+                    "project_id": args.project_id,
+                    "role": args.role,
+                    "department": "HR",
+                    "clearance": 2,
+                },
+            )
+            login_response.raise_for_status()
+            token = login_response.json().get("access_token")
         if not token:
             raise RuntimeError("missing access_token")
 

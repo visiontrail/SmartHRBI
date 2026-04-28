@@ -168,4 +168,4 @@ def test_viewer_cannot_manage_workspace_members(monkeypatch, tmp_path: Path) -> 
             headers=viewer_headers,
             json={"user_id": "carol", "role": "viewer"},
         )
-        expect_error_code(viewer_add_member, "RBAC_FORBIDDEN", status_code=403)
+        expect_error_code(viewer_add_member, "WORKSPACE_FORBIDDEN", status_code=403)

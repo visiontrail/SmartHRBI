@@ -69,12 +69,12 @@ def test_publish_flow_writes_snapshot_files_and_redacts_sensitive_columns(monkey
         publish_response.raise_for_status()
         page_id = publish_response.json()["published_page_id"]
 
-        manifest_response = client.get(f"/portal/pages/{page_id}/manifest")
+        manifest_response = client.get(f"/portal/pages/{page_id}/manifest", headers=headers)
         manifest_response.raise_for_status()
         manifest = manifest_response.json()["manifest"]
         assert manifest["charts"][0]["chart_id"] == "chart-1"
 
-        data_response = client.get(f"/portal/pages/{page_id}/charts/chart-1/data")
+        data_response = client.get(f"/portal/pages/{page_id}/charts/chart-1/data", headers=headers)
         data_response.raise_for_status()
         rows = data_response.json()["rows"]
         assert rows == [{"department": "HR", "headcount": 4}]

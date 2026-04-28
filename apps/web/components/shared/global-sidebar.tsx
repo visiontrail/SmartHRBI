@@ -9,23 +9,58 @@ import {
   BarChart3,
   Columns2,
   Table2,
+  LogOut,
+  Globe,
+  MonitorPlay,
+  PenLine,
+  ChevronUp,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuGroup,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+} from "@/components/ui/dropdown-menu";
 import { useChatStore } from "@/stores/chat-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import { useUIStore } from "@/stores/ui-store";
+import { useUIStore, type AppMode } from "@/stores/ui-store";
 import { useCreateSession, useDeleteSession } from "@/hooks/use-chat";
 import { useCreateWorkspace, useDeleteWorkspace } from "@/hooks/use-workspace";
 import { useI18n } from "@/lib/i18n/context";
-import type { Locale } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/utils";
+import { useSession } from "@/lib/auth/use-session";
+import { apiLogout } from "@/lib/auth/auth-client";
+import { clearInMemoryToken } from "@/lib/auth/session";
 
 export function GlobalSidebar() {
   const { t, locale, setLocale } = useI18n();
+  const { user } = useSession();
+  const appMode = useUIStore((s) => s.appMode);
+  const setAppMode = useUIStore((s) => s.setAppMode);
+
+  async function handleLogout() {
+    await apiLogout().catch(() => {});
+    clearInMemoryToken();
+    window.location.href = "/login";
+  }
+
+  const handleAppModeChange = (mode: AppMode) => {
+    setAppMode(mode);
+    if (mode === "viewer") {
+      window.location.href = "/portal";
+    }
+  };
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const setActiveSession = useChatStore((s) => s.setActiveSession);
@@ -76,14 +111,16 @@ export function GlobalSidebar() {
             <span className="text-xs text-muted-foreground tracking-wide">识枢</span>
           </div>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" onClick={toggleChatSidebar}>
-              <PanelLeftClose className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t("sidebar.hideSidebar")}</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={toggleChatSidebar}>
+                <PanelLeftClose className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("sidebar.hideSidebar")}</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       <nav className="grid grid-cols-4 gap-1 border-b border-border-cream px-3 py-2">
@@ -210,25 +247,81 @@ export function GlobalSidebar() {
       </ScrollArea>
 
       {/* Footer */}
-      <div className="border-t border-border-cream px-4 py-3">
-        <p className="text-label text-stone-gray">{t("sidebar.footerTagline")}</p>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-label text-stone-gray">{t("language.label")}</span>
-          <div className="inline-flex items-center gap-1 rounded-subtle border border-border-cream bg-parchment p-1">
-            <LanguageButton
-              locale="en-US"
-              active={locale === "en-US"}
-              onClick={setLocale}
-              label={t("language.en")}
-            />
-            <LanguageButton
-              locale="zh-CN"
-              active={locale === "zh-CN"}
-              onClick={setLocale}
-              label={t("language.zh")}
-            />
-          </div>
-        </div>
+      <div className="border-t border-border-cream px-3 py-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="w-full flex items-center gap-2.5 px-2 py-2 rounded-comfortable hover:bg-warm-sand transition-colors group"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-terracotta text-white text-body-sm font-semibold select-none">
+                {user?.display_name ? user.display_name.charAt(0).toUpperCase() : "?"}
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-body-sm font-medium truncate text-near-black">
+                  {user?.display_name ?? ""}
+                </p>
+                <p className="text-label text-stone-gray truncate">{t("sidebar.footerTagline")}</p>
+              </div>
+              <ChevronUp className="w-4 h-4 text-stone-gray shrink-0 group-data-[state=open]:rotate-180 transition-transform" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="start"
+            sideOffset={6}
+            className="w-64"
+          >
+            {/* User email header */}
+            <div className="px-2 py-1.5 mb-1">
+              <p className="text-label text-stone-gray truncate">{user?.email ?? ""}</p>
+            </div>
+            <DropdownMenuSeparator />
+
+            {/* Language submenu */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Globe className="w-4 h-4" />
+                {t("language.label")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-64">
+                <DropdownMenuItem onSelect={() => setLocale("en-US")}>
+                  {t("language.en")}
+                  {locale === "en-US" && <Check className="ml-auto w-4 h-4" />}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setLocale("zh-CN")}>
+                  {t("language.zh")}
+                  {locale === "zh-CN" && <Check className="ml-auto w-4 h-4" />}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* Viewer / Designer toggle */}
+            <DropdownMenuItem
+              onSelect={() => handleAppModeChange(appMode === "viewer" ? "designer" : "viewer")}
+            >
+              {appMode === "viewer" ? (
+                <PenLine className="w-4 h-4" />
+              ) : (
+                <MonitorPlay className="w-4 h-4" />
+              )}
+              {appMode === "viewer"
+                ? t("appMode.designer")
+                : t("appMode.viewer")}
+            </DropdownMenuItem>
+
+            <DropdownMenuSeparator />
+
+            {/* Logout */}
+            <DropdownMenuItem
+              onSelect={handleLogout}
+              className="text-error-crimson focus:text-error-crimson focus:bg-error-crimson/10"
+            >
+              <LogOut className="w-4 h-4" />
+              {t("auth.logout")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </aside>
   );
@@ -265,31 +358,6 @@ function PanelButton({
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  );
-}
-
-function LanguageButton({
-  locale,
-  active,
-  onClick,
-  label,
-}: {
-  locale: Locale;
-  active: boolean;
-  onClick: (locale: Locale) => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(locale)}
-      className={cn(
-        "rounded-subtle px-2 py-1 text-label font-medium transition-colors",
-        active ? "bg-warm-sand text-near-black" : "text-stone-gray hover:bg-border-cream"
-      )}
-    >
-      {label}
-    </button>
   );
 }
 

@@ -8,6 +8,7 @@ export type Workspace = {
   updatedAt: string;
   nodeCount: number;
   thumbnail?: string;
+  role?: string;
 };
 
 export type WorkspaceNodeType = "chart" | "text" | "section";

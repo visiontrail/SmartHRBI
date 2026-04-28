@@ -1,10 +1,49 @@
 import * as React from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 const DropdownMenuGroup = DropdownMenuPrimitive.Group;
+const DropdownMenuSub = DropdownMenuPrimitive.Sub;
+
+const DropdownMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & { inset?: boolean }
+>(({ className, inset, children, ...props }, ref) => (
+  <DropdownMenuPrimitive.SubTrigger
+    ref={ref}
+    className={cn(
+      "relative flex cursor-default select-none items-center gap-2 rounded-subtle px-2 py-1.5 text-body-sm outline-none transition-colors",
+      "focus:bg-warm-sand focus:text-near-black data-[state=open]:bg-warm-sand",
+      "[&>svg]:size-4 [&>svg]:shrink-0",
+      inset && "pl-8",
+      className
+    )}
+    {...props}
+  >
+    {children}
+    <ChevronRight className="ml-auto size-4 text-stone-gray" />
+  </DropdownMenuPrimitive.SubTrigger>
+));
+DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayName;
+
+const DropdownMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.SubContent
+    ref={ref}
+    className={cn(
+      "z-50 min-w-[8rem] overflow-hidden rounded-comfortable border border-border-cream bg-ivory p-1 text-near-black shadow-whisper",
+      "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+      className
+    )}
+    {...props}
+  />
+));
+DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayName;
 
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
@@ -63,4 +102,7 @@ export {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuGroup,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 };

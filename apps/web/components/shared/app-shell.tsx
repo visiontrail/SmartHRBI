@@ -21,6 +21,8 @@ export function AppShell() {
   const { t } = useI18n();
   const activePanel = useUIStore((s) => s.activePanel);
   const chatSidebarOpen = useUIStore((s) => s.chatSidebarOpen);
+  const appMode = useUIStore((s) => s.appMode);
+  const setAppMode = useUIStore((s) => s.setAppMode);
   const chatCanvasSplitRatio = useUIStore((s) => s.chatCanvasSplitRatio);
   const setChatCanvasSplitRatio = useUIStore((s) => s.setChatCanvasSplitRatio);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -33,6 +35,12 @@ export function AppShell() {
   const workspaceListQuery = useWorkspaceList();
   const createWorkspace = useCreateWorkspace();
   useChartAssets();
+
+  useEffect(() => {
+    if (appMode !== "designer") {
+      setAppMode("designer");
+    }
+  }, [appMode, setAppMode]);
 
   useEffect(() => {
     if (activeWorkspaceId || workspaces.length === 0) {

@@ -1,3 +1,6 @@
+// Session management: in-memory token + localStorage cache for new email/password auth
+// Also keeps the legacy service-token flow for backward compatibility
+
 export type AuthContext = {
   userId: string;
   projectId: string;
@@ -13,19 +16,110 @@ type CachedAccessToken = {
 };
 
 const AUTH_STORAGE_KEY = "cognitrix:access-token:v1";
+const NEW_AUTH_STORAGE_KEY = "cognitrix:user-token:v2";
 const TOKEN_REFRESH_SKEW_SECONDS = 30;
+
+// In-memory token for new auth (email+password)
+let _inMemoryToken: string | null = null;
+let _inMemoryExpiresAt = 0;
+
+export function setInMemoryToken(token: string, expiresAt: number): void {
+  _inMemoryToken = token;
+  _inMemoryExpiresAt = expiresAt;
+  // Also persist to localStorage as fallback
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(
+        NEW_AUTH_STORAGE_KEY,
+        JSON.stringify({ accessToken: token, expiresAt })
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+export function clearInMemoryToken(): void {
+  _inMemoryToken = null;
+  _inMemoryExpiresAt = 0;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(NEW_AUTH_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function getInMemoryToken(): string | null {
+  const now = Math.floor(Date.now() / 1000);
+  if (_inMemoryToken && _inMemoryExpiresAt > now + TOKEN_REFRESH_SKEW_SECONDS) {
+    return _inMemoryToken;
+  }
+  // Try localStorage fallback
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(NEW_AUTH_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { accessToken: string; expiresAt: number };
+        if (parsed.accessToken && parsed.expiresAt > now + TOKEN_REFRESH_SKEW_SECONDS) {
+          _inMemoryToken = parsed.accessToken;
+          _inMemoryExpiresAt = parsed.expiresAt;
+          return _inMemoryToken;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+const APP_MODE_STORAGE_KEY = "cognitrix_app_mode";
+
+export function getAppMode(): "designer" | "viewer" {
+  if (typeof window === "undefined") return "designer";
+  try {
+    const stored = window.localStorage.getItem(APP_MODE_STORAGE_KEY);
+    if (stored === "designer" || stored === "viewer") return stored;
+  } catch {
+    // ignore
+  }
+  return "designer";
+}
+
+export function setStoredAppMode(mode: "designer" | "viewer"): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(APP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // ignore
+  }
+}
 
 export async function getAuthorizationHeader(
   apiBaseUrl: string,
   context: AuthContext
 ): Promise<Record<string, string>> {
-  const token = await getAccessToken(apiBaseUrl, context);
-  return {
-    Authorization: `Bearer ${token}`
-  };
+  const appMode = getAppMode();
+  // Check new auth first
+  const userToken = getInMemoryToken();
+  if (userToken) {
+    return { Authorization: `Bearer ${userToken}`, "X-App-Mode": appMode };
+  }
+  // Fall back to legacy service-token auth
+  const token = await getLegacyAccessToken(apiBaseUrl, context);
+  return { Authorization: `Bearer ${token}`, "X-App-Mode": appMode };
 }
 
-async function getAccessToken(apiBaseUrl: string, context: AuthContext): Promise<string> {
+export function handleUnauthorized(currentPath?: string): void {
+  if (typeof window === "undefined") return;
+  const next = encodeURIComponent(currentPath ?? window.location.pathname);
+  window.location.href = `/login?next=${next}`;
+}
+
+async function getLegacyAccessToken(apiBaseUrl: string, context: AuthContext): Promise<string> {
   const normalized = normalizeAuthContext(context);
   const scopeKey = buildScopeKey(normalized);
   const cached = loadCachedAccessToken();
@@ -35,16 +129,14 @@ async function getAccessToken(apiBaseUrl: string, context: AuthContext): Promise
 
   const response = await fetch(`${apiBaseUrl}/auth/login`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       user_id: normalized.userId,
       project_id: normalized.projectId,
       role: normalized.role,
       department: normalized.department,
-      clearance: normalized.clearance
-    })
+      clearance: normalized.clearance,
+    }),
   });
 
   const payload = await response.json().catch(() => null);
@@ -58,11 +150,7 @@ async function getAccessToken(apiBaseUrl: string, context: AuthContext): Promise
     throw new Error("auth_login_invalid_payload");
   }
 
-  saveCachedAccessToken({
-    accessToken,
-    expiresAt,
-    scopeKey
-  });
+  saveCachedAccessToken({ accessToken, expiresAt, scopeKey });
   return accessToken;
 }
 
@@ -72,31 +160,19 @@ function normalizeAuthContext(context: AuthContext): AuthContext {
     projectId: context.projectId.trim(),
     role: context.role.trim().toLowerCase() || "viewer",
     department: context.department?.trim() || null,
-    clearance: Number.isFinite(context.clearance) ? Math.max(0, Math.trunc(context.clearance)) : 0
+    clearance: Number.isFinite(context.clearance) ? Math.max(0, Math.trunc(context.clearance)) : 0,
   };
 }
 
 function buildScopeKey(context: AuthContext): string {
-  return JSON.stringify([
-    context.userId,
-    context.projectId,
-    context.role,
-    context.department,
-    context.clearance
-  ]);
+  return JSON.stringify([context.userId, context.projectId, context.role, context.department, context.clearance]);
 }
 
 function loadCachedAccessToken(): CachedAccessToken | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
+  if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-
+    if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedAccessToken;
     if (
       !parsed ||
@@ -106,7 +182,6 @@ function loadCachedAccessToken(): CachedAccessToken | null {
     ) {
       return null;
     }
-
     return parsed;
   } catch {
     return null;
@@ -114,28 +189,19 @@ function loadCachedAccessToken(): CachedAccessToken | null {
 }
 
 function saveCachedAccessToken(token: CachedAccessToken): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
+  if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(token));
   } catch {
-    // Ignore storage failures and keep the request path usable in memory.
+    // ignore
   }
 }
 
 function readErrorMessage(payload: unknown, fallback: string): string {
-  if (!isRecord(payload)) {
-    return fallback;
-  }
-
+  if (!isRecord(payload)) return fallback;
   const detail = isRecord(payload.detail) ? payload.detail : null;
   const detailMessage = detail ? String(detail.message ?? "") : "";
-  if (detailMessage) {
-    return detailMessage;
-  }
-
+  if (detailMessage) return detailMessage;
   const payloadMessage = String(payload.message ?? "");
   return payloadMessage || fallback;
 }

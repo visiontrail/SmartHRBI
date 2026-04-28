@@ -21,7 +21,11 @@ import { ChartPreview } from "@/components/charts/chart-preview";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
-import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem } from "@/lib/workspace/publish";
+import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem, type VisibilityPayload } from "@/lib/workspace/publish";
+import { PublishDialog, type PublishDialogResult } from "@/components/workspace/publish-dialog";
+import { ShareDialog } from "@/components/sharing/share-dialog";
+import { useSession } from "@/lib/auth/use-session";
+import { Share2 } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ChartNodeData, WebDesignPage, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
 
@@ -44,6 +48,14 @@ export function WebDesignCanvas() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<PublishHistoryItem[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const { user } = useSession();
+  const activeWorkspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === activeWorkspaceId));
+  const userWorkspaceRole = useWorkspaceStore((s) =>
+    s.workspaces.find((w) => w.id === activeWorkspaceId)?.role ?? "viewer"
+  );
+  const canEdit = userWorkspaceRole === "owner" || userWorkspaceRole === "editor";
 
   const chartNodes = useMemo(
     () => nodes.filter((node): node is WorkspaceNode & { data: ChartNodeData } => node.data.type === "chart"),
@@ -56,11 +68,20 @@ export function WebDesignCanvas() {
   });
   const publishZoneCount = pages.reduce((sum, page) => sum + page.zones.length, 0);
 
-  const handlePublish = async () => {
+  const handlePublishClick = () => {
+    setPublishDialogOpen(true);
+  };
+
+  const handlePublishConfirm = async (dialogResult: PublishDialogResult) => {
     if (!activeWorkspaceId) return;
     setIsPublishing(true);
     try {
-      const result = await publishWorkspace(activeWorkspaceId, layout, nodes);
+      const visibility: VisibilityPayload = {
+        visibility_mode: dialogResult.visibility_mode,
+        visibility_user_ids: dialogResult.visibility_user_ids,
+      };
+      const result = await publishWorkspace(activeWorkspaceId, layout, nodes, visibility);
+      setPublishDialogOpen(false);
       toast.success(t("workspace.webDesign.toast.published"), {
         description: t("workspace.webDesign.toast.versionReady", { version: result.version }),
         action: {
@@ -166,7 +187,7 @@ export function WebDesignCanvas() {
                 <span>
                   <Button
                     size="sm"
-                    onClick={handlePublish}
+                    onClick={handlePublishClick}
                     disabled={publishBlocked || isPublishing || publishZoneCount === 0}
                   >
                     <Send className="h-4 w-4" />
@@ -178,6 +199,12 @@ export function WebDesignCanvas() {
                 <TooltipContent>{t("workspace.webDesign.publishBlocked")}</TooltipContent>
               )}
             </Tooltip>
+            {canEdit && (
+              <Button variant="outline" size="sm" onClick={() => setShareDialogOpen(true)}>
+                <Share2 className="h-4 w-4" />
+                分享
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={loadHistory}>
               {historyOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               {t("workspace.webDesign.history")}
@@ -257,6 +284,23 @@ export function WebDesignCanvas() {
           </div>
         </div>
       </main>
+
+      <PublishDialog
+        open={publishDialogOpen}
+        onClose={() => setPublishDialogOpen(false)}
+        onPublish={handlePublishConfirm}
+        isPublishing={isPublishing}
+      />
+
+      {canEdit && (
+        <ShareDialog
+          open={shareDialogOpen}
+          workspaceId={activeWorkspaceId ?? ""}
+          workspaceName={activeWorkspace?.title ?? ""}
+          currentUserId={user?.id}
+          onClose={() => setShareDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }

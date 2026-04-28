@@ -13,8 +13,8 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "app.resizeChatCanvas": "Resize chat and canvas panels",
 
     "language.label": "Language",
-    "language.en": "EN",
-    "language.zh": "中文",
+    "language.en": "English (United States)",
+    "language.zh": "中文（简体）",
 
     "sidebar.hideSidebar": "Hide sidebar (⌘B)",
     "sidebar.panel.chat": "Chat",
@@ -352,15 +352,56 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "share.savedConversation": "Saved Conversation",
     "share.you": "You",
     "share.ai": "AI",
-    "share.noMessages": "No messages were stored for this view."
+    "share.noMessages": "No messages were stored for this view.",
+
+    "auth.register": "Register",
+    "auth.login": "Login",
+    "auth.logout": "Logout",
+    "auth.email": "Email",
+    "auth.password": "Password",
+    "auth.displayName": "Display name",
+    "auth.job": "Job",
+    "auth.loginError": "Invalid email or password",
+    "auth.emailTaken": "This email is already registered",
+    "auth.passwordTooShort": "Password must be at least {{n}} characters",
+    "auth.registerSuccess": "Registration successful",
+    "auth.loginSuccess": "Login successful",
+    "auth.logoutSuccess": "Logged out",
+
+    "appMode.designer": "Designer",
+    "appMode.viewer": "Viewer",
+
+    "visibility.private": "Private (collaborators only)",
+    "visibility.registered": "All registered users",
+    "visibility.allowlist": "Specific users",
+
+    "collab.collaborators": "Collaborators",
+    "collab.invite": "Invite",
+    "collab.inviteLink": "Invite link",
+    "collab.copyLink": "Copy link",
+    "collab.revokeLink": "Revoke",
+    "collab.generateLink": "Generate new link",
+    "collab.linkCopied": "Invite link copied",
+    "collab.inviteUser": "Invite as editor",
+    "collab.removeUser": "Remove",
+    "collab.roleEditor": "Editor",
+    "collab.roleViewer": "Viewer",
+    "collab.roleOwner": "Owner",
+
+    "portal.openDesigner": "Open designer",
+    "portal.publishedWorkspaces": "Published workspaces",
+    "portal.noPublishedWorkspaces": "No published workspaces yet. Publish a workspace from the designer.",
+    "portal.emptyList": "No visible published pages. Contact the designer to get access.",
+    "portal.noAccess": "No access",
+    "portal.noAccessDesc": "You do not have permission to view this page. Please contact the designer."
   },
   "zh-CN": {
     "app.loadingWorkspaces": "正在加载工作空间...",
     "app.resizeChatCanvas": "调整对话与画布宽度",
 
     "language.label": "语言",
-    "language.en": "EN",
-    "language.zh": "中文",
+    "language.en": "English (United States)",
+    "language.zh": "中文（简体）",
 
     "sidebar.hideSidebar": "隐藏侧边栏 (⌘B)",
     "sidebar.panel.chat": "对话",
@@ -683,6 +724,47 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "share.savedConversation": "已保存会话",
     "share.you": "你",
     "share.ai": "AI",
-    "share.noMessages": "该视图未保存会话消息。"
+    "share.noMessages": "该视图未保存会话消息。",
+
+    "auth.register": "注册",
+    "auth.login": "登录",
+    "auth.logout": "登出",
+    "auth.email": "邮箱",
+    "auth.password": "密码",
+    "auth.displayName": "姓名",
+    "auth.job": "岗位",
+    "auth.loginError": "邮箱或密码错误",
+    "auth.emailTaken": "该邮箱已被注册",
+    "auth.passwordTooShort": "密码至少 {{n}} 位",
+    "auth.registerSuccess": "注册成功",
+    "auth.loginSuccess": "登录成功",
+    "auth.logoutSuccess": "已登出",
+
+    "appMode.designer": "设计者",
+    "appMode.viewer": "查看者",
+
+    "visibility.private": "私密",
+    "visibility.registered": "所有已注册用户可见",
+    "visibility.allowlist": "指定用户可见",
+
+    "collab.collaborators": "协作者",
+    "collab.invite": "邀请",
+    "collab.inviteLink": "邀请链接",
+    "collab.copyLink": "复制链接",
+    "collab.revokeLink": "撤销",
+    "collab.generateLink": "生成新链接",
+    "collab.linkCopied": "邀请链接已复制",
+    "collab.inviteUser": "邀请为编辑者",
+    "collab.removeUser": "移除",
+    "collab.roleEditor": "编辑者",
+    "collab.roleViewer": "查看者",
+    "collab.roleOwner": "所有者",
+
+    "portal.openDesigner": "进入设计界面",
+    "portal.publishedWorkspaces": "已发布工作空间",
+    "portal.noPublishedWorkspaces": "暂无已发布工作空间。请先在设计界面发布工作空间。",
+    "portal.emptyList": "暂无可见的发布页。请联系设计者获取访问权限。",
+    "portal.noAccess": "无访问权限",
+    "portal.noAccessDesc": "您没有权限访问此页面，请联系设计者获取访问权限。"
   }
 };

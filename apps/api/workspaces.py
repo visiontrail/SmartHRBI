@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from .agentic_ingestion.schema import initialize_sqlite_schema
-from .auth import AuthIdentity, require_permission
+from .auth import AuthIdentity, get_current_identity, require_permission
 from .config import get_settings
 from .published_pages import (
     PublishWorkspaceRequest,
@@ -71,7 +71,7 @@ class UpdateWorkspaceRequest(BaseModel):
 
 class AddWorkspaceMemberRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
-    role: str = Field(default="viewer")
+    role: str = Field(default="editor")
     email: str | None = None
     display_name: str | None = None
 
@@ -89,6 +89,32 @@ class AddWorkspaceMemberRequest(BaseModel):
         normalized = value.strip().lower()
         if normalized not in ROLE_RANK:
             raise ValueError("Unsupported workspace role")
+        return normalized
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: str = Field(default="editor")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ROLE_RANK:
+            raise ValueError("Unsupported workspace role")
+        return normalized
+
+
+class CreateInviteRequest(BaseModel):
+    role: str = Field(default="editor")
+    expires_in_days: int | None = None
+    max_uses: int | None = None
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ("editor", "viewer"):
+            raise ValueError("role must be editor or viewer")
         return normalized
 
 
@@ -444,7 +470,7 @@ class WorkspaceService:
                 workspace_id=normalized_workspace_id,
                 user_id=normalized_actor,
             )
-            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["admin"]:
+            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["editor"]:
                 raise WorkspaceError(
                     code="WORKSPACE_FORBIDDEN",
                     message="You do not have permission to manage workspace members",
@@ -506,6 +532,95 @@ class WorkspaceService:
             "user_id": normalized_member,
             "role": normalized_role,
         }
+
+    def update_member_role(
+        self,
+        *,
+        workspace_id: str,
+        actor_user_id: str,
+        target_user_id: str,
+        new_role: str,
+    ) -> dict[str, str]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_actor = actor_user_id.strip()
+        normalized_target = target_user_id.strip()
+        normalized_role = new_role.strip().lower()
+
+        if normalized_role not in ROLE_RANK or normalized_role == "owner":
+            raise WorkspaceError(
+                code="WORKSPACE_ROLE_INVALID",
+                message="Unsupported workspace role",
+                status_code=422,
+            )
+
+        with self._lock, self._connect() as conn:
+            actor_member = self._get_member(conn, workspace_id=normalized_workspace_id, user_id=normalized_actor)
+            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["editor"]:
+                raise WorkspaceError(
+                    code="WORKSPACE_FORBIDDEN",
+                    message="You do not have permission to manage workspace members",
+                    status_code=403,
+                )
+            target_member = self._get_member(conn, workspace_id=normalized_workspace_id, user_id=normalized_target)
+            if target_member is None:
+                raise WorkspaceError(
+                    code="MEMBER_NOT_FOUND",
+                    message="Member not found",
+                    status_code=404,
+                )
+            if target_member.role == "owner":
+                raise WorkspaceError(
+                    code="CANNOT_DEMOTE_OWNER",
+                    message="Cannot change the owner's role",
+                    status_code=422,
+                )
+            conn.execute(
+                "UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?",
+                (normalized_role, normalized_workspace_id, normalized_target),
+            )
+            conn.commit()
+
+        return {"workspace_id": normalized_workspace_id, "user_id": normalized_target, "role": normalized_role}
+
+    def remove_member(
+        self,
+        *,
+        workspace_id: str,
+        actor_user_id: str,
+        target_user_id: str,
+    ) -> dict[str, str]:
+        normalized_workspace_id = workspace_id.strip()
+        normalized_actor = actor_user_id.strip()
+        normalized_target = target_user_id.strip()
+
+        with self._lock, self._connect() as conn:
+            actor_member = self._get_member(conn, workspace_id=normalized_workspace_id, user_id=normalized_actor)
+            if actor_member is None or ROLE_RANK[actor_member.role] < ROLE_RANK["editor"]:
+                raise WorkspaceError(
+                    code="WORKSPACE_FORBIDDEN",
+                    message="You do not have permission to manage workspace members",
+                    status_code=403,
+                )
+            target_member = self._get_member(conn, workspace_id=normalized_workspace_id, user_id=normalized_target)
+            if target_member is None:
+                raise WorkspaceError(
+                    code="MEMBER_NOT_FOUND",
+                    message="Member not found",
+                    status_code=404,
+                )
+            if target_member.role == "owner":
+                raise WorkspaceError(
+                    code="CANNOT_REMOVE_OWNER",
+                    message="Cannot remove the workspace owner",
+                    status_code=422,
+                )
+            conn.execute(
+                "DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+                (normalized_workspace_id, normalized_target),
+            )
+            conn.commit()
+
+        return {"workspace_id": normalized_workspace_id, "user_id": normalized_target, "status": "removed"}
 
     def list_members(self, *, workspace_id: str, actor_user_id: str) -> list[dict[str, str]]:
         normalized_workspace_id = workspace_id.strip()
@@ -745,7 +860,7 @@ async def list_workspace_members(
 async def add_workspace_member(
     workspace_id: str,
     request: AddWorkspaceMemberRequest,
-    identity: AuthIdentity = Depends(require_permission("workspaces:manage")),
+    identity: AuthIdentity = Depends(get_current_identity),
 ) -> dict[str, str]:
     service = get_workspace_service()
     try:
@@ -761,11 +876,47 @@ async def add_workspace_member(
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
 
-@router.post("/{workspace_id}/publish")
-async def publish_workspace(
+@router.patch("/{workspace_id}/members/{user_id}")
+async def update_workspace_member_role(
     workspace_id: str,
-    request: PublishWorkspaceRequest,
-    identity: AuthIdentity = Depends(require_permission("workspaces:write")),
+    user_id: str,
+    request: UpdateMemberRoleRequest,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, str]:
+    service = get_workspace_service()
+    try:
+        return service.update_member_role(
+            workspace_id=workspace_id,
+            actor_user_id=identity.user_id,
+            target_user_id=user_id,
+            new_role=request.role,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.delete("/{workspace_id}/members/{user_id}")
+async def remove_workspace_member(
+    workspace_id: str,
+    user_id: str,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, str]:
+    service = get_workspace_service()
+    try:
+        return service.remove_member(
+            workspace_id=workspace_id,
+            actor_user_id=identity.user_id,
+            target_user_id=user_id,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.post("/{workspace_id}/invites")
+async def create_workspace_invite(
+    workspace_id: str,
+    request: CreateInviteRequest,
+    identity: AuthIdentity = Depends(get_current_identity),
 ) -> dict[str, object]:
     service = get_workspace_service()
     try:
@@ -776,6 +927,130 @@ async def publish_workspace(
         )
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    from .collaboration import create_invite
+    conn = service._connect()
+    try:
+        result = create_invite(
+            conn,
+            workspace_id=workspace_id,
+            created_by=identity.user_id,
+            role=request.role,
+            expires_in_days=request.expires_in_days,
+            max_uses=request.max_uses,
+        )
+    finally:
+        conn.close()
+    return result
+
+
+@router.get("/{workspace_id}/invites")
+async def list_workspace_invites(
+    workspace_id: str,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, object]:
+    service = get_workspace_service()
+    try:
+        service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="editor",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    from .collaboration import list_invites
+    conn = service._connect()
+    try:
+        invites = list_invites(conn, workspace_id=workspace_id)
+    finally:
+        conn.close()
+    return {"count": len(invites), "invites": invites}
+
+
+@router.delete("/{workspace_id}/invites/{invite_id}")
+async def revoke_workspace_invite(
+    workspace_id: str,
+    invite_id: str,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, str]:
+    service = get_workspace_service()
+    try:
+        service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="editor",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    from .collaboration import revoke_invite
+    conn = service._connect()
+    try:
+        revoke_invite(conn, invite_id=invite_id, workspace_id=workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail={"code": "invite_not_found", "message": str(exc)}) from exc
+    finally:
+        conn.close()
+    return {"status": "revoked", "invite_id": invite_id}
+
+
+@router.post("/{workspace_id}/publish")
+async def publish_workspace(
+    workspace_id: str,
+    request: PublishWorkspaceRequest,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, object]:
+    # Viewer mode quick-fail
+    app_mode = None  # resolved below in actual workspace check
+
+    service = get_workspace_service()
+    try:
+        service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="editor",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    # Validate visibility params
+    from .published_pages import VISIBILITY_MODES
+    if request.visibility_mode not in VISIBILITY_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_visibility_mode", "message": "Invalid visibility_mode"},
+        )
+    if request.visibility_mode != "allowlist" and request.visibility_user_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "visibility_user_ids_only_allowed_in_allowlist",
+                    "message": "visibility_user_ids is only allowed with allowlist mode"},
+        )
+    if request.visibility_mode == "allowlist":
+        if not request.visibility_user_ids:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "allowlist_requires_users", "message": "allowlist requires at least one user_id"},
+            )
+        # Validate each user_id exists
+        conn = service._connect()
+        try:
+            invalid_ids = []
+            for uid in request.visibility_user_ids:
+                row = conn.execute("SELECT 1 FROM users WHERE id = ?", (str(uid),)).fetchone()
+                if row is None:
+                    row2 = conn.execute("SELECT 1 FROM users WHERE CAST(id AS TEXT) = ?", (str(uid),)).fetchone()
+                    if row2 is None:
+                        invalid_ids.append(uid)
+        finally:
+            conn.close()
+        if invalid_ids:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_user_ids", "message": "Some user_ids do not exist",
+                        "invalid": invalid_ids},
+            )
 
     empty_charts = [chart.chart_id for chart in request.charts if not chart.rows]
     if empty_charts:
@@ -807,17 +1082,20 @@ async def publish_workspace(
         published_by=identity.user_id,
         manifest_path=snapshot.manifest_path,
         published_at=published_at,
+        visibility_mode=request.visibility_mode,
+        visibility_user_ids=request.visibility_user_ids,
     )
     return {
         "published_page_id": page.id,
         "version": page.version,
+        "visibility_mode": page.visibility_mode,
     }
 
 
 @router.get("/{workspace_id}/published")
 async def list_workspace_published_pages(
     workspace_id: str,
-    identity: AuthIdentity = Depends(require_permission("workspaces:read")),
+    identity: AuthIdentity = Depends(get_current_identity),
 ) -> dict[str, object]:
     service = get_workspace_service()
     try:
@@ -835,6 +1113,59 @@ async def list_workspace_published_pages(
         "count": len(history),
         "published_pages": history,
     }
+
+
+class UpdateVisibilityRequest(BaseModel):
+    visibility_mode: str = Field(default="private")
+    visibility_user_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("visibility_mode")
+    @classmethod
+    def validate_visibility_mode(cls, value: str) -> str:
+        from .published_pages import VISIBILITY_MODES
+        if value not in VISIBILITY_MODES:
+            raise ValueError(f"visibility_mode must be one of {VISIBILITY_MODES}")
+        return value
+
+
+@router.patch("/{workspace_id}/published/{version}/visibility")
+async def update_published_visibility(
+    workspace_id: str,
+    version: int,
+    request: UpdateVisibilityRequest,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, object]:
+    from .published_pages import VISIBILITY_MODES
+
+    service = get_workspace_service()
+    try:
+        role = service.assert_workspace_access(
+            workspace_id=workspace_id,
+            user_id=identity.user_id,
+            minimum_role="editor",
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+    if request.visibility_mode != "allowlist" and request.visibility_user_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "visibility_user_ids_only_allowed_in_allowlist",
+                    "message": "visibility_user_ids only allowed with allowlist mode"},
+        )
+
+    store = get_published_page_store()
+    pages = store.list_by_workspace(workspace_id=workspace_id)
+    target_page = next((p for p in pages if p.version == version), None)
+    if target_page is None:
+        raise HTTPException(status_code=404, detail={"code": "PUBLISHED_PAGE_NOT_FOUND", "message": "Version not found"})
+
+    updated = store.update_visibility(
+        page_id=target_page.id,
+        visibility_mode=request.visibility_mode,
+        visibility_user_ids=request.visibility_user_ids,
+    )
+    return updated.to_history_item()
 
 
 @lru_cache(maxsize=2)
