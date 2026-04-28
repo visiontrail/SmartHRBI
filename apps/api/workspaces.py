@@ -715,20 +715,32 @@ class WorkspaceService:
             )
 
         normalized_email = _normalize_email(normalized_user, email)
-        normalized_display_name = (display_name or normalized_user).strip() or normalized_user
+        insert_display_name = (display_name or "").strip() or normalized_user
         now = _utc_now()
 
-        conn.execute(
-            """
-            INSERT INTO users (id, email, display_name, status, created_at, updated_at)
-            VALUES (?, ?, ?, 'active', ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                email = excluded.email,
-                display_name = excluded.display_name,
-                updated_at = excluded.updated_at
-            """,
-            (normalized_user, normalized_email, normalized_display_name, now, now),
-        )
+        if display_name is not None:
+            conn.execute(
+                """
+                INSERT INTO users (id, email, display_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'active', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    email = excluded.email,
+                    display_name = excluded.display_name,
+                    updated_at = excluded.updated_at
+                """,
+                (normalized_user, normalized_email, insert_display_name, now, now),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO users (id, email, display_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'active', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    email = excluded.email,
+                    updated_at = excluded.updated_at
+                """,
+                (normalized_user, normalized_email, insert_display_name, now, now),
+            )
 
     def _get_member(
         self,
