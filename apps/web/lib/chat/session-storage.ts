@@ -12,6 +12,10 @@ export function assetStorageKeyForUser(userId: string): string {
   return `cognitrix:chart-assets:v1:${userId}`;
 }
 
+export function traceStorageKeyForUser(userId: string): string {
+  return `cognitrix:chat-trace:v1:${userId}`;
+}
+
 export function safeLoadFromStorage<T>(key: string): T | null {
   if (typeof window === "undefined") {
     return null;

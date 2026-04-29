@@ -201,8 +201,12 @@ export function useSendMessage() {
       }
       return { sessionId };
     },
-    onSuccess: ({ assistantMessage, chartAsset }, { sessionId }) => {
-      appendMessage(sessionId, assistantMessage);
+    onSuccess: ({ assistantMessage, chartAsset, preAppended }, { sessionId }) => {
+      if (preAppended) {
+        useChatStore.getState().replaceMessage(sessionId, assistantMessage.id, assistantMessage);
+      } else {
+        appendMessage(sessionId, assistantMessage);
+      }
       if (chartAsset) {
         addAsset(chartAsset);
       }
@@ -311,7 +315,22 @@ async function streamAssistantResponse({
   preferredChartType?: QueryChartType;
   workspaceId: string;
   t: TranslateFn;
-}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset; preAppended: boolean }> {
+  const messageId = `msg-${generateId()}`;
+  const traceStartedAt = Date.now();
+  const store = useChatStore.getState();
+  store.startTrace(messageId, traceStartedAt);
+
+  // Pre-append placeholder so <AgentTrace> mounts immediately and renders live steps
+  const placeholder: ChatMessage = {
+    id: messageId,
+    sessionId,
+    role: "assistant",
+    content: "",
+    timestamp: new Date().toISOString(),
+  };
+  store.appendMessage(sessionId, placeholder);
+
   const aiMessage = buildMessageWithChartPreference({ content, preferredChartType });
   const authContext = getActiveAuthContext(DEFAULT_AUTH_CONTEXT);
   const authorizationHeader = await getAuthorizationHeader(API_BASE_URL, authContext);
@@ -337,25 +356,105 @@ async function streamAssistantResponse({
   });
 
   if (!response.ok || !response.body) {
+    useChatStore.getState().endTrace(messageId, "error");
+    // Remove placeholder so onError can append the error message cleanly
+    const current = useChatStore.getState().messagesBySession[sessionId] ?? [];
+    useChatStore.setState((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: current.filter((m) => m.id !== messageId),
+      },
+    }));
     throw new Error(`chat_stream_failed_${response.status}`);
   }
 
   let finalText = "";
   let latestSpec: unknown = null;
+  let terminalReason: "final" | "error" | "closed" = "closed";
+  let planningStepCounter = 0;
+  let toolStepCount = 0;
+
   for await (const streamEvent of parseSSEStream(response.body)) {
     const payload = isRecord(streamEvent.data) ? streamEvent.data : {};
+
+    if (streamEvent.event === "planning") {
+      const text = String(payload.text ?? "");
+      useChatStore.getState().pushTraceStep(messageId, {
+        kind: "planning",
+        id: `planning-${planningStepCounter++}`,
+        text,
+        startedAt: Date.now(),
+      });
+      continue;
+    }
+
+    if (streamEvent.event === "tool_use") {
+      const stepId = String(payload.step_id ?? `tool-${toolStepCount}`);
+      const startedAt = typeof payload.started_at === "number" ? (payload.started_at as number) * 1000 : Date.now();
+      const tool = String(payload.tool_name ?? "unknown");
+      const args = isRecord(payload.arguments) ? payload.arguments : {};
+      toolStepCount++;
+      useChatStore.getState().pushTraceStep(messageId, {
+        kind: "tool",
+        id: stepId,
+        tool,
+        args,
+        startedAt,
+        status: "running",
+      });
+      continue;
+    }
+
+    if (streamEvent.event === "tool_result") {
+      const stepId = String(payload.step_id ?? "");
+      const completedAt = typeof payload.completed_at === "number" ? (payload.completed_at as number) * 1000 : Date.now();
+      const startedAt = typeof payload.started_at === "number" ? (payload.started_at as number) * 1000 : undefined;
+      const status = payload.status === "error" ? "error" : "ok";
+      const result = payload.result;
+      const resultPreview = computeResultPreview(result);
+      const patch: Record<string, unknown> = { completedAt, status, result, resultPreview };
+      if (startedAt !== undefined) {
+        patch.startedAt = startedAt;
+      }
+      useChatStore.getState().patchTraceStep(messageId, stepId, patch as Parameters<typeof store.patchTraceStep>[2]);
+      continue;
+    }
+
+    if (streamEvent.event === "error") {
+      if (!finalText) {
+        finalText = String(payload.message ?? t("chat.requestFailed"));
+      }
+      useChatStore.getState().pushTraceStep(messageId, {
+        kind: "error",
+        id: `error-${Date.now()}`,
+        message: String(payload.message ?? ""),
+        code: payload.code ? String(payload.code) : undefined,
+        at: Date.now(),
+      });
+      terminalReason = "error";
+      continue;
+    }
+
     if (streamEvent.event === "spec") {
       latestSpec = payload.spec ?? null;
       continue;
     }
+
     if (streamEvent.event === "final") {
       finalText = String(payload.text ?? finalText);
+      terminalReason = "final";
       continue;
     }
-    if (streamEvent.event === "error" && !finalText) {
-      finalText = String(payload.message ?? t("chat.requestFailed"));
-    }
   }
+
+  useChatStore.getState().endTrace(messageId, terminalReason);
+
+  const trace = useChatStore.getState().traceByMessageId[messageId];
+  const traceSteps = trace?.steps ?? [];
+  const toolCallCount = traceSteps.filter((s) => s.kind === "tool").length;
+  const durationMs = trace ? (trace.endedAt ?? Date.now()) - trace.startedAt : 0;
+  const traceStatus: "ok" | "error" | "incomplete" =
+    terminalReason === "final" ? "ok" : terminalReason === "error" ? "error" : "incomplete";
 
   const chartAsset = toChartAsset(latestSpec, {
     sessionId,
@@ -365,7 +464,7 @@ async function streamAssistantResponse({
     ? t("chat.generatedChart", { title: chartAsset.title })
     : t("chat.completed");
   const assistantMessage: ChatMessage = {
-    id: `msg-${generateId()}`,
+    id: messageId,
     sessionId,
     role: "assistant",
     content: finalText || fallbackText,
@@ -377,8 +476,26 @@ async function streamAssistantResponse({
         }
       : undefined,
     timestamp: new Date().toISOString(),
+    traceSummary:
+      traceSteps.length > 0
+        ? { stepCount: toolCallCount, durationMs, status: traceStatus }
+        : undefined,
   };
-  return { assistantMessage, chartAsset: chartAsset ?? undefined };
+  return { assistantMessage, chartAsset: chartAsset ?? undefined, preAppended: true };
+}
+
+function computeResultPreview(result: unknown): string {
+  if (Array.isArray(result)) {
+    return `${result.length} rows`;
+  }
+  if (isRecord(result)) {
+    const rows = result.rows;
+    if (Array.isArray(rows)) {
+      return `${rows.length} rows`;
+    }
+  }
+  const text = typeof result === "string" ? result : JSON.stringify(result) ?? "";
+  return text.length > 80 ? text.slice(0, 80) + "…" : text;
 }
 
 function buildMessageWithChartPreference({
@@ -412,7 +529,7 @@ async function runIngestionConversationResponse({
   content: string;
   attachment: File;
   t: TranslateFn;
-}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset; preAppended: boolean }> {
   const upload = await createIngestionUpload({
     workspaceId,
     file: attachment,
@@ -462,7 +579,7 @@ async function runIngestionConversationResponse({
     }),
     timestamp: new Date().toISOString(),
   };
-  return { assistantMessage };
+  return { assistantMessage, chartAsset: undefined as ChartAsset | undefined, preAppended: false as const };
 }
 
 async function runIngestionApprovalResponse({
@@ -475,7 +592,7 @@ async function runIngestionApprovalResponse({
   pending: PendingIngestionApproval;
   approvedAction: IngestionProposalAction;
   t: TranslateFn;
-}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset }> {
+}): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset; preAppended: boolean }> {
   const plan = pending.plan;
   const approvalResult = await approveIngestionProposal({
     workspaceId: plan.workspaceId,
@@ -515,7 +632,7 @@ async function runIngestionApprovalResponse({
     }),
     timestamp: new Date().toISOString(),
   };
-  return { assistantMessage };
+  return { assistantMessage, chartAsset: undefined as ChartAsset | undefined, preAppended: false as const };
 }
 
 function createLocalSession(title?: string): ChatSession {

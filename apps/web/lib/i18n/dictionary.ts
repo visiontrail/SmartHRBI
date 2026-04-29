@@ -107,6 +107,16 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.toast.noWorkspace": "No workspace selected. Create or select a workspace first.",
     "chat.toast.addedToWorkspace": "\"{{title}}\" added to {{canvasName}}",
 
+    "chat.trace.thoughtFor": "Thought for {{duration}}",
+    "chat.trace.toolCallsCount": "{{count}} tool calls",
+    "chat.trace.errored": "Errored after {{duration}}",
+    "chat.trace.incomplete": "Incomplete",
+    "chat.trace.expand": "Click to expand",
+    "chat.trace.collapse": "Click to collapse",
+    "chat.trace.bodiesUnavailableAfterReload": "Trace details unavailable after reload",
+    "chat.trace.runningElapsed": "{{elapsed}}s",
+    "chat.trace.resultRowCount": "{{count}} rows",
+
     "workspace.emptyTitle": "Report Workspace",
     "workspace.emptyDescription":
       "Create a workspace to compose AI-generated charts into a visual report. Add charts from your conversations and arrange them in Web Page Design.",
@@ -518,6 +528,16 @@ export const DICTIONARY: Record<Locale, DictionaryMap> = {
     "chat.fullScreen": "全屏",
     "chat.toast.chartAssetNotFound": "未找到图表资源",
     "chat.toast.noWorkspace": "未选择工作空间，请先创建或选择一个。",
+
+    "chat.trace.thoughtFor": "思考了 {{duration}}",
+    "chat.trace.toolCallsCount": "{{count}} 次工具调用",
+    "chat.trace.errored": "{{duration}} 后出错",
+    "chat.trace.incomplete": "未完成",
+    "chat.trace.expand": "点击展开",
+    "chat.trace.collapse": "点击收起",
+    "chat.trace.bodiesUnavailableAfterReload": "刷新后轨迹详情不可用",
+    "chat.trace.runningElapsed": "{{elapsed}}s",
+    "chat.trace.resultRowCount": "{{count}} 行",
     "chat.toast.addedToWorkspace": "已将“{{title}}”添加到{{canvasName}}",
 
     "workspace.emptyTitle": "报告工作空间",

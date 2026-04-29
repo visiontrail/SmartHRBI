@@ -115,7 +115,20 @@ def test_agent_runtime_supports_single_turn_follow_up_and_restart_recovery(monke
 
     assert first.final_status == "completed"
     assert first.agent_session_id
-    assert any(event[0] == "tool_use" for event in first.events)
+    tool_use_events = [payload for event_type, payload in first.events if event_type == "tool_use"]
+    tool_result_events = [payload for event_type, payload in first.events if event_type == "tool_result"]
+    assert tool_use_events, "expected at least one tool_use event"
+    for tu in tool_use_events:
+        assert "step_id" in tu and tu["step_id"], "tool_use missing step_id"
+        assert "started_at" in tu and isinstance(tu["started_at"], float), "tool_use missing started_at"
+    for tr in tool_result_events:
+        assert "step_id" in tr and tr["step_id"], "tool_result missing step_id"
+        assert "started_at" in tr and isinstance(tr["started_at"], float), "tool_result missing started_at"
+        assert "completed_at" in tr and tr["completed_at"] >= tr["started_at"], "tool_result completed_at invalid"
+    # verify call/result pairs share step_id
+    use_ids = {tu["step_id"] for tu in tool_use_events}
+    result_ids = {tr["step_id"] for tr in tool_result_events}
+    assert result_ids.issubset(use_ids), "tool_result step_ids not a subset of tool_use step_ids"
     assert first.spec["chart_type"] == "bar"
     assert first.ai_state["turn_count"] == 1
 

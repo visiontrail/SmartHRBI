@@ -9,6 +9,12 @@ export type ChatSession = {
 
 export type MessageRole = "user" | "assistant" | "system";
 
+export type TraceSummary = {
+  stepCount: number;
+  durationMs: number;
+  status: "ok" | "error" | "incomplete";
+};
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -16,6 +22,7 @@ export type ChatMessage = {
   content: string;
   chartAsset?: ChartAssetReference;
   timestamp: string;
+  traceSummary?: TraceSummary;
 };
 
 export type ChartAssetReference = {

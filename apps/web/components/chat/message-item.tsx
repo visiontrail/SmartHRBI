@@ -2,6 +2,7 @@
 
 import type { ChatMessage } from "@/types/chat";
 import { ChartMessageCard } from "./chart-message-card";
+import { AgentTrace } from "./agent-trace";
 import { User, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -36,19 +37,26 @@ export function MessageItem({ message }: { message: ChatMessage }) {
           isUser ? "items-end" : "items-start"
         )}
       >
-        {/* Text Bubble */}
-        <div
-          className={cn(
-            "rounded-very px-4 py-3",
-            isUser
-              ? "bg-near-black text-ivory rounded-tr-subtle"
-              : "bg-ivory border border-border-cream text-near-black rounded-tl-subtle shadow-whisper"
-          )}
-        >
-          <p className="text-body-sm leading-relaxed whitespace-pre-wrap">
-            {message.content}
-          </p>
-        </div>
+        {/* Agent Trace — shown above the text bubble for assistant messages */}
+        {!isUser && (
+          <AgentTrace messageId={message.id} traceSummary={message.traceSummary} />
+        )}
+
+        {/* Text Bubble — hidden while content is empty (placeholder during streaming) */}
+        {message.content && (
+          <div
+            className={cn(
+              "rounded-very px-4 py-3",
+              isUser
+                ? "bg-near-black text-ivory rounded-tr-subtle"
+                : "bg-ivory border border-border-cream text-near-black rounded-tl-subtle shadow-whisper"
+            )}
+          >
+            <p className="text-body-sm leading-relaxed whitespace-pre-wrap">
+              {message.content}
+            </p>
+          </div>
+        )}
 
         {/* Chart Card */}
         {message.chartAsset && !isUser && (

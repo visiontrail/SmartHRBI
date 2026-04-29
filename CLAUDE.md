@@ -97,7 +97,7 @@ FastAPI app defined in `main.py`. All routes (except `/healthz` and `/auth/login
 5. Final answer (JSON schema) normalized to ECharts/Recharts spec by `ChartStrategyRouter` and emitted as `spec` + `final` SSE events
 6. Session state persisted to `UPLOAD_DIR/state/agent_sessions.sqlite3`
 
-**SSE event types:** `planning`, `tool_use`, `tool_result`, `spec`, `final`, `error` (plus legacy mirrors `reasoning`, `tool`)
+**SSE event types:** `planning`, `tool_use`, `tool_result`, `spec`, `final`, `error` (plus legacy mirrors `reasoning`, `tool`). Every `tool_use` payload carries `step_id` (UUID), `started_at` (epoch seconds); every `tool_result` carries `step_id`, `started_at`, and `completed_at` so the UI can pair call/result and compute durations without relying on arrival order.
 
 **Session model:** `conversation_id → agent_session_id → AgentSessionState` persisted in SQLite; hot in-memory cache avoids DB reads on consecutive turns
 
@@ -109,7 +109,7 @@ Next.js App Router. Single entry page renders `<AppShell />`.
 - `AppShell` — top-level shell with `GlobalSidebar` + panel switching; auto-creates workspace on first load; guards with `WorkspaceOnboardingGate`
 - Four panel modes: `chat` | `workspace` | `both` | `catalog`
 - Keyboard shortcuts: `⌘/Ctrl+1` (chat), `+2` (workspace), `+3` (split), `+4` (catalog), `+B` (toggle sidebar)
-- `ChatPanel` — calls `POST /chat/stream`, consumes SSE events, archives returned specs as chart assets
+- `ChatPanel` — calls `POST /chat/stream`, consumes SSE events, archives returned specs as chart assets. While streaming, renders an inline agent-trace disclosure block: each `planning`, `tool_use`, `tool_result`, and `error` event appears as a compact row in `live` state; on stream completion the block auto-collapses to a single summary chip (duration · tool-call count); users can click the chip to re-expand (`expanded`) or re-collapse (`collapsed`). After a page reload, only the `traceSummary` on the `ChatMessage` persists (step bodies are session-scoped in-memory only).
 - `WorkspacePanel` — React Flow canvas with chart nodes, text nodes, drag-layout, local save
 - `WorkspaceCatalogPage` — read-only table catalog view bound to the active workspace
 

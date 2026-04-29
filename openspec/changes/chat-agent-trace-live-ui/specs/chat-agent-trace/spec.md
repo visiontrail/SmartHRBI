@@ -89,15 +89,15 @@ After a trace has collapsed, the user SHALL be able to re-expand it by clicking 
 - **THEN** the new assistant message's trace begins in `live` state
 - **AND** prior assistant messages' traces remain in their previously chosen state (`collapsed` or `expanded`)
 
-### Requirement: Trace bodies are session-scoped, summaries persist
+### Requirement: Trace bodies persist across page reloads via localStorage; saved views exclude them
 
-Full step bodies (planning text, tool arguments, tool results) SHALL be retained only in the in-memory chat store for the active browser session. The persisted assistant `ChatMessage` SHALL carry only a lightweight `traceSummary` (step count, total duration, terminal status) so that the collapsed chip can be rendered after a session reload without exposing tool result payloads from prior visits.
+Full step bodies (planning text, tool arguments, tool result previews) SHALL be persisted to localStorage under a dedicated key (`cognitrix:chat-trace:v1:{userId}`) so that the user can re-expand the trace after a page reload. Raw tool result payloads (potentially large query rows) are NOT persisted; only the pre-computed `resultPreview` string is stored. The persisted `ChatMessage` also carries a lightweight `traceSummary` (step count, total duration, terminal status) as a fallback for rendering the collapsed chip if the localStorage trace entry is missing.
 
-#### Scenario: Reload preserves the collapsed chip but not step bodies
+#### Scenario: Reload preserves full trace and chip remains expandable
 
 - **WHEN** the user reloads the page after a turn has completed
 - **THEN** the assistant message still displays its collapsed summary chip
-- **AND** clicking the chip surfaces a "trace bodies unavailable after reload" affordance rather than the original step rows
+- **AND** clicking the chip expands to show the full step list (planning, tool calls with argument previews, result previews, any error steps)
 
 #### Scenario: Saved views do not include trace bodies
 

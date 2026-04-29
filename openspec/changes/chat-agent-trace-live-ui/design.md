@@ -27,7 +27,7 @@ The user expectation, set by Claude.ai and Claude Code, is: while the agent work
 
 - Streaming the final answer text token-by-token. (`final` arrives as one payload today — that is fine for this change.)
 - Exposing the trace in the **published portal** chat (`/portal/pages/{page_id}/chat`). That surface uses the same SSE contract but its UI requirements are different and out of scope here.
-- Persisting full trace bodies into saved views or to the backend. Trace lives in the in-memory chat store for the active session only; refreshing the page keeps the assistant message and a `traceSummary` chip but drops the per-step bodies.
+- Persisting full trace bodies into saved views or to the backend. Trace step previews are persisted client-side (localStorage), but raw tool result payloads are excluded from persistence to avoid storing large query result sets.
 - Adding new agent capabilities or tools.
 - Re-architecting `AgentRuntime`. Backend changes are limited to enriching existing payloads.
 
@@ -47,7 +47,7 @@ The user expectation, set by Claude.ai and Claude Code, is: while the agent work
 
 **Why:** A single boolean (live vs not-live) drove by stream lifecycle is unambiguous and matches user expectation. We deliberately do not auto-collapse mid-stream even if the agent pauses (e.g., between tool calls).
 
-**Edge case:** if the page reloads while a turn is mid-flight, the SSE connection drops; on reload the persisted message has no trace bodies and shows just the user message with no assistant follow-up. We do **not** try to resume mid-turn traces — the existing `last_event_id` replay path in `ChatStreamService` is for resuming the answer, not the trace UI.
+**Edge case:** if the page reloads while a turn is mid-flight, the SSE connection drops; on reload the persisted message has no trace bodies and shows just the user message with no assistant follow-up. We do **not** try to resume mid-turn traces — the existing `last_event_id` replay path in `ChatStreamService` is for resuming the answer, not the trace UI. For completed turns, trace step previews are persisted to localStorage so the full trace remains viewable after reload.
 
 ### 3. Backend adds `step_id` and `started_at` to tool events; that's it
 
@@ -109,7 +109,7 @@ type MessageTrace = {
 // startTrace(messageId), pushTraceStep(messageId, step), patchTraceStep(messageId, stepId, partial), endTrace(messageId, reason: "final" | "error" | "closed"), setTraceState(messageId, state)
 ```
 
-The `ChatMessage` itself only carries `traceSummary?: { stepCount: number; durationMs: number; status: "ok" | "error" }` — enough to render the collapsed chip after a session reload, when the full step bodies are gone.
+The `ChatMessage` itself carries `traceSummary?: { stepCount: number; durationMs: number; status: "ok" | "error" }` as a lightweight fallback. The full `MessageTrace` (steps with previews, excluding raw result payloads) is persisted separately to localStorage under `cognitrix:chat-trace:v1:{userId}` and restored on `initForUser`, so the collapsed chip remains expandable after a page reload.
 
 ### 6. Streaming pipeline — where the wiring goes
 
@@ -163,7 +163,7 @@ This matches the existing `genui/state-panels.tsx` aesthetic (warm cream, monoch
 - **Risk:** Long-running tools (10s+ SQL) make the trace look stuck. **Mitigation:** running steps display elapsed time live (recompute on a 1Hz tick while `state === "live"`).
 - **Risk:** Very long traces (20+ steps) push the answer below the fold. **Mitigation:** while `live`, the trace is fully expanded but capped at a max-height of 60vh with internal scroll; on collapse it becomes one line.
 - **Risk:** Tool result payloads can be megabytes (raw query results). **Mitigation:** `tool_result` payloads are already truncated by `agent_runtime.py`; on the UI side, `result` is stored as-is but `resultPreview` is computed once at receive time and the expanded view shows only `resultPreview`. Full `result` is reachable through a "view full result" affordance only.
-- **Trade-off:** Trace bodies are not persisted across reloads. → For a debugging story we keep the `traceSummary` and the underlying audit log; users who need post-hoc inspection can use the audit endpoint. We avoid the storage and security cost of persisting raw tool results client-side.
+- **Trade-off:** Trace step previews are persisted to localStorage; raw tool result payloads are excluded. → Users get full step-by-step inspection after reload without the storage cost of large query result sets. Full raw results remain accessible in the underlying audit log.
 - **Trade-off:** We do not stream the final text token-by-token. → Users who care about perceived latency get the trace as their progress signal instead, which is more informative than partial tokens.
 
 ## Migration Plan

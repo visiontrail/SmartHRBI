@@ -398,6 +398,8 @@ class SDKToolInvocationRecord:
     result_data: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
     from_cache: bool = False
+    step_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    started_at: float = field(default_factory=time.time)
 
 
 @dataclass(slots=True)
@@ -1173,6 +1175,8 @@ class AgentRuntime:
             "tool_name": record.tool_name,
             "step": record.step,
             "arguments": record.arguments,
+            "step_id": record.step_id,
+            "started_at": record.started_at,
         }
         run_context.events.append(("tool_use", tool_use_payload))
         run_context.tool_trace.append({"event": "tool_use", **tool_use_payload})
@@ -1210,6 +1214,9 @@ class AgentRuntime:
             "result": result_data,
             "error": record.error,
             "from_cache": record.from_cache,
+            "step_id": record.step_id,
+            "started_at": record.started_at,
+            "completed_at": time.time(),
         }
         run_context.events.append(("tool_result", tool_result_payload))
         run_context.events.append(

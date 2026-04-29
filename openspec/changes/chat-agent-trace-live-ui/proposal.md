@@ -9,7 +9,7 @@ The backend already emits the right events end-to-end (`agent_runtime.py` → `c
 - Capture the full per-turn agent trace (planning thoughts, tool_use, tool_result, intermediate text, errors) in the chat store, keyed by the assistant message id.
 - Render the trace inline in `MessageItem` while the turn is streaming, with each event shown as a compact row (icon + tool name / thought summary, tool args + result preview on expand).
 - Auto-collapse the trace once the turn ends (final event received OR error OR stream closed). Replace it with a one-line summary chip ("Thought for 4s · 3 tool calls") that the user can click to re-expand for inspection.
-- Persist trace summary metadata on the assistant `ChatMessage` so re-opening the session keeps the collapsed chip; full trace bodies live only in the in-memory store for the current session (not in saved views).
+- Persist trace step previews to localStorage (key: `cognitrix:chat-trace:v1:{userId}`) so re-opening or reloading the session keeps the full trace expandable; raw tool result payloads are excluded from persistence. Saved views do not include trace bodies.
 - Backend stays largely as-is; only minor additions: a stable `step_id` and `started_at` timestamp on each `tool_use`/`tool_result` payload so the UI can group, time, and de-duplicate steps reliably.
 - Disclosure UI must be **restrained**: small monochrome icons, no animation other than a single pulsing dot during streaming, collapsed-by-default once the turn finishes.
 
