@@ -5,8 +5,10 @@ import { Send, Loader2, Paperclip, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useChatStore } from "@/stores/chat-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useSendMessage } from "@/hooks/use-chat";
 import { useI18n } from "@/lib/i18n/context";
+import { useWorkspaceColumns, type ColumnMentionItem } from "@/hooks/use-workspace-columns";
 import { cn } from "@/lib/utils";
 import {
   findQueryChartType,
@@ -22,6 +24,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
   const setComposerText = useChatStore((s) => s.setComposerText);
   const pendingApproval = useChatStore((s) => s.pendingIngestionBySession[sessionId]);
   const isSending = useUIStore((s) => s.isSending);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const sendMessage = useSendMessage();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -30,7 +33,10 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
   const [selectedChartType, setSelectedChartType] = useState<QueryChartType | null>(null);
   const [chartTrigger, setChartTrigger] = useState<ChartTriggerState | null>(null);
   const [activeChartIndex, setActiveChartIndex] = useState(0);
+  const [columnTrigger, setColumnTrigger] = useState<ColumnTriggerState | null>(null);
+  const [activeColumnIndex, setActiveColumnIndex] = useState(0);
   const chartOptions = useMemo(() => getQueryChartTypeOptions(locale), [locale]);
+  const columns = useWorkspaceColumns(activeWorkspaceId);
   const approvalOptions = useMemo(
     () => collectPendingApprovalOptions(pendingApproval?.plan.humanApproval.options),
     [pendingApproval]
@@ -40,12 +46,17 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     () => filterChartOptions(chartOptions, chartTrigger?.query ?? ""),
     [chartOptions, chartTrigger?.query]
   );
+  const filteredColumns = useMemo(
+    () => filterColumnOptions(columns, columnTrigger?.query ?? ""),
+    [columns, columnTrigger?.query]
+  );
   const activeChartOption = filteredChartOptions[Math.min(activeChartIndex, filteredChartOptions.length - 1)] ?? null;
 
   useEffect(() => {
     if (pendingApproval) {
       setSelectedFile(null);
       setChartTrigger(null);
+      setColumnTrigger(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -59,6 +70,12 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
       setActiveChartIndex(0);
     }
   }, [activeChartIndex, filteredChartOptions.length]);
+
+  useEffect(() => {
+    if (activeColumnIndex >= filteredColumns.length) {
+      setActiveColumnIndex(0);
+    }
+  }, [activeColumnIndex, filteredColumns.length]);
 
   const handleSubmit = useCallback(() => {
     const content = composerText.trim();
@@ -77,6 +94,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     setComposerText("");
     setSelectedChartType(null);
     setChartTrigger(null);
+    setColumnTrigger(null);
     setSelectedFile(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -114,6 +132,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
       setComposerText("");
       setSelectedChartType(null);
       setChartTrigger(null);
+      setColumnTrigger(null);
       setCustomApprovalInput(false);
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -122,15 +141,21 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     [isSending, pendingApproval, sendMessage, sessionId, setComposerText, t]
   );
 
-  const updateChartTriggerFromTextarea = useCallback(
+  const updateTriggers = useCallback(
     (text: string, caretPosition: number | null) => {
-      const trigger = getChartTriggerState(text, caretPosition ?? text.length);
-      setChartTrigger(trigger);
+      const pos = caretPosition ?? text.length;
+      // Chart trigger
+      const nextChartTrigger = getChartTriggerState(text, pos);
+      setChartTrigger(nextChartTrigger);
       setActiveChartIndex(0);
       setSelectedChartType((current) => {
         if (!current) return null;
         return text.includes(`#${current}`) ? current : null;
       });
+      // Column trigger — only active when chart trigger is inactive
+      const nextColumnTrigger = nextChartTrigger ? null : getColumnTriggerState(text, pos);
+      setColumnTrigger(nextColumnTrigger);
+      setActiveColumnIndex(0);
     },
     []
   );
@@ -161,8 +186,55 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
     [chartTrigger, composerText, setComposerText]
   );
 
+  const applyColumnSelection = useCallback(
+    (item: ColumnMentionItem) => {
+      const trigger =
+        columnTrigger ??
+        getColumnTriggerState(composerText, textareaRef.current?.selectionStart ?? composerText.length);
+      if (!trigger) return;
+
+      const before = composerText.slice(0, trigger.start);
+      const after = composerText.slice(trigger.end);
+      const replacement = `@${item.columnName} `;
+      const nextText = `${before}${replacement}${after}`;
+      const nextCaret = before.length + replacement.length;
+      setComposerText(nextText);
+      setColumnTrigger(null);
+      requestAnimationFrame(() => {
+        if (!textareaRef.current) return;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextCaret, nextCaret);
+      });
+    },
+    [columnTrigger, composerText, setComposerText]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (columnTrigger && filteredColumns.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setActiveColumnIndex((current) => (current + 1) % filteredColumns.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setActiveColumnIndex((current) =>
+            current === 0 ? filteredColumns.length - 1 : current - 1
+          );
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyColumnSelection(filteredColumns[activeColumnIndex] ?? filteredColumns[0]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setColumnTrigger(null);
+          return;
+        }
+      }
       if (chartTrigger && filteredChartOptions.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -192,7 +264,17 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
         handleSubmit();
       }
     },
-    [activeChartIndex, applyChartSelection, chartTrigger, filteredChartOptions, handleSubmit]
+    [
+      activeChartIndex,
+      activeColumnIndex,
+      applyChartSelection,
+      applyColumnSelection,
+      chartTrigger,
+      columnTrigger,
+      filteredChartOptions,
+      filteredColumns,
+      handleSubmit,
+    ]
   );
 
   return (
@@ -297,20 +379,24 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
               value={composerText}
               aria-label={t("chat.inputAriaLabel")}
               aria-autocomplete="list"
-              aria-controls="chart-type-picker"
-              aria-activedescendant={activeChartOption ? `chart-type-option-${activeChartOption.type}` : undefined}
+              aria-controls={columnTrigger ? "column-mention-picker" : "chart-type-picker"}
+              aria-activedescendant={
+                columnTrigger
+                  ? (filteredColumns[activeColumnIndex] ? `column-mention-option-${filteredColumns[activeColumnIndex].id}` : undefined)
+                  : (activeChartOption ? `chart-type-option-${activeChartOption.type}` : undefined)
+              }
               onChange={(e) => {
                 setComposerText(e.target.value);
-                updateChartTriggerFromTextarea(e.target.value, e.target.selectionStart);
+                updateTriggers(e.target.value, e.target.selectionStart);
               }}
               onKeyDown={handleKeyDown}
               onClick={(e) => {
                 const target = e.currentTarget;
-                updateChartTriggerFromTextarea(target.value, target.selectionStart);
+                updateTriggers(target.value, target.selectionStart);
               }}
               onFocus={(e) => {
                 const target = e.currentTarget;
-                updateChartTriggerFromTextarea(target.value, target.selectionStart);
+                updateTriggers(target.value, target.selectionStart);
               }}
               placeholder={
                 inputLockedByApproval
@@ -331,7 +417,15 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
               }}
             />
 
-            {chartTrigger && filteredChartOptions.length > 0 ? (
+            {columnTrigger ? (
+              <ColumnMentionPicker
+                items={filteredColumns}
+                activeIndex={activeColumnIndex}
+                onActiveIndexChange={setActiveColumnIndex}
+                onSelect={applyColumnSelection}
+                t={t}
+              />
+            ) : chartTrigger && filteredChartOptions.length > 0 ? (
               <ChartTypePicker
                 options={filteredChartOptions}
                 activeIndex={activeChartIndex}
@@ -368,11 +462,21 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
   );
 }
 
+// ─── Trigger state types ───────────────────────────────────────────────────
+
 type ChartTriggerState = {
   start: number;
   end: number;
   query: string;
 };
+
+type ColumnTriggerState = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+// ─── Trigger detection ─────────────────────────────────────────────────────
 
 function getChartTriggerState(text: string, caretPosition: number): ChartTriggerState | null {
   const beforeCaret = text.slice(0, caretPosition);
@@ -389,6 +493,23 @@ function getChartTriggerState(text: string, caretPosition: number): ChartTrigger
   };
 }
 
+function getColumnTriggerState(text: string, caretPosition: number): ColumnTriggerState | null {
+  const beforeCaret = text.slice(0, caretPosition);
+  const triggerStart = beforeCaret.lastIndexOf("@");
+  if (triggerStart < 0) return null;
+  const previousChar = triggerStart === 0 ? "" : beforeCaret[triggerStart - 1];
+  if (previousChar && !/\s/.test(previousChar)) return null;
+  const query = beforeCaret.slice(triggerStart + 1);
+  if (/\s/.test(query)) return null;
+  return {
+    start: triggerStart,
+    end: caretPosition,
+    query,
+  };
+}
+
+// ─── Filter helpers ────────────────────────────────────────────────────────
+
 function filterChartOptions(options: ChartTypeOption[], query: string): ChartTypeOption[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
@@ -399,6 +520,18 @@ function filterChartOptions(options: ChartTypeOption[], query: string): ChartTyp
     return haystack.includes(normalized);
   });
 }
+
+function filterColumnOptions(items: ColumnMentionItem[], query: string): ColumnMentionItem[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return items;
+  return items.filter((item) => {
+    const haystack =
+      `${item.columnName} ${item.columnLabel} ${item.tableName} ${item.tableLabel}`.toLowerCase();
+    return haystack.includes(normalized);
+  });
+}
+
+// ─── Chart type resolution ─────────────────────────────────────────────────
 
 function resolveSelectedChartType({
   explicitSelection,
@@ -413,6 +546,102 @@ function resolveSelectedChartType({
   const match = text.match(/(?:^|\s)#([A-Za-z_]+)/);
   return match ? findQueryChartType(match[1]) : null;
 }
+
+// ─── ColumnMentionPicker ───────────────────────────────────────────────────
+
+function ColumnMentionPicker({
+  items,
+  activeIndex,
+  onActiveIndexChange,
+  onSelect,
+  t,
+}: {
+  items: ColumnMentionItem[];
+  activeIndex: number;
+  onActiveIndexChange: (index: number) => void;
+  onSelect: (item: ColumnMentionItem) => void;
+  t: (key: string, params?: Record<string, string | number | null | undefined>) => string;
+}) {
+  const boundedActiveIndex = Math.min(activeIndex, Math.max(items.length - 1, 0));
+  const listRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    const activeElement = itemRefs.current[boundedActiveIndex];
+    if (!list || !activeElement) return;
+
+    const itemTop = activeElement.offsetTop;
+    const itemBottom = itemTop + activeElement.offsetHeight;
+    const visibleTop = list.scrollTop;
+    const visibleBottom = visibleTop + list.clientHeight;
+
+    if (itemTop < visibleTop) {
+      list.scrollTo({ top: itemTop, behavior: "smooth" });
+      return;
+    }
+    if (itemBottom > visibleBottom) {
+      list.scrollTo({ top: itemBottom - list.clientHeight, behavior: "smooth" });
+    }
+  }, [boundedActiveIndex, items.length]);
+
+  return (
+    <div
+      id="column-mention-picker"
+      role="listbox"
+      aria-label={t("chat.columnMentionPicker.ariaLabel")}
+      className="absolute bottom-[calc(100%+8px)] left-0 z-30 w-full max-w-[520px] overflow-hidden rounded-comfortable border border-border-cream bg-ivory shadow-[0_18px_48px_rgba(38,35,28,0.16)]"
+    >
+      <div ref={listRef} className="max-h-[280px] overflow-y-auto py-1">
+        {items.length === 0 ? (
+          <p className="px-4 py-3 text-caption text-stone-gray">
+            {t("chat.columnMentionPicker.noResults")}
+          </p>
+        ) : (
+          items.map((item, index) => {
+            const active = index === boundedActiveIndex;
+            return (
+              <button
+                ref={(el) => {
+                  itemRefs.current[index] = el;
+                }}
+                id={`column-mention-option-${item.id}`}
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={active}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+                  active ? "bg-warm-sand text-near-black" : "text-charcoal-warm hover:bg-parchment"
+                )}
+                onMouseEnter={() => onActiveIndexChange(index)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onSelect(item);
+                }}
+              >
+                <code className="min-w-0 flex-1 truncate font-mono text-body-sm font-medium text-terracotta">
+                  @{item.columnName}
+                </code>
+                {item.columnLabel !== item.columnName ? (
+                  <span className="shrink-0 text-caption text-stone-gray">{item.columnLabel}</span>
+                ) : null}
+                <span className="shrink-0 rounded-full bg-parchment px-2 py-0.5 text-[10px] font-medium text-olive-gray">
+                  {item.tableLabel}
+                </span>
+                <span className="shrink-0 rounded-full bg-warm-sand px-2 py-0.5 text-[10px] font-medium text-stone-gray uppercase">
+                  {item.columnType.toLowerCase()}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ChartTypePicker ───────────────────────────────────────────────────────
 
 function ChartTypePicker({
   options,
@@ -723,20 +952,15 @@ function ChartExampleShape({ type }: { type: QueryChartType }) {
   if (type === "map") {
     return (
       <>
-        {/* Simplified China mainland outline */}
         <path
           d="M52,82 L62,48 L90,38 L118,28 L152,24 L188,22 L212,18 L230,30 L232,52 L238,72 L236,86 L242,102 L238,114 L234,126 L218,138 L198,148 L174,148 L154,142 L142,132 L126,122 L108,112 L90,104 L72,92 Z"
           fill="#e0f3db"
           stroke="#4b7f8c"
           strokeWidth="2"
         />
-        {/* Northeast region */}
         <path d="M188,22 L212,18 L230,30 L232,52 L210,62 L192,50 Z" fill="#43a2ca" opacity="0.7" />
-        {/* East coast region */}
         <path d="M210,62 L232,52 L238,72 L236,86 L242,102 L238,114 L222,110 L218,86 Z" fill="#c96442" opacity="0.6" />
-        {/* South region */}
         <path d="M222,110 L238,114 L234,126 L218,138 L198,148 L178,146 L182,126 Z" fill="#a8ddb5" opacity="0.8" />
-        {/* Hainan island */}
         <ellipse cx="200" cy="156" rx="11" ry="5.5" fill="#a8ddb5" stroke="#4b7f8c" strokeWidth="1.5" />
       </>
     );
@@ -800,6 +1024,8 @@ function ChartExampleShape({ type }: { type: QueryChartType }) {
 
   return null;
 }
+
+// ─── Approval helpers ──────────────────────────────────────────────────────
 
 function collectPendingApprovalOptions(
   values: string[] | undefined
