@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 from threading import Lock
-from typing import Any, Iterator
+from typing import Any, AsyncGenerator, Iterator
 
 from pydantic import BaseModel, Field
 
@@ -153,6 +153,151 @@ class ChatStreamService:
 
         for event in [*replay_events, *new_events]:
             yield _format_sse(event)
+
+    async def stream_async(
+        self,
+        request: ChatStreamRequest,
+        *,
+        last_event_id_header: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Async generator — yields SSE strings in real-time as the agent produces events."""
+        conversation_id = request.conversation_id or uuid.uuid4().hex
+        last_event_id = request.last_event_id
+        if last_event_id is None and last_event_id_header:
+            try:
+                last_event_id = int(last_event_id_header)
+            except ValueError:
+                last_event_id = None
+
+        # Replay any missed events first
+        if last_event_id is not None:
+            for event in self.sessions.events_after(
+                conversation_id=conversation_id,
+                last_event_id=last_event_id,
+            ):
+                yield _format_sse(event)
+
+        if not request.message:
+            if last_event_id is None:
+                generated = self._build_terminal_failure_events(
+                    conversation_id=conversation_id,
+                    request_id=request.request_id,
+                    text="message is required when not replaying a previous stream",
+                )
+                for event in self.sessions.append_events(conversation_id=conversation_id, events=generated):
+                    yield _format_sse(event)
+            return
+
+        try:
+            async for event_type, payload in self._stream_agent_events(
+                request=request,
+                conversation_id=conversation_id,
+            ):
+                created = self.sessions.append_events(
+                    conversation_id=conversation_id,
+                    events=[(event_type, payload)],
+                )
+                for event in created:
+                    yield _format_sse(event)
+        except AgentGuardrailError as exc:
+            logger.warning(
+                "agent_guardrail_blocked conversation_id=%s request_id=%s code=%s",
+                conversation_id,
+                request.request_id,
+                exc.code,
+            )
+            error_events = [
+                ("error", {
+                    "conversation_id": conversation_id,
+                    "request_id": request.request_id,
+                    "status": "failed",
+                    "code": exc.code,
+                    "message": exc.message,
+                }),
+                ("final", {
+                    "conversation_id": conversation_id,
+                    "request_id": request.request_id,
+                    "status": "failed",
+                    "text": exc.message,
+                }),
+            ]
+            for event in self.sessions.append_events(conversation_id=conversation_id, events=error_events):
+                yield _format_sse(event)
+        except AgentRuntimeError as exc:
+            logger.warning(
+                "agent_runtime_failed conversation_id=%s request_id=%s code=%s",
+                conversation_id,
+                request.request_id,
+                exc.code,
+            )
+            error_events = [
+                ("error", {
+                    "conversation_id": conversation_id,
+                    "request_id": request.request_id,
+                    "status": "failed",
+                    "code": exc.code,
+                    "message": exc.message,
+                }),
+                ("final", {
+                    "conversation_id": conversation_id,
+                    "request_id": request.request_id,
+                    "status": "failed",
+                    "text": exc.message,
+                }),
+            ]
+            for event in self.sessions.append_events(conversation_id=conversation_id, events=error_events):
+                yield _format_sse(event)
+        except Exception:
+            logger.exception(
+                "chat_stream_generation_failed conversation_id=%s request_id=%s",
+                conversation_id,
+                request.request_id,
+            )
+            error_events = self._build_terminal_failure_events(
+                conversation_id=conversation_id,
+                request_id=request.request_id,
+                text="Unable to process the request right now. Please retry.",
+            )
+            for event in self.sessions.append_events(conversation_id=conversation_id, events=error_events):
+                yield _format_sse(event)
+        finally:
+            # Update context after stream ends (agent_session_id, etc.)
+            # This is best-effort — context is pulled from stored session state
+            pass
+
+    async def _stream_agent_events(
+        self,
+        *,
+        request: ChatStreamRequest,
+        conversation_id: str,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        assert request.message is not None
+        agent_request = AgentRequest(
+            conversation_id=conversation_id,
+            request_id=request.request_id,
+            user_id=request.user_id,
+            project_id=request.project_id,
+            workspace_id=request.workspace_id,
+            dataset_table=request.dataset_table,
+            message=request.message,
+            preferred_chart_type=request.preferred_chart_type,
+            role=request.role,
+            department=request.department,
+            clearance=request.clearance,
+        )
+        async for event_type, payload in self.agent_runtime.run_turn_stream(agent_request):
+            yield event_type, payload
+        # Update session context after streaming completes
+        runtime_session = self.agent_runtime.get_persisted_session(conversation_id)
+        if runtime_session is not None:
+            self.sessions.update_context(
+                conversation_id=conversation_id,
+                updates={
+                    "latest_spec": runtime_session.last_spec,
+                    "agent_session_id": runtime_session.agent_session_id,
+                    "agent_tool_trace": runtime_session.last_tool_trace,
+                },
+            )
 
     def clear_runtime_state(self) -> None:
         self.sessions.clear()

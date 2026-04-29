@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import anyio
 from claude_agent_sdk import (
@@ -414,6 +415,7 @@ class SDKRunContext:
     result_message: ResultMessage | None = None
     records_by_key: dict[str, SDKToolInvocationRecord] = field(default_factory=dict)
     records_by_tool_use_id: dict[str, SDKToolInvocationRecord] = field(default_factory=dict)
+    event_queue: asyncio.Queue | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +528,35 @@ class AgentRuntime:
     def run_turn(self, request: AgentRequest) -> AgentTurnResult:
         return anyio.run(self._run_turn_with_sdk, request)
 
-    async def _run_turn_with_sdk(self, request: AgentRequest) -> AgentTurnResult:
+    async def run_turn_stream(self, request: AgentRequest) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:  # type: ignore[override]
+        """Async generator that yields (event_type, payload) tuples in real-time."""
+        queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+        async def _run_and_signal() -> AgentTurnResult:
+            result = await self._run_turn_with_sdk(request, event_queue=queue)
+            queue.put_nowait(None)  # sentinel — signals end of stream
+            return result
+
+        task = asyncio.ensure_future(_run_and_signal())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _run_turn_with_sdk(
+        self,
+        request: AgentRequest,
+        event_queue: asyncio.Queue | None = None,
+    ) -> AgentTurnResult:
         started = time.perf_counter()
         session = self._load_session(request.conversation_id)
         guard_context = AgentGuardrailContext(
@@ -554,6 +584,7 @@ class AgentRuntime:
             session=session,
             events=events,
             tool_trace=tool_trace,
+            event_queue=event_queue,
         )
         self._emit_planning_event(
             run_context,
@@ -687,6 +718,7 @@ class AgentRuntime:
             request=request,
             session=session,
             events=events,
+            run_context=run_context,
             tool_trace=tool_trace,
             spec=spec,
             final_text=final_text,
@@ -1133,6 +1165,14 @@ class AgentRuntime:
                 return _parse_final_answer(message.result)
         return None
 
+    @staticmethod
+    def _append_event(run_context: SDKRunContext, event_type: str, payload: dict[str, Any]) -> None:
+        """Append event to the events list and optionally forward to the live-stream queue."""
+        item: tuple[str, dict[str, Any]] = (event_type, payload)
+        run_context.events.append(item)
+        if run_context.event_queue is not None:
+            run_context.event_queue.put_nowait(item)
+
     def _emit_planning_event(self, run_context: SDKRunContext, text: str) -> None:
         if run_context.planning_emitted:
             return
@@ -1147,8 +1187,8 @@ class AgentRuntime:
             **payload,
             "compatibility_mirror": True,
         }
-        run_context.events.append(("planning", payload))
-        run_context.events.append(("reasoning", compatibility))
+        self._append_event(run_context, "planning", payload)
+        self._append_event(run_context, "reasoning", compatibility)
         run_context.planning_emitted = True
 
     def _record_sdk_tool_use(
@@ -1178,7 +1218,7 @@ class AgentRuntime:
             "step_id": record.step_id,
             "started_at": record.started_at,
         }
-        run_context.events.append(("tool_use", tool_use_payload))
+        self._append_event(run_context, "tool_use", tool_use_payload)
         run_context.tool_trace.append({"event": "tool_use", **tool_use_payload})
         record.tool_use_emitted = True
         get_audit_logger().log(
@@ -1218,20 +1258,19 @@ class AgentRuntime:
             "started_at": record.started_at,
             "completed_at": time.time(),
         }
-        run_context.events.append(("tool_result", tool_result_payload))
-        run_context.events.append(
-            (
-                "tool",
-                {
-                    "conversation_id": run_context.request.conversation_id,
-                    "request_id": run_context.request.request_id,
-                    "tool_name": record.tool_name,
-                    "status": tool_result_payload["status"],
-                    "result": result_data,
-                    "error": record.error,
-                    "compatibility_mirror": True,
-                },
-            )
+        self._append_event(run_context, "tool_result", tool_result_payload)
+        self._append_event(
+            run_context,
+            "tool",
+            {
+                "conversation_id": run_context.request.conversation_id,
+                "request_id": run_context.request.request_id,
+                "tool_name": record.tool_name,
+                "status": tool_result_payload["status"],
+                "result": result_data,
+                "error": record.error,
+                "compatibility_mirror": True,
+            },
         )
         run_context.tool_trace.append({"event": "tool_result", **tool_result_payload})
         record.tool_result_emitted = True
@@ -1520,23 +1559,20 @@ class AgentRuntime:
         request: AgentRequest,
         session: AgentSessionState,
         events: list[tuple[str, dict[str, Any]]],
+        run_context: SDKRunContext,
         tool_trace: list[dict[str, Any]],
         spec: dict[str, Any],
         final_text: str,
         result_payload: dict[str, Any],
         started: float,
     ) -> AgentTurnResult:
-        events.append(
-            (
-                "spec",
-                {
-                    "conversation_id": request.conversation_id,
-                    "request_id": request.request_id,
-                    "agent_session_id": session.agent_session_id,
-                    "spec": spec,
-                },
-            )
-        )
+        spec_payload: dict[str, Any] = {
+            "conversation_id": request.conversation_id,
+            "request_id": request.request_id,
+            "agent_session_id": session.agent_session_id,
+            "spec": spec,
+        }
+        self._append_event(run_context, "spec", spec_payload)
         duration_ms = int((time.perf_counter() - started) * 1000)
         final_payload = {
             "conversation_id": request.conversation_id,
@@ -1547,7 +1583,7 @@ class AgentRuntime:
             "duration_ms": duration_ms,
             "tool_steps": len([item for item in tool_trace if item.get("event") == "tool_use"]),
         }
-        events.append(("final", final_payload))
+        self._append_event(run_context, "final", final_payload)
 
         session.turn_count += 1
         session.history.append({"role": "user", "content": request.message})

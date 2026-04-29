@@ -496,7 +496,7 @@ async def chat_stream(
     )
 
     service = get_chat_stream_service()
-    stream = service.stream(enforced_request, last_event_id_header=last_event_id)
+    stream = service.stream_async(enforced_request, last_event_id_header=last_event_id)
     return StreamingResponse(
         stream,
         media_type="text/event-stream",
