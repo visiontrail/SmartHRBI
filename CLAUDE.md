@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Cognitrix (识枢) is an AI-Native BI platform for any structured data domain. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through an OpenAI-compatible agent loop (DeepSeek by default; switchable to Claude via Anthropic SDK).
+Cognitrix is an AI-Native BI platform for any structured data domain. It combines a FastAPI backend, Next.js frontend, DuckDB session data layer, and local SQLite state store. Users upload Excel data and query it via conversational AI through an OpenAI-compatible agent loop (DeepSeek by default; switchable to Claude via Anthropic SDK).
 
 ## Commands
 

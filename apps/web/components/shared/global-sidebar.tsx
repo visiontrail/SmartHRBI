@@ -111,7 +111,6 @@ export function GlobalSidebar() {
           <BarChart3 className="w-5 h-5 text-terracotta" />
           <div className="flex flex-col leading-tight">
             <h1 className="font-serif text-feature text-near-black">Cognitrix</h1>
-            <span className="text-xs text-muted-foreground tracking-wide">识枢</span>
           </div>
         </div>
         <div className="flex items-center gap-1">

@@ -4,7 +4,7 @@ import { Providers } from "@/components/shared/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Cognitrix 识枢 — AI-Native Analytics",
+  title: "Cognitrix — AI-Native Analytics",
   description: "Conversational AI analytics for any structured dataset. Ask questions, generate charts, compose reports.",
 };
 

@@ -100,7 +100,6 @@ export default function LoginPage() {
       <div className="mb-10 text-center">
         <div className="inline-flex items-baseline gap-2 mb-3">
           <span className="font-serif text-[1.6rem] font-[500] leading-none text-near-black">Cognitrix</span>
-          <span className="text-stone-gray text-body-sm">识枢</span>
         </div>
         <h1 className="font-serif text-heading text-near-black">欢迎回来</h1>
         <p className="mt-2 text-olive-gray text-body">登录以继续使用 AI 数据分析</p>
@@ -133,7 +132,7 @@ export default function LoginPage() {
       {/* Divider decoration */}
       <div className="mt-16 flex items-center gap-3 text-stone-gray">
         <div className="h-px w-12 bg-border-warm" />
-        <span className="text-label tracking-widest uppercase">Cognitrix · 识枢</span>
+        <span className="text-label tracking-widest uppercase">Cognitrix</span>
         <div className="h-px w-12 bg-border-warm" />
       </div>
     </div>

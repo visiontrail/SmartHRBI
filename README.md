@@ -16,7 +16,7 @@ English | [简体中文](README_CN.md)
 
 ## What is Cognitrix?
 
-**Cognitrix (识枢)** is an AI-native BI platform for structured data analytics. It replaces the traditional BI stack — ETL pipelines, fixed dashboards, SQL expertise — with a conversational AI agent that understands business questions and generates charts on demand.
+**Cognitrix** is an AI-native BI platform for structured data analytics. It replaces the traditional BI stack — ETL pipelines, fixed dashboards, SQL expertise — with a conversational AI agent that understands business questions and generates charts on demand.
 
 Key differentiators versus traditional BI tools (Tableau, Power BI, Metabase):
 

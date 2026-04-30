@@ -1,4 +1,4 @@
-# Cognitrix 识枢 — AI-Native 智能商业智能平台
+# Cognitrix — AI-Native 智能商业智能平台
 
 [English](README.md) | 简体中文
 
@@ -16,7 +16,7 @@
 
 ## Cognitrix 是什么？
 
-**Cognitrix（识枢）** 是一个面向结构化数据分析的 AI-Native BI 平台。它用一个懂业务问题、能自动生成图表的对话式 AI Agent，替代传统 BI 工具链（ETL 管道 + 固定看板 + SQL 门槛）。
+**Cognitrix** 是一个面向结构化数据分析的 AI-Native BI 平台。它用一个懂业务问题、能自动生成图表的对话式 AI Agent，替代传统 BI 工具链（ETL 管道 + 固定看板 + SQL 门槛）。
 
 与传统 BI 工具（Tableau、Power BI、Metabase）的核心差异：
 
