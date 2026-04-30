@@ -26,7 +26,7 @@ services:
       AUTH_SECRET: docker-dev-secret
       LOG_LEVEL: INFO
       UPLOAD_DIR: /app/data/uploads
-      CORS_ALLOW_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
     ports:
       - "8000:8000"
     healthcheck:
@@ -41,10 +41,12 @@ services:
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
     container_name: cognitrix-web
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
       NEXTAUTH_URL: http://127.0.0.1:3000
       NEXTAUTH_SECRET: docker-dev-secret
       LOG_LEVEL: INFO
