@@ -1129,7 +1129,7 @@ async def list_workspace_published_pages(
 
 class UpdateVisibilityRequest(BaseModel):
     visibility_mode: str = Field(default="private")
-    visibility_user_ids: list[int] = Field(default_factory=list)
+    visibility_user_ids: list[str] = Field(default_factory=list)
 
     @field_validator("visibility_mode")
     @classmethod

@@ -157,6 +157,35 @@ def _row_to_record(row: sqlite3.Row) -> UserRecord:
     )
 
 
+def get_users_by_ids(
+    conn: sqlite3.Connection,
+    user_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not user_ids:
+        return []
+    placeholders = ",".join("?" for _ in user_ids)
+    rows = conn.execute(
+        f"""
+        SELECT u.id, u.email, COALESCE(u.email_lower, LOWER(u.email)) AS email_lower,
+               u.display_name, uj.label_zh AS job_label_zh
+        FROM users u
+        LEFT JOIN user_jobs uj ON uj.id = u.job_id
+        WHERE u.id IN ({placeholders}) AND u.status = 'active'
+        """,
+        user_ids,
+    ).fetchall()
+    by_id = {
+        str(row["id"]): {
+            "id": str(row["id"]),
+            "email_masked": _mask_email(str(row["email_lower"])),
+            "display_name": str(row["display_name"]),
+            "job_label": str(row["job_label_zh"] or ""),
+        }
+        for row in rows
+    }
+    return [by_id[uid] for uid in user_ids if uid in by_id]
+
+
 def _mask_email(email: str) -> str:
     if "@" not in email:
         return email

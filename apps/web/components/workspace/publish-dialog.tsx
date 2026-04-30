@@ -12,11 +12,14 @@ export type VisibilityMode = "private" | "registered" | "allowlist";
 export type PublishDialogResult = {
   visibility_mode: VisibilityMode;
   visibility_user_ids: string[];
+  selected_users: UserSearchResult[];
 };
 
 type Props = {
   onPublish: (result: PublishDialogResult) => void;
   isPublishing?: boolean;
+  initialVisibilityMode?: VisibilityMode;
+  initialSelectedUsers?: UserSearchResult[];
 };
 
 const VISIBILITY_OPTIONS: {
@@ -30,15 +33,17 @@ const VISIBILITY_OPTIONS: {
   { mode: "allowlist", icon: Users, labelKey: "visibility.allowlist", descKey: "visibility.allowlist.desc" },
 ];
 
-export function PublishPanel({ onPublish, isPublishing }: Props) {
+export function PublishPanel({ onPublish, isPublishing, initialVisibilityMode, initialSelectedUsers }: Props) {
   const { t } = useI18n();
-  const [visibilityMode, setVisibilityMode] = useState<VisibilityMode>("private");
-  const [selectedUsers, setSelectedUsers] = useState<UserSearchResult[]>([]);
+  const [visibilityMode, setVisibilityMode] = useState<VisibilityMode>(initialVisibilityMode ?? "private");
+  const [selectedUsers, setSelectedUsers] = useState<UserSearchResult[]>(initialSelectedUsers ?? []);
 
   function handlePublish() {
+    const users = visibilityMode === "allowlist" ? selectedUsers : [];
     onPublish({
       visibility_mode: visibilityMode,
-      visibility_user_ids: visibilityMode === "allowlist" ? selectedUsers.map((u) => u.id) : [],
+      visibility_user_ids: users.map((u) => u.id),
+      selected_users: users,
     });
   }
 

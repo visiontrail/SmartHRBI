@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from .auth import AuthIdentity, get_current_identity
 from .config import get_settings
@@ -81,4 +82,32 @@ async def search_users(
     finally:
         conn.close()
 
+    return {"count": len(results), "users": results}
+
+
+class BatchUsersRequest(BaseModel):
+    user_ids: list[str]
+
+
+@router.post("/users/batch")
+async def batch_users(
+    body: BatchUsersRequest,
+    identity: AuthIdentity = Depends(get_current_identity),
+) -> dict[str, object]:
+    if not body.user_ids:
+        return {"count": 0, "users": []}
+    if len(body.user_ids) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "too_many_ids", "message": "At most 100 user_ids per request"},
+        )
+
+    from .users import get_users_by_ids
+
+    cleaned_ids = [uid.strip() for uid in body.user_ids if uid.strip()]
+    conn = _get_db_conn()
+    try:
+        results = get_users_by_ids(conn, cleaned_ids)
+    finally:
+        conn.close()
     return {"count": len(results), "users": results}

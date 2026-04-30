@@ -30,6 +30,7 @@ export type PublishHistoryItem = {
   published_by: string;
   visibility_mode?: VisibilityMode;
   visibility_user_count?: number | null;
+  visibility_user_ids?: string[];
 };
 
 export type VisibilityPayload = {
@@ -127,4 +128,25 @@ export async function fetchPublishHistory(workspaceId: string): Promise<PublishH
   }
   const data = payload as { published_pages?: PublishHistoryItem[] };
   return Array.isArray(data.published_pages) ? data.published_pages : [];
+}
+
+export type UserSummary = {
+  id: string;
+  email_masked: string;
+  display_name: string;
+  job_label: string;
+};
+
+export async function fetchUsersByIds(userIds: string[]): Promise<UserSummary[]> {
+  if (userIds.length === 0) return [];
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const response = await fetch(`${API_BASE_URL}/users/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ user_ids: userIds }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) return [];
+  const data = payload as { users?: UserSummary[] };
+  return Array.isArray(data.users) ? data.users : [];
 }

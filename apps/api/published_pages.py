@@ -60,7 +60,7 @@ class PublishWorkspaceRequest(BaseModel):
     sidebar: list[dict[str, Any]] = Field(default_factory=list)
     charts: list[PublishedChartSnapshot] = Field(default_factory=list)
     visibility_mode: str = Field(default="private")
-    visibility_user_ids: list[int] = Field(default_factory=list)
+    visibility_user_ids: list[str] = Field(default_factory=list)
 
     @field_validator("visibility_mode")
     @classmethod
@@ -78,7 +78,7 @@ class PublishedPage(BaseModel):
     published_by: str
     manifest_path: str
     visibility_mode: str = "private"
-    visibility_user_ids: list[int] = Field(default_factory=list)
+    visibility_user_ids: list[str] = Field(default_factory=list)
 
     def to_history_item(self) -> dict[str, Any]:
         user_count = len(self.visibility_user_ids) if self.visibility_mode == "allowlist" else None
@@ -90,6 +90,7 @@ class PublishedPage(BaseModel):
             "manifest_path": self.manifest_path,
             "visibility_mode": self.visibility_mode,
             "visibility_user_count": user_count,
+            "visibility_user_ids": self.visibility_user_ids if self.visibility_mode == "allowlist" else [],
         }
 
     def is_visible_to(self, *, user_id: str, workspace_member_roles: set[str]) -> bool:
@@ -100,7 +101,7 @@ class PublishedPage(BaseModel):
         if self.visibility_mode == "allowlist":
             if bool(workspace_member_roles & {"owner", "editor"}):
                 return True
-            if user_id and any(str(uid) == user_id for uid in self.visibility_user_ids):
+            if user_id and any(uid == user_id for uid in self.visibility_user_ids):
                 return True
             return False
         return False
@@ -228,7 +229,7 @@ class PublishedPageStore:
         manifest_path: Path,
         published_at: str | None = None,
         visibility_mode: str = "private",
-        visibility_user_ids: list[int] | None = None,
+        visibility_user_ids: list[str] | None = None,
     ) -> PublishedPage:
         normalized_workspace_id = workspace_id.strip()
         normalized_publisher = published_by.strip()
@@ -366,7 +367,7 @@ class PublishedPageStore:
         *,
         page_id: str,
         visibility_mode: str,
-        visibility_user_ids: list[int],
+        visibility_user_ids: list[str],
     ) -> PublishedPage:
         vis_user_ids_json = json.dumps(visibility_user_ids)
         with self._lock, self._connect() as conn:
@@ -418,7 +419,7 @@ class PublishedPageStore:
             published_by=str(row["published_by"]),
             manifest_path=str(row["manifest_path"]),
             visibility_mode=str(row["visibility_mode"]) if row["visibility_mode"] else "private",
-            visibility_user_ids=[int(x) for x in vis_ids if x is not None],
+            visibility_user_ids=[str(x) for x in vis_ids if x is not None],
         )
 
 

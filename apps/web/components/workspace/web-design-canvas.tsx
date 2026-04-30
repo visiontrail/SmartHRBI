@@ -21,7 +21,8 @@ import { ChartPreview } from "@/components/charts/chart-preview";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n/context";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
-import { publishWorkspace, fetchPublishHistory, type PublishHistoryItem, type VisibilityPayload } from "@/lib/workspace/publish";
+import { publishWorkspace, fetchPublishHistory, fetchUsersByIds, type PublishHistoryItem, type VisibilityMode, type VisibilityPayload } from "@/lib/workspace/publish";
+import type { UserSearchResult } from "@/components/sharing/user-search-input";
 import { PublishPanel, type PublishDialogResult } from "@/components/workspace/publish-dialog";
 import { ShareDialog } from "@/components/sharing/share-dialog";
 import { useSession } from "@/lib/auth/use-session";
@@ -50,12 +51,36 @@ export function WebDesignCanvas() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishPanelOpen, setPublishPanelOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [lastPublishedVisibilityMode, setLastPublishedVisibilityMode] = useState<VisibilityMode>("private");
+  const [lastPublishedUsers, setLastPublishedUsers] = useState<UserSearchResult[]>([]);
   const publishPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    fetchPublishHistory(activeWorkspaceId)
+      .then(async (pages) => {
+        if (pages.length === 0) return;
+        const latest = pages[0];
+        if (latest.visibility_mode) {
+          setLastPublishedVisibilityMode(latest.visibility_mode);
+        }
+        if (latest.visibility_mode === "allowlist" && latest.visibility_user_ids?.length) {
+          const users = await fetchUsersByIds(latest.visibility_user_ids);
+          setLastPublishedUsers(users);
+        }
+      })
+      .catch(() => {});
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (!publishPanelOpen) return;
     function handleClickOutside(e: MouseEvent) {
-      if (publishPanelRef.current && !publishPanelRef.current.contains(e.target as Node)) {
+      if (!publishPanelRef.current) return;
+      // Use composedPath() instead of e.target because React 18 flushes DOM
+      // updates synchronously before the event bubbles to document, which
+      // detaches the clicked element and makes contains() return false.
+      const path = e.composedPath();
+      if (!path.includes(publishPanelRef.current)) {
         setPublishPanelOpen(false);
       }
     }
@@ -93,6 +118,8 @@ export function WebDesignCanvas() {
         visibility_user_ids: dialogResult.visibility_user_ids,
       };
       const result = await publishWorkspace(activeWorkspaceId, layout, nodes, visibility);
+      setLastPublishedVisibilityMode(dialogResult.visibility_mode);
+      setLastPublishedUsers(dialogResult.visibility_mode === "allowlist" ? dialogResult.selected_users : []);
       setPublishPanelOpen(false);
       toast.success(t("workspace.webDesign.toast.published"), {
         description: t("workspace.webDesign.toast.versionReady", { version: result.version }),
@@ -216,6 +243,8 @@ export function WebDesignCanvas() {
                 <PublishPanel
                   onPublish={handlePublishConfirm}
                   isPublishing={isPublishing}
+                  initialVisibilityMode={lastPublishedVisibilityMode}
+                  initialSelectedUsers={lastPublishedUsers}
                 />
               )}
             </div>
