@@ -4,7 +4,6 @@
 #   ./scripts/docker_publish.sh                        # uses defaults
 #   ./scripts/docker_publish.sh colingg 1.2.0          # custom user + version
 #   DOCKER_USER=colingg TAG=1.2.0 ./scripts/docker_publish.sh
-#   NEXT_PUBLIC_API_BASE_URL=http://your-server:8000 ./scripts/docker_publish.sh colingg 1.2.0
 
 set -euo pipefail
 
@@ -15,7 +14,6 @@ cd "$ROOT_DIR"
 DOCKER_USER="${1:-${DOCKER_USER:-colingg}}"
 TAG="${2:-${TAG:-latest}}"
 PLATFORM="${PLATFORM:-linux/amd64}"
-NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}"
 
 API_IMAGE="${DOCKER_USER}/cognitrix-api:${TAG}"
 WEB_IMAGE="${DOCKER_USER}/cognitrix-web:${TAG}"
@@ -24,7 +22,6 @@ WEB_IMAGE="${DOCKER_USER}/cognitrix-web:${TAG}"
 echo "[publish] platform=${PLATFORM}  tag=${TAG}"
 echo "[publish] api → ${API_IMAGE}"
 echo "[publish] web → ${WEB_IMAGE}"
-echo "[publish] web NEXT_PUBLIC_API_BASE_URL → ${NEXT_PUBLIC_API_BASE_URL}"
 echo ""
 
 # Verify docker is available and reachable.
@@ -147,7 +144,6 @@ echo "[publish] building Web image..."
 docker buildx build \
   --platform "${PLATFORM}" \
   --file apps/web/Dockerfile \
-  --build-arg "NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}" \
   --tag "${WEB_IMAGE}" \
   --load \
   .

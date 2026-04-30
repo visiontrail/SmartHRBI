@@ -1,8 +1,8 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
+import { API_BASE_URL } from "@/lib/api-base";
 import { extractChartRows } from "@/lib/workspace/chart-rows";
 import type { ChartNodeData, WebDesignLayout, WorkspaceNode } from "@/types/workspace";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const configuredClearance = Number(process.env.NEXT_PUBLIC_DEFAULT_CLEARANCE ?? 1);
 const DEFAULT_CLEARANCE = Number.isFinite(configuredClearance)
   ? Math.max(0, Math.trunc(configuredClearance))

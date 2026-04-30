@@ -4,12 +4,11 @@ import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { API_BASE_URL } from "@/lib/api-base";
 import { apiRegister, AuthError } from "@/lib/auth/auth-client";
 import { setInMemoryToken, setStoredAppMode } from "@/lib/auth/session";
 
 type JobOption = { id: number; code: string; label_zh: string; label_en: string };
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 function RegisterForm() {
   const router = useRouter();

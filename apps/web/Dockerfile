@@ -4,8 +4,6 @@ COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci
 
 FROM deps AS builder
-ARG NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 COPY apps/web ./
 RUN npm run build \
     && npm prune --omit=dev
@@ -13,11 +11,10 @@ RUN npm run build \
 FROM node:20-alpine AS runner
 WORKDIR /app/apps/web
 
-ARG NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
-    NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+    API_BASE_URL=http://api:8000
 
 RUN apk add --no-cache curl
 

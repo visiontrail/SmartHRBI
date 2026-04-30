@@ -1,6 +1,7 @@
 import { ShareView } from "@/components/workbench/share-view";
+import { API_BASE_URL } from "@/lib/api-base";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const apiBaseUrl = API_BASE_URL;
 
 type SharePageProps = {
   params: Promise<{ viewId: string }>;

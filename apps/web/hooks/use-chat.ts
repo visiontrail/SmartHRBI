@@ -5,6 +5,7 @@ import { useChatStore, type PendingIngestionApproval } from "@/stores/chat-store
 import { useAssetStore } from "@/stores/asset-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+import { API_BASE_URL } from "@/lib/api-base";
 import { parseSSEStream } from "@/lib/chat/sse";
 import {
   buildFallbackSessionTitle,
@@ -235,7 +236,6 @@ export function useSendMessage() {
   });
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const DEFAULT_DATASET_TABLE = process.env.NEXT_PUBLIC_DEFAULT_DATASET_TABLE ?? "employees_wide";
 const configuredClearance = Number(process.env.NEXT_PUBLIC_DEFAULT_CLEARANCE ?? 1);
 const DEFAULT_CLEARANCE = Number.isFinite(configuredClearance)

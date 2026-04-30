@@ -1,6 +1,6 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
+import { API_BASE_URL } from "@/lib/api-base";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const DEFAULT_AUTH_CONTEXT = {
   userId: process.env.NEXT_PUBLIC_DEFAULT_USER_ID ?? "demo-user",
   projectId: process.env.NEXT_PUBLIC_DEFAULT_PROJECT_ID ?? "demo-project",

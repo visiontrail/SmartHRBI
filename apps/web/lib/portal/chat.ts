@@ -1,11 +1,11 @@
+import { API_BASE_URL } from "@/lib/api-base";
+
 export type PortalChatEventType = "planning" | "tool_use" | "tool_result" | "final" | "error";
 
 export type PortalChatEvent = {
   type: PortalChatEventType;
   payload: Record<string, unknown>;
 };
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export async function sendPortalChatMessage(
   pageId: string,
