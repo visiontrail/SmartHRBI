@@ -5,15 +5,30 @@ import { useChatStore } from "@/stores/chat-store";
 import { MessageItem } from "./message-item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUIStore } from "@/stores/ui-store";
-import { Loader2 } from "lucide-react";
+import { Brain } from "lucide-react";
 import { useI18n } from "@/lib/i18n/context";
 
 const EMPTY_MESSAGES: ReturnType<typeof useChatStore.getState>["messagesBySession"][string] = [];
+
+function ThinkingDots() {
+  return (
+    <span className="flex items-center gap-0.5">
+      <span className="w-1 h-1 rounded-full bg-stone-gray animate-bounce" style={{ animationDelay: "0ms" }} />
+      <span className="w-1 h-1 rounded-full bg-stone-gray animate-bounce" style={{ animationDelay: "160ms" }} />
+      <span className="w-1 h-1 rounded-full bg-stone-gray animate-bounce" style={{ animationDelay: "320ms" }} />
+    </span>
+  );
+}
 
 export function MessageList({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   const messages = useChatStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
   const isSending = useUIStore((s) => s.isSending);
+  // Hide the fallback indicator once AgentTrace is live in the placeholder message
+  const hasLiveTrace = useChatStore((s) => {
+    const msgs = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
+    return msgs.some((m) => s.traceByMessageId[m.id]?.state === "live");
+  });
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,15 +50,13 @@ export function MessageList({ sessionId }: { sessionId: string }) {
           ))
         )}
 
-        {isSending && (
-          <div className="flex items-center gap-3 px-4 py-4">
-            <div className="w-8 h-8 rounded-full bg-warm-sand flex items-center justify-center">
-              <Loader2 className="w-4 h-4 text-terracotta animate-spin" />
+        {isSending && !hasLiveTrace && (
+          <div className="flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded-full bg-warm-sand flex items-center justify-center shrink-0">
+              <Brain className="w-4 h-4 text-terracotta" />
             </div>
-            <div className="space-y-2">
-              <div className="h-3 w-48 rounded bg-warm-sand animate-pulse" />
-              <div className="h-3 w-32 rounded bg-warm-sand animate-pulse" />
-            </div>
+            <span className="text-[11px] text-stone-gray select-none">思考中</span>
+            <ThinkingDots />
           </div>
         )}
 
