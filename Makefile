@@ -51,5 +51,8 @@ docker-up: ## Start docker compose stack
 docker-down: ## Stop docker compose stack
 	@bash scripts/docker_down.sh
 
+docker-publish: ## Build and push api+web images to Docker Hub (DOCKER_USER / TAG env vars)
+	@bash scripts/docker_publish.sh
+
 reset-local-data: ## Clear local runtime databases, uploads, logs, and test artifacts
 	@bash scripts/reset_local_data.sh
