@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, AsyncGenerator
 
 import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from ..auth import AuthIdentity, require_permission
 from ..audit import get_audit_logger
@@ -20,6 +22,17 @@ from .uploads import IngestionUploadError, get_ingestion_upload_service
 
 router = APIRouter(prefix="/ingestion", tags=["agentic-ingestion"])
 runtime = WriteIngestionAgentRuntime()
+
+
+def _format_ingestion_sse(event_type: str, payload: dict[str, Any]) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+async def _stream_ingestion_events(
+    gen: AsyncGenerator[tuple[str, dict[str, Any]], None],
+) -> AsyncGenerator[str, None]:
+    async for event_type, payload in gen:
+        yield _format_ingestion_sse(event_type, payload)
 
 
 @router.get("/healthz")
@@ -46,6 +59,29 @@ async def create_ingestion_upload(
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
 
+@router.post("/plan/stream")
+async def create_ingestion_plan_stream(
+    request: IngestionPlanRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> StreamingResponse:
+    _assert_workspace_role(workspace_id=request.workspace_id, identity=identity, minimum_role="editor")
+    gen = runtime.build_plan_stream_async(
+        workspace_id=request.workspace_id,
+        job_id=request.job_id,
+        requested_by=identity.user_id,
+        conversation_id=request.conversation_id,
+        message=request.message,
+    )
+    return StreamingResponse(
+        _stream_ingestion_events(gen),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/plan")
 async def create_ingestion_plan(
     request: IngestionPlanRequest,
@@ -69,6 +105,30 @@ async def create_ingestion_plan(
         )
     except IngestionPlanningError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+
+
+@router.post("/setup/confirm/stream")
+async def confirm_ingestion_setup_stream(
+    request: IngestionSetupConfirmRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> StreamingResponse:
+    _assert_workspace_role(workspace_id=request.workspace_id, identity=identity, minimum_role="editor")
+    gen = runtime.confirm_setup_stream_async(
+        workspace_id=request.workspace_id,
+        job_id=request.job_id,
+        requested_by=identity.user_id,
+        setup_seed=request.setup,
+        conversation_id=request.conversation_id,
+        message=request.message,
+    )
+    return StreamingResponse(
+        _stream_ingestion_events(gen),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/setup/confirm")
@@ -144,6 +204,28 @@ async def approve_ingestion_proposal(
         },
     )
     return payload
+
+
+@router.post("/execute/stream")
+async def execute_ingestion_plan_stream(
+    request: IngestionExecuteRequest,
+    identity: AuthIdentity = Depends(require_permission("datasets:upload")),
+) -> StreamingResponse:
+    _assert_workspace_role(workspace_id=request.workspace_id, identity=identity, minimum_role="editor")
+    gen = runtime.execute_plan_stream_async(
+        workspace_id=request.workspace_id,
+        job_id=request.job_id,
+        proposal_id=request.proposal_id,
+        executed_by=identity.user_id,
+    )
+    return StreamingResponse(
+        _stream_ingestion_events(gen),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/execute")

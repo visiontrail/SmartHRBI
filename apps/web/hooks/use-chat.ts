@@ -18,11 +18,13 @@ import { getActiveAuthContext, getAuthorizationHeader } from "@/lib/auth/session
 import { useI18n } from "@/lib/i18n/context";
 import {
   approveIngestionProposal,
-  confirmIngestionSetup,
-  createIngestionPlan,
   createIngestionUpload,
-  executeIngestionProposal,
+  mapPlanLikePayload,
+  streamIngestionExecute,
+  streamIngestionPlan,
+  streamIngestionSetupConfirm,
 } from "@/lib/ingestion/api";
+import type { IngestionSSEEvent } from "@/lib/ingestion/api";
 import type { QueryChartType } from "@/lib/charts/chart-type-options";
 import { generateId, isRecord } from "@/lib/utils";
 import type { ChartAsset, ChartSpec, ChartType, KnownChartType } from "@/types/chart";
@@ -517,6 +519,66 @@ function buildMessageWithChartPreference({
   ].join("\n");
 }
 
+async function consumeIngestionStreamIntoTrace(
+  stream: AsyncGenerator<IngestionSSEEvent>,
+  messageId: string,
+): Promise<{ decisionPayload: Record<string, unknown> | null; hasError: boolean }> {
+  const store = useChatStore.getState();
+  let planningCount = 0;
+  let toolCount = 0;
+  let decisionPayload: Record<string, unknown> | null = null;
+  let hasError = false;
+
+  for await (const event of stream) {
+    const payload = isRecord(event.data) ? event.data : {};
+
+    if (event.event === "planning") {
+      const text = String(payload.text ?? "");
+      if (text) {
+        store.pushTraceStep(messageId, {
+          kind: "planning",
+          id: `planning-${planningCount++}`,
+          text,
+          startedAt: Date.now(),
+        });
+      }
+    } else if (event.event === "tool_use") {
+      const stepId = String(payload.step_id ?? `tool-${toolCount++}`);
+      const startedAt = typeof payload.started_at === "number" ? (payload.started_at as number) * 1000 : Date.now();
+      store.pushTraceStep(messageId, {
+        kind: "tool",
+        id: stepId,
+        tool: String(payload.tool_name ?? ""),
+        args: isRecord(payload.arguments) ? payload.arguments : {},
+        startedAt,
+        status: "running",
+      });
+    } else if (event.event === "tool_result") {
+      const stepId = String(payload.step_id ?? "");
+      const completedAt = typeof payload.completed_at === "number" ? (payload.completed_at as number) * 1000 : Date.now();
+      const startedAt = typeof payload.started_at === "number" ? (payload.started_at as number) * 1000 : undefined;
+      const status = payload.status === "error" ? "error" : "ok";
+      const result = payload.result;
+      const patch: Record<string, unknown> = { completedAt, status, result, resultPreview: computeResultPreview(result) };
+      if (startedAt !== undefined) patch.startedAt = startedAt;
+      store.patchTraceStep(messageId, stepId, patch as Parameters<typeof store.patchTraceStep>[2]);
+    } else if (event.event === "decision") {
+      decisionPayload = payload;
+    } else if (event.event === "error") {
+      hasError = true;
+      store.pushTraceStep(messageId, {
+        kind: "error",
+        id: `error-${Date.now()}`,
+        message: String(payload.message ?? ""),
+        code: payload.code ? String(payload.code) : undefined,
+        at: Date.now(),
+      });
+    }
+  }
+
+  return { decisionPayload, hasError };
+}
+
 async function runIngestionConversationResponse({
   sessionId,
   workspaceId,
@@ -530,56 +592,108 @@ async function runIngestionConversationResponse({
   attachment: File;
   t: TranslateFn;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset; preAppended: boolean }> {
-  const upload = await createIngestionUpload({
-    workspaceId,
-    file: attachment,
-  });
-  let plan = await createIngestionPlan({
-    workspaceId,
-    jobId: upload.jobId,
-    conversationId: sessionId,
-    message: content,
-  });
-  let autoSetupApplied = false;
-  let setupTableName: string | null = null;
+  const messageId = `msg-${generateId()}`;
+  const traceStartedAt = Date.now();
+  const store = useChatStore.getState();
+  store.startTrace(messageId, traceStartedAt);
 
-  if (plan.status === "awaiting_catalog_setup") {
-    autoSetupApplied = true;
-    setupTableName = plan.suggestedCatalogSeed.tableName;
-    plan = await confirmIngestionSetup({
-      workspaceId,
-      jobId: upload.jobId,
-      conversationId: sessionId,
-      message: content,
-      setup: plan.suggestedCatalogSeed,
-    });
-  }
-
-  let approvalResult: IngestionApprovalResult | null = null;
-  let executionResult: IngestionExecuteResult | null = null;
-  if (plan.status === "awaiting_user_approval") {
-    useChatStore.getState().setPendingIngestionApproval(sessionId, {
-      upload,
-      plan,
-    });
-  }
-
-  const assistantMessage: ChatMessage = {
-    id: `msg-${generateId()}`,
+  const placeholder: ChatMessage = {
+    id: messageId,
     sessionId,
     role: "assistant",
-    content: buildIngestionSummaryMessage({
-      upload,
-      plan,
-      autoSetupApplied,
-      setupTableName,
-      approvalResult,
-      executionResult,
-      t,
-    }),
+    content: "",
     timestamp: new Date().toISOString(),
   };
-  return { assistantMessage, chartAsset: undefined as ChartAsset | undefined, preAppended: false as const };
+  store.appendMessage(sessionId, placeholder);
+
+  const removePlaceholder = () => {
+    useChatStore.setState((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: (s.messagesBySession[sessionId] ?? []).filter((m) => m.id !== messageId),
+      },
+    }));
+  };
+
+  let upload: IngestionUploadResult;
+  try {
+    upload = await createIngestionUpload({ workspaceId, file: attachment });
+  } catch (err) {
+    store.endTrace(messageId, "error");
+    removePlaceholder();
+    throw err;
+  }
+
+  let traceHasError = false;
+
+  try {
+    const { decisionPayload: planPayload, hasError: planHasError } = await consumeIngestionStreamIntoTrace(
+      streamIngestionPlan({ workspaceId, jobId: upload.jobId, conversationId: sessionId, message: content }),
+      messageId,
+    );
+    traceHasError = planHasError;
+
+    let plan = planPayload ? mapPlanLikePayload(planPayload) : null;
+    let autoSetupApplied = false;
+    let setupTableName: string | null = null;
+
+    if (plan?.status === "awaiting_catalog_setup") {
+      autoSetupApplied = true;
+      setupTableName = plan.suggestedCatalogSeed.tableName;
+
+      const { decisionPayload: setupPayload, hasError: setupHasError } = await consumeIngestionStreamIntoTrace(
+        streamIngestionSetupConfirm({
+          workspaceId,
+          jobId: upload.jobId,
+          conversationId: sessionId,
+          message: content,
+          setup: plan.suggestedCatalogSeed,
+        }),
+        messageId,
+      );
+      traceHasError = traceHasError || setupHasError;
+      if (setupPayload) {
+        plan = mapPlanLikePayload(setupPayload);
+      }
+    }
+
+    store.endTrace(messageId, traceHasError ? "error" : "final");
+
+    const trace = useChatStore.getState().traceByMessageId[messageId];
+    const traceSteps = trace?.steps ?? [];
+    const toolCallCount = traceSteps.filter((s) => s.kind === "tool").length;
+    const durationMs = trace ? (trace.endedAt ?? Date.now()) - trace.startedAt : 0;
+
+    if (plan?.status === "awaiting_user_approval") {
+      useChatStore.getState().setPendingIngestionApproval(sessionId, { upload, plan });
+    }
+
+    const effectivePlan: IngestionPlanResult = plan ?? mapPlanLikePayload(null);
+    const assistantMessage: ChatMessage = {
+      id: messageId,
+      sessionId,
+      role: "assistant",
+      content: buildIngestionSummaryMessage({
+        upload,
+        plan: effectivePlan,
+        autoSetupApplied,
+        setupTableName,
+        approvalResult: null,
+        executionResult: null,
+        t,
+      }),
+      timestamp: new Date().toISOString(),
+      traceSummary:
+        traceSteps.length > 0
+          ? { stepCount: toolCallCount, durationMs, status: traceHasError ? "error" : "ok" }
+          : undefined,
+    };
+    return { assistantMessage, chartAsset: undefined, preAppended: true };
+  } catch (err) {
+    store.endTrace(messageId, "error");
+    removePlaceholder();
+    throw err;
+  }
 }
 
 async function runIngestionApprovalResponse({
@@ -593,46 +707,121 @@ async function runIngestionApprovalResponse({
   approvedAction: IngestionProposalAction;
   t: TranslateFn;
 }): Promise<{ assistantMessage: ChatMessage; chartAsset?: ChartAsset; preAppended: boolean }> {
-  const plan = pending.plan;
-  const approvalResult = await approveIngestionProposal({
-    workspaceId: plan.workspaceId,
-    jobId: plan.jobId,
-    proposalId: plan.proposalId,
-    approvedAction,
-    userOverrides:
-      approvedAction === "time_partitioned_new_table"
-        ? {
-            timeGrain: plan.proposal.timeGrain,
-          }
-        : undefined,
-  });
-  useChatStore.getState().clearPendingIngestionApproval(sessionId);
+  const messageId = `msg-${generateId()}`;
+  const traceStartedAt = Date.now();
+  const store = useChatStore.getState();
+  store.startTrace(messageId, traceStartedAt);
 
-  let executionResult: IngestionExecuteResult | null = null;
-  if (approvalResult.status === "approved") {
-    executionResult = await executeIngestionProposal({
+  const placeholder: ChatMessage = {
+    id: messageId,
+    sessionId,
+    role: "assistant",
+    content: "",
+    timestamp: new Date().toISOString(),
+  };
+  store.appendMessage(sessionId, placeholder);
+
+  const removePlaceholder = () => {
+    useChatStore.setState((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: (s.messagesBySession[sessionId] ?? []).filter((m) => m.id !== messageId),
+      },
+    }));
+  };
+
+  const plan = pending.plan;
+  let approvalResult: IngestionApprovalResult;
+  try {
+    approvalResult = await approveIngestionProposal({
       workspaceId: plan.workspaceId,
       jobId: plan.jobId,
       proposalId: plan.proposalId,
+      approvedAction,
+      userOverrides:
+        approvedAction === "time_partitioned_new_table"
+          ? { timeGrain: plan.proposal.timeGrain }
+          : undefined,
     });
+  } catch (err) {
+    store.endTrace(messageId, "error");
+    removePlaceholder();
+    throw err;
   }
 
-  const assistantMessage: ChatMessage = {
-    id: `msg-${generateId()}`,
-    sessionId,
-    role: "assistant",
-    content: buildIngestionSummaryMessage({
-      upload: pending.upload,
-      plan,
-      autoSetupApplied: false,
-      setupTableName: null,
-      approvalResult,
-      executionResult,
-      t,
-    }),
-    timestamp: new Date().toISOString(),
-  };
-  return { assistantMessage, chartAsset: undefined as ChartAsset | undefined, preAppended: false as const };
+  useChatStore.getState().clearPendingIngestionApproval(sessionId);
+
+  let executionResult: IngestionExecuteResult | null = null;
+  let traceHasError = false;
+
+  try {
+    if (approvalResult.status === "approved") {
+      const { decisionPayload, hasError } = await consumeIngestionStreamIntoTrace(
+        streamIngestionExecute({
+          workspaceId: plan.workspaceId,
+          jobId: plan.jobId,
+          proposalId: plan.proposalId,
+        }),
+        messageId,
+      );
+      traceHasError = hasError;
+      if (decisionPayload) {
+        const receipt = isRecord(decisionPayload.receipt) ? decisionPayload.receipt : {};
+        executionResult = {
+          status: "succeeded",
+          workspaceId: String(decisionPayload.workspace_id ?? ""),
+          jobId: String(decisionPayload.job_id ?? ""),
+          proposalId: String(decisionPayload.proposal_id ?? ""),
+          executionId: String(decisionPayload.execution_id ?? ""),
+          receipt: {
+            success: Boolean(receipt.success),
+            workspaceId: String(receipt.workspace_id ?? ""),
+            jobId: String(receipt.job_id ?? ""),
+            targetTable: String(receipt.target_table ?? ""),
+            executionMode: String(receipt.execution_mode ?? "update_existing") as import("@/types/ingestion").IngestionProposalAction,
+            insertedRows: Number(receipt.inserted_rows ?? 0),
+            updatedRows: Number(receipt.updated_rows ?? 0),
+            affectedRows: Number(receipt.affected_rows ?? 0),
+            rowsAfter: Number(receipt.rows_after ?? 0),
+            duckdbPath: String(receipt.duckdb_path ?? ""),
+            finishedAt: String(receipt.finished_at ?? ""),
+          },
+        };
+      }
+    }
+
+    store.endTrace(messageId, traceHasError ? "error" : "final");
+
+    const trace = useChatStore.getState().traceByMessageId[messageId];
+    const traceSteps = trace?.steps ?? [];
+    const toolCallCount = traceSteps.filter((s) => s.kind === "tool").length;
+    const durationMs = trace ? (trace.endedAt ?? Date.now()) - trace.startedAt : 0;
+
+    const assistantMessage: ChatMessage = {
+      id: messageId,
+      sessionId,
+      role: "assistant",
+      content: buildIngestionSummaryMessage({
+        upload: pending.upload,
+        plan,
+        autoSetupApplied: false,
+        setupTableName: null,
+        approvalResult,
+        executionResult,
+        t,
+      }),
+      timestamp: new Date().toISOString(),
+      traceSummary:
+        traceSteps.length > 0
+          ? { stepCount: toolCallCount, durationMs, status: traceHasError ? "error" : "ok" }
+          : undefined,
+    };
+    return { assistantMessage, chartAsset: undefined, preAppended: true };
+  } catch (err) {
+    store.endTrace(messageId, "error");
+    removePlaceholder();
+    throw err;
+  }
 }
 
 function createLocalSession(title?: string): ChatSession {

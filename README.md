@@ -249,10 +249,12 @@ Excel uploads always use Agentic ingestion. `AGENTIC_INGESTION_ENABLED` is kept 
 Key frontend variables:
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+API_BASE_URL=http://127.0.0.1:8000
 NEXTAUTH_URL=http://127.0.0.1:3000
 NEXTAUTH_SECRET=replace-with-a-strong-secret
 ```
+
+The browser client calls the same-origin proxy path `/api/backend/*`. `API_BASE_URL` is read by the Next.js server at runtime and controls where that proxy forwards requests. This keeps public web images portable: do not bake deployment IPs into `NEXT_PUBLIC_*` variables.
 
 Optional context overrides:
 
@@ -377,6 +379,24 @@ docker compose up -d --build
 docker compose ps
 ```
 
+Runtime API routing:
+
+- Browser requests go to the web origin, for example `http://localhost:3000/api/backend/jobs`.
+- The web container forwards those requests to `API_BASE_URL`.
+- In Docker Compose, set `API_BASE_URL=http://api:8000` for the web service. This is the default in the repository Compose files.
+
+Example `.env` for a host reachable at `172.16.5.38`:
+
+```env
+TAG=1.0.1
+API_BASE_URL=http://api:8000
+APP_URL=http://172.16.5.38:3000
+NEXTAUTH_URL=http://172.16.5.38:3000
+CORS_ALLOW_ORIGINS=http://172.16.5.38:3000,http://localhost:3000
+```
+
+`CORS_ALLOW_ORIGINS` only needs the public web origin if you call the API directly from the browser. The built-in web UI normally avoids CORS by using the same-origin proxy.
+
 Stop:
 
 ```bash
@@ -404,7 +424,6 @@ Uploads and state data are stored in the Docker named volume `cognitrix_upload_d
 
 Upload these files via the ingestion UI or `POST /ingestion/uploads` to create a working DuckDB session:
 
-- `sample_data/galaxyspace-hr-sample.xlsx`
 - `sample_data/hr_workforce_upload_sample.xlsx`
 - `sample_data/hr_workforce_upload_sample_zh.xlsx`
 

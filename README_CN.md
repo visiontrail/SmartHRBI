@@ -247,10 +247,12 @@ CORS_ALLOW_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 前端关键变量：
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+API_BASE_URL=http://127.0.0.1:8000
 NEXTAUTH_URL=http://127.0.0.1:3000
 NEXTAUTH_SECRET=replace-with-a-strong-secret
 ```
+
+浏览器端会请求同源代理路径 `/api/backend/*`。`API_BASE_URL` 由 Next.js 服务端在运行时读取，用来决定代理转发到哪个 API 地址。这样公共 web 镜像不会绑定部署机器 IP，也不需要把地址写进 `NEXT_PUBLIC_*` 构建变量。
 
 前端对话默认上下文可通过这些可选变量调整：
 
@@ -366,6 +368,24 @@ docker compose up -d --build
 docker compose ps
 ```
 
+运行时 API 路由：
+
+- 浏览器请求 web 同源地址，例如 `http://localhost:3000/api/backend/jobs`。
+- web 容器再把请求转发到 `API_BASE_URL`。
+- Docker Compose 中 web 服务应设置 `API_BASE_URL=http://api:8000`，仓库内 Compose 文件已默认配置。
+
+假设部署主机为 `172.16.5.38`，`.env` 示例：
+
+```env
+TAG=1.0.1
+API_BASE_URL=http://api:8000
+APP_URL=http://172.16.5.38:3000
+NEXTAUTH_URL=http://172.16.5.38:3000
+CORS_ALLOW_ORIGINS=http://172.16.5.38:3000,http://localhost:3000
+```
+
+只有浏览器直接访问 API 时才需要把公网 web origin 加入 `CORS_ALLOW_ORIGINS`。内置 web UI 默认通过同源代理访问 API，因此通常不会遇到浏览器 CORS。
+
 停止：
 
 ```bash
@@ -393,7 +413,6 @@ make smoke-docker
 
 可用于本地上传验证的 Excel 样例：
 
-- `sample_data/galaxyspace-hr-sample.xlsx`
 - `sample_data/hr_workforce_upload_sample.xlsx`
 - `sample_data/hr_workforce_upload_sample_zh.xlsx`
 

@@ -237,7 +237,6 @@ Frontend `.env`:
 ## Sample Data
 
 Upload these files via the ingestion UI or `POST /ingestion/uploads` to create a working DuckDB session:
-- `sample_data/galaxyspace-hr-sample.xlsx`
 - `sample_data/hr_workforce_upload_sample.xlsx`
 
 After upload, use the returned `dataset_table` for subsequent chat and semantic queries.

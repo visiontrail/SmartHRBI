@@ -11,14 +11,17 @@ const ingestionApiMocks = vi.hoisted(() => ({
   confirmIngestionSetup: vi.fn(),
   approveIngestionProposal: vi.fn(),
   executeIngestionProposal: vi.fn(),
+  streamIngestionPlan: vi.fn(),
+  streamIngestionSetupConfirm: vi.fn(),
+  streamIngestionExecute: vi.fn(),
 }));
 
 const {
   createIngestionUpload,
-  createIngestionPlan,
-  confirmIngestionSetup,
   approveIngestionProposal,
-  executeIngestionProposal,
+  streamIngestionPlan,
+  streamIngestionSetupConfirm,
+  streamIngestionExecute,
 } = ingestionApiMocks;
 
 vi.mock("../../lib/ingestion/api", () => {
@@ -58,88 +61,123 @@ function sampleUploadResult() {
   };
 }
 
-function sampleProposalPlan() {
+// Raw backend snake_case format as returned by streaming decision event
+function sampleProposalDecision() {
   return {
-    status: "awaiting_user_approval" as const,
-    workspaceId: "ws-1",
-    jobId: "job-1",
-    proposalId: "proposal-1",
-    proposal: {
-      businessType: "roster" as const,
+    status: "awaiting_user_approval",
+    workspace_id: "ws-1",
+    job_id: "job-1",
+    proposal_id: "proposal-1",
+    proposal_json: {
+      business_type: "roster",
       confidence: 0.9,
-      recommendedAction: "update_existing" as const,
-      candidateActions: ["update_existing", "time_partitioned_new_table", "new_table", "cancel"] as const,
-      targetTable: "employee_roster",
-      timeGrain: "none" as const,
-      matchColumns: ["employee_id"],
-      columnMapping: { "Employee ID": "employee_id" },
-      diffPreview: {
-        predictedInsertCount: 2,
-        predictedUpdateCount: 1,
-        predictedConflictCount: 0,
+      recommended_action: "update_existing",
+      candidate_actions: ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
+      target_table: "employee_roster",
+      time_grain: "none",
+      match_columns: ["employee_id"],
+      column_mapping: { "Employee ID": "employee_id" },
+      diff_preview: {
+        predicted_insert_count: 2,
+        predicted_update_count: 1,
+        predicted_conflict_count: 0,
       },
       risks: ["Potential duplicate employee_id rows"],
       explanation: "matched",
-      sqlDraft: "MERGE INTO employee_roster ...",
-      requiresCatalogSetup: false,
-      createdAt: "2026-04-17T00:00:00Z",
+      sql_draft: "MERGE INTO employee_roster ...",
+      requires_catalog_setup: false,
+      created_at: "2026-04-17T00:00:00Z",
     },
-    humanApproval: {
+    human_approval: {
       required: true,
       mechanism: "frontend_approval_card",
-      stage: "proposal_approval" as const,
+      stage: "proposal_approval",
       question: "是否将数据合并到现有花名册表？",
       options: ["update_existing", "time_partitioned_new_table", "new_table", "cancel"],
-      recommendedOption: "update_existing",
+      recommended_option: "update_existing",
     },
     route: { route: "write_ingestion", reason: "has_files" },
-    toolTrace: [],
+    tool_trace: [],
   };
+}
+
+function sampleCatalogSetupDecision() {
+  return {
+    status: "awaiting_catalog_setup",
+    workspace_id: "ws-1",
+    job_id: "job-1",
+    agent_guess: { business_type: "roster", confidence: 0.8 },
+    setup_questions: [
+      { question_id: "business_type", title: "Type", options: ["roster", "other"] },
+      { question_id: "write_mode", title: "Mode", options: ["update_existing"] },
+    ],
+    suggested_catalog_seed: {
+      business_type: "roster",
+      table_name: "employee_roster",
+      human_label: "Employee Roster",
+      write_mode: "update_existing",
+      time_grain: "none",
+      primary_keys: ["employee_id"],
+      match_columns: ["employee_id"],
+      is_active_target: true,
+      description: "seed",
+    },
+    human_approval: {
+      required: true,
+      mechanism: "catalog_setup_card",
+      stage: "catalog_setup",
+      question: "先确认目录设置再继续？",
+      options: ["confirm_catalog_setup", "cancel"],
+      recommended_option: "confirm_catalog_setup",
+    },
+    route: { route: "write_ingestion", reason: "has_file" },
+    tool_trace: [],
+  };
+}
+
+function sampleExecuteDecision() {
+  return {
+    status: "succeeded",
+    workspace_id: "ws-1",
+    job_id: "job-1",
+    proposal_id: "proposal-1",
+    execution_id: "exec-1",
+    receipt: {
+      success: true,
+      workspace_id: "ws-1",
+      job_id: "job-1",
+      target_table: "employee_roster",
+      execution_mode: "update_existing",
+      inserted_rows: 2,
+      updated_rows: 1,
+      affected_rows: 3,
+      rows_after: 10,
+      duckdb_path: "/tmp/ws-1.duckdb",
+      finished_at: "2026-04-17T00:00:00Z",
+    },
+  };
+}
+
+async function* makeStreamDecision(decisionData: Record<string, unknown>) {
+  yield { event: "decision", data: decisionData };
 }
 
 describe("IngestionLifecyclePanel", () => {
   beforeEach(() => {
     createIngestionUpload.mockReset();
-    createIngestionPlan.mockReset();
-    confirmIngestionSetup.mockReset();
+    ingestionApiMocks.createIngestionPlan.mockReset();
+    ingestionApiMocks.confirmIngestionSetup.mockReset();
     approveIngestionProposal.mockReset();
-    executeIngestionProposal.mockReset();
+    ingestionApiMocks.executeIngestionProposal.mockReset();
+    streamIngestionPlan.mockReset();
+    streamIngestionSetupConfirm.mockReset();
+    streamIngestionExecute.mockReset();
   });
 
   it("renders setup card when planning requires catalog setup", async () => {
     createIngestionUpload.mockResolvedValue(sampleUploadResult());
-    createIngestionPlan.mockResolvedValue({
-      status: "awaiting_catalog_setup",
-      workspaceId: "ws-1",
-      jobId: "job-1",
-      agentGuess: { businessType: "roster", confidence: 0.8 },
-      setupQuestions: [
-        { questionId: "business_type", title: "Type", options: ["roster", "other"] },
-        { questionId: "write_mode", title: "Mode", options: ["update_existing"] },
-      ],
-      suggestedCatalogSeed: {
-        businessType: "roster",
-        tableName: "employee_roster",
-        humanLabel: "Employee Roster",
-        writeMode: "update_existing",
-        timeGrain: "none",
-        primaryKeys: ["employee_id"],
-        matchColumns: ["employee_id"],
-        isActiveTarget: true,
-        description: "seed",
-      },
-      humanApproval: {
-        required: true,
-        mechanism: "catalog_setup_card",
-        stage: "catalog_setup" as const,
-        question: "先确认目录设置再继续？",
-        options: ["confirm_catalog_setup", "cancel"],
-        recommendedOption: "confirm_catalog_setup",
-      },
-      route: { route: "write_ingestion", reason: "has_file" },
-      toolTrace: [],
-    });
-    confirmIngestionSetup.mockResolvedValue(sampleProposalPlan());
+    streamIngestionPlan.mockImplementation(() => makeStreamDecision(sampleCatalogSetupDecision()));
+    streamIngestionSetupConfirm.mockImplementation(() => makeStreamDecision(sampleProposalDecision()));
 
     render(<IngestionLifecyclePanel workspaceId="ws-1" workspaceTitle="Ops Workspace" />);
 
@@ -155,12 +193,12 @@ describe("IngestionLifecyclePanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Apply Setup" }));
     expect(await screen.findByTestId("ingestion-proposal-card")).toBeInTheDocument();
-    expect(confirmIngestionSetup).toHaveBeenCalledTimes(1);
+    expect(streamIngestionSetupConfirm).toHaveBeenCalledTimes(1);
   });
 
   it("completes proposal approval and execution receipt flow", async () => {
     createIngestionUpload.mockResolvedValue(sampleUploadResult());
-    createIngestionPlan.mockResolvedValue(sampleProposalPlan());
+    streamIngestionPlan.mockImplementation(() => makeStreamDecision(sampleProposalDecision()));
     approveIngestionProposal.mockResolvedValue({
       status: "approved",
       workspaceId: "ws-1",
@@ -181,26 +219,7 @@ describe("IngestionLifecyclePanel", () => {
         risks: [],
       },
     });
-    executeIngestionProposal.mockResolvedValue({
-      status: "succeeded",
-      workspaceId: "ws-1",
-      jobId: "job-1",
-      proposalId: "proposal-1",
-      executionId: "exec-1",
-      receipt: {
-        success: true,
-        workspaceId: "ws-1",
-        jobId: "job-1",
-        targetTable: "employee_roster",
-        executionMode: "update_existing",
-        insertedRows: 2,
-        updatedRows: 1,
-        affectedRows: 3,
-        rowsAfter: 10,
-        duckdbPath: "/tmp/ws-1.duckdb",
-        finishedAt: "2026-04-17T00:00:00Z",
-      },
-    });
+    streamIngestionExecute.mockImplementation(() => makeStreamDecision(sampleExecuteDecision()));
 
     render(<IngestionLifecyclePanel workspaceId="ws-1" workspaceTitle="Ops Workspace" />);
 
@@ -212,7 +231,7 @@ describe("IngestionLifecyclePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Upload & Plan" }));
 
     expect(await screen.findByTestId("ingestion-proposal-card")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "更新现有表" }));
+    await userEvent.click(screen.getByRole("button", { name: "Update Existing" }));
 
     expect(await screen.findByTestId("ingestion-approved-card")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Execute Write" }));
@@ -222,7 +241,7 @@ describe("IngestionLifecyclePanel", () => {
 
     await waitFor(() => {
       expect(approveIngestionProposal).toHaveBeenCalledTimes(1);
-      expect(executeIngestionProposal).toHaveBeenCalledTimes(1);
+      expect(streamIngestionExecute).toHaveBeenCalledTimes(1);
     });
   });
 

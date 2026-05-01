@@ -10,7 +10,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+import asyncio
+from typing import Any, AsyncGenerator
 
 import anyio
 import duckdb
@@ -862,6 +863,321 @@ class WriteIngestionAgentRuntime:
         }
         return plan_payload
 
+    async def build_plan_stream_async(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        requested_by: str,
+        conversation_id: str | None = None,
+        message: str | None = None,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """Async generator that streams planning agent events as (event_type, payload) tuples."""
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_requested_by = requested_by.strip()
+        normalized_conversation_id = (conversation_id or "").strip() or None
+
+        event_queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+        async def _run_and_finalize() -> None:
+            try:
+                if not normalized_workspace_id:
+                    raise IngestionPlanningError(code="WORKSPACE_ID_REQUIRED", message="workspace_id is required", status_code=422)
+                if not normalized_job_id:
+                    raise IngestionPlanningError(code="JOB_ID_REQUIRED", message="job_id is required", status_code=422)
+                if not normalized_requested_by:
+                    raise IngestionPlanningError(code="AUTH_REQUIRED", message="user_id is required", status_code=401)
+
+                settings = get_settings()
+                auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+                if not auth_token_source.strip() or not settings.ai_model.strip():
+                    raise IngestionPlanningError(
+                        code="INGESTION_AI_NOT_CONFIGURED",
+                        message="Claude Agent SDK credentials are not configured for ingestion planning",
+                        status_code=503,
+                    )
+
+                with self._connect() as conn:
+                    job = self._load_job_context(
+                        conn=conn,
+                        workspace_id=normalized_workspace_id,
+                        job_id=normalized_job_id,
+                    )
+                    route = select_agent_route(
+                        message=message,
+                        has_files=True,
+                        ingestion_job_status=str(job["status"]),
+                    )
+                    self._set_job_status(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        status="planning",
+                        business_type_guess=None,
+                        agent_session_id=normalized_conversation_id,
+                    )
+                    self._insert_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        event_type="job_status_updated",
+                        payload={"status": "planning", "trigger": "ingestion_plan"},
+                    )
+
+                    tool_trace_snapshot: list[dict[str, Any]] = []
+                    try:
+                        agent_output, tool_trace = await self._run_planning_agent_loop_async(
+                            conn=conn,
+                            workspace_id=normalized_workspace_id,
+                            job_id=normalized_job_id,
+                            upload_id=str(job["upload_id"]),
+                            requested_by=normalized_requested_by,
+                            conversation_id=normalized_conversation_id,
+                            message=message,
+                            tool_trace_sink=tool_trace_snapshot,
+                            event_queue=event_queue,
+                        )
+                    except IngestionPlanningError as exc:
+                        _OUTPUT_MISSING = frozenset({
+                            "AGENT_STRUCTURED_OUTPUT_MISSING",
+                            "AGENT_STRUCTURED_OUTPUT_INVALID",
+                            "AGENT_PROPOSAL_REQUIRED",
+                        })
+                        if exc.code in _OUTPUT_MISSING:
+                            recovered = self._recover_proposal_from_tool_trace(tool_trace=tool_trace_snapshot)
+                            if recovered is not None:
+                                agent_output_recovered, tool_trace_recovered = recovered
+                                agent_output = agent_output_recovered
+                                tool_trace = tool_trace_recovered
+                            else:
+                                raise
+                        else:
+                            raise
+
+                    agent_guess = agent_output.agent_guess.model_dump(mode="json")
+                    analysis_audit = {
+                        "agent_planning": {
+                            "engine": "write_ingestion_agent_loop",
+                            "runtime_backend": INGESTION_SDK_RUNTIME_BACKEND,
+                            "model": settings.ai_model.strip(),
+                            "human_approval_tool_required": False,
+                        }
+                    }
+                    self._insert_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        event_type="business_type_inferred",
+                        payload={
+                            "business_type": agent_guess["business_type"],
+                            "confidence": agent_guess["confidence"],
+                            "reasoning": agent_guess.get("reasoning", ""),
+                            "analysis_audit": analysis_audit["agent_planning"],
+                        },
+                    )
+
+                    if agent_output.status == "awaiting_catalog_setup":
+                        if agent_output.suggested_catalog_seed is None:
+                            raise IngestionPlanningError(
+                                code="AGENT_SETUP_SEED_REQUIRED",
+                                message="Agent output must include suggested_catalog_seed for catalog setup",
+                                status_code=502,
+                            )
+                        decision_payload: dict[str, Any] = {
+                            "status": "awaiting_catalog_setup",
+                            "workspace_id": normalized_workspace_id,
+                            "job_id": normalized_job_id,
+                            "agent_guess": agent_guess,
+                            "setup_questions": [item.model_dump(mode="json") for item in agent_output.setup_questions],
+                            "suggested_catalog_seed": agent_output.suggested_catalog_seed.model_dump(mode="json"),
+                            "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                            "route": route.to_payload(),
+                            "tool_trace": tool_trace,
+                            "analysis_audit": analysis_audit,
+                        }
+                        self._set_job_status(
+                            conn=conn,
+                            job_id=normalized_job_id,
+                            status="awaiting_catalog_setup",
+                            business_type_guess=agent_guess["business_type"],
+                            agent_session_id=normalized_conversation_id,
+                        )
+                        self._insert_event(
+                            conn=conn,
+                            job_id=normalized_job_id,
+                            event_type="setup_required",
+                            payload={
+                                "business_type": agent_guess["business_type"],
+                                "confidence": agent_guess["confidence"],
+                                "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                                "analysis_audit": analysis_audit["agent_planning"],
+                            },
+                        )
+                        conn.commit()
+                    else:
+                        if agent_output.proposal is None:
+                            raise IngestionPlanningError(
+                                code="AGENT_PROPOSAL_REQUIRED",
+                                message="Agent output must include proposal for user approval",
+                                status_code=502,
+                            )
+                        proposal = self._normalize_agent_proposal(agent_output.proposal)
+                        proposal_id = self._persist_proposal(
+                            conn=conn,
+                            workspace_id=normalized_workspace_id,
+                            job_id=normalized_job_id,
+                            proposal=proposal,
+                        )
+                        self._set_job_status(
+                            conn=conn,
+                            job_id=normalized_job_id,
+                            status="awaiting_user_approval",
+                            business_type_guess=proposal.business_type,
+                            agent_session_id=normalized_conversation_id,
+                        )
+                        self._insert_event(
+                            conn=conn,
+                            job_id=normalized_job_id,
+                            event_type="human_approval_requested",
+                            payload=agent_output.human_approval.model_dump(mode="json"),
+                        )
+                        self._insert_event(
+                            conn=conn,
+                            job_id=normalized_job_id,
+                            event_type="proposal_generated",
+                            payload={
+                                "proposal_id": proposal_id,
+                                "recommended_action": proposal.recommended_action,
+                                "target_table": proposal.target_table,
+                                "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                            },
+                        )
+                        conn.commit()
+                        decision_payload = {
+                            "status": "awaiting_user_approval",
+                            "workspace_id": normalized_workspace_id,
+                            "job_id": normalized_job_id,
+                            "proposal_id": proposal_id,
+                            "proposal_json": proposal.model_dump(mode="json"),
+                            "human_approval": agent_output.human_approval.model_dump(mode="json"),
+                            "route": route.to_payload(),
+                            "existing_tables": self._latest_tool_result(tool_trace, "list_existing_tables"),
+                            "tool_trace": tool_trace,
+                            "analysis_audit": analysis_audit,
+                        }
+
+                    event_queue.put_nowait(("decision", decision_payload))
+
+            except IngestionPlanningError as exc:
+                event_queue.put_nowait(("error", {
+                    "job_id": normalized_job_id,
+                    "code": exc.code,
+                    "message": exc.message,
+                }))
+            except Exception as exc:
+                event_queue.put_nowait(("error", {
+                    "job_id": normalized_job_id,
+                    "code": "INGESTION_AI_UNAVAILABLE",
+                    "message": f"Planning agent failed: {exc}",
+                }))
+            finally:
+                event_queue.put_nowait(None)
+
+        task = asyncio.ensure_future(_run_and_finalize())
+        try:
+            while True:
+                item = await event_queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def confirm_setup_stream_async(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        requested_by: str,
+        setup_seed: IngestionCatalogSetupSeed,
+        conversation_id: str | None = None,
+        message: str | None = None,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """Async generator that streams confirm-setup agent events."""
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_requested_by = requested_by.strip()
+        normalized_conversation_id = (conversation_id or "").strip() or None
+
+        if not normalized_workspace_id:
+            raise IngestionPlanningError(code="WORKSPACE_ID_REQUIRED", message="workspace_id is required", status_code=422)
+        if not normalized_job_id:
+            raise IngestionPlanningError(code="JOB_ID_REQUIRED", message="job_id is required", status_code=422)
+        if not normalized_requested_by:
+            raise IngestionPlanningError(code="AUTH_REQUIRED", message="user_id is required", status_code=401)
+        if not SAFE_IDENTIFIER_RE.match(setup_seed.table_name):
+            raise IngestionPlanningError(
+                code="CATALOG_TABLE_NAME_INVALID",
+                message="setup.table_name must be a valid SQL identifier",
+                status_code=422,
+            )
+
+        catalog_entry: dict[str, Any] | None = None
+        with self._connect() as conn:
+            job = self._load_job_context(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                job_id=normalized_job_id,
+            )
+            current_status = str(job["status"])
+            if current_status not in {"uploaded", "planning", "awaiting_catalog_setup"}:
+                raise IngestionPlanningError(
+                    code="INGESTION_SETUP_NOT_ALLOWED",
+                    message=f"Setup cannot be confirmed when job status is {current_status}",
+                    status_code=409,
+                )
+            upload_info = self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"]))
+            catalog_entry = self._upsert_catalog_entry_from_setup(
+                conn=conn,
+                workspace_id=normalized_workspace_id,
+                requested_by=normalized_requested_by,
+                setup_seed=setup_seed,
+                upload_info=upload_info,
+            )
+            self._set_job_status(
+                conn=conn,
+                job_id=normalized_job_id,
+                status="planning",
+                business_type_guess=setup_seed.business_type,
+                agent_session_id=normalized_conversation_id,
+            )
+            self._insert_event(
+                conn=conn,
+                job_id=normalized_job_id,
+                event_type="setup_confirmed",
+                payload={
+                    "catalog_entry_id": catalog_entry["id"],
+                    "business_type": catalog_entry["business_type"],
+                    "table_name": catalog_entry["table_name"],
+                },
+            )
+            conn.commit()
+
+        async for event_type, payload in self.build_plan_stream_async(
+            workspace_id=normalized_workspace_id,
+            job_id=normalized_job_id,
+            requested_by=normalized_requested_by,
+            conversation_id=normalized_conversation_id,
+            message=message,
+        ):
+            if event_type == "decision" and catalog_entry is not None:
+                payload = dict(payload)
+                payload["setup"] = {"status": "confirmed", "catalog_entry": catalog_entry}
+            yield event_type, payload
+
     def approve_plan(
         self,
         *,
@@ -1255,6 +1571,250 @@ class WriteIngestionAgentRuntime:
             "receipt": receipt,
         }
 
+    async def execute_plan_stream_async(
+        self,
+        *,
+        workspace_id: str,
+        job_id: str,
+        proposal_id: str,
+        executed_by: str,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """Async generator that streams execution agent events as (event_type, payload) tuples."""
+        normalized_workspace_id = workspace_id.strip()
+        normalized_job_id = job_id.strip()
+        normalized_proposal_id = proposal_id.strip()
+        normalized_executed_by = executed_by.strip()
+
+        if not normalized_workspace_id:
+            raise IngestionPlanningError(code="WORKSPACE_ID_REQUIRED", message="workspace_id is required", status_code=422)
+        if not normalized_job_id:
+            raise IngestionPlanningError(code="JOB_ID_REQUIRED", message="job_id is required", status_code=422)
+        if not normalized_proposal_id:
+            raise IngestionPlanningError(code="PROPOSAL_ID_REQUIRED", message="proposal_id is required", status_code=422)
+        if not normalized_executed_by:
+            raise IngestionPlanningError(code="AUTH_REQUIRED", message="user_id is required", status_code=401)
+
+        settings = get_settings()
+        auth_token_source = settings.anthropic_auth_token or settings.ai_api_key
+        if not auth_token_source.strip() or not settings.ai_model.strip():
+            raise IngestionPlanningError(
+                code="INGESTION_AI_NOT_CONFIGURED",
+                message="Claude Agent SDK credentials are not configured for ingestion execution",
+                status_code=503,
+            )
+
+        event_queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+        async def _run_execution_and_finalize() -> None:
+            try:
+                started_at = _utc_now()
+                with self._connect() as conn:
+                    self._ensure_user_record(conn=conn, user_id=normalized_executed_by)
+                    job = self._load_job_for_execution(
+                        conn=conn,
+                        workspace_id=normalized_workspace_id,
+                        job_id=normalized_job_id,
+                    )
+                    _proposal_row, proposal_payload = self._load_proposal(
+                        conn=conn,
+                        workspace_id=normalized_workspace_id,
+                        job_id=normalized_job_id,
+                        proposal_id=normalized_proposal_id,
+                    )
+                    approval_event = self._load_latest_approval_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        proposal_id=normalized_proposal_id,
+                    )
+                    approved_action = str(approval_event["approved_action"])
+                    target_table = str(approval_event["target_table"])
+                    dry_run_summary = approval_event["dry_run_summary"]
+                    upload_info = self._tool_inspect_upload(conn=conn, upload_id=str(job["upload_id"]))
+                    self._set_job_status(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        status="executing",
+                        business_type_guess=proposal_payload.business_type,
+                        agent_session_id=str(job["agent_session_id"]) if job["agent_session_id"] else None,
+                    )
+                    self._insert_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        event_type="job_status_updated",
+                        payload={"status": "executing", "trigger": "ingestion_execute"},
+                    )
+                    conn.commit()
+
+                execution_id = uuid.uuid4().hex
+                execution_mode = approved_action
+                executed_sql = ""
+
+                session = self._prepare_execution_session(
+                    workspace_id=normalized_workspace_id,
+                    job_id=normalized_job_id,
+                    proposal_id=normalized_proposal_id,
+                    upload_id=str(job["upload_id"]),
+                    target_table=target_table,
+                    approved_action=approved_action,
+                    dry_run_summary=dry_run_summary,
+                    upload_info=upload_info,
+                    proposal_payload=proposal_payload,
+                )
+
+                tool_trace_snapshot: list[dict[str, Any]] = []
+                execution_status = "failed"
+                failure_message = ""
+                receipt: dict[str, Any] = {}
+
+                try:
+                    with self._connect() as exec_conn:
+                        execution_output, tool_trace = await self._run_execution_agent_loop_async(
+                            conn=exec_conn,
+                            session=session,
+                            tool_trace_sink=tool_trace_snapshot,
+                            event_queue=event_queue,
+                        )
+                    if execution_output.status != "executed":
+                        raise IngestionPlanningError(
+                            code="INGESTION_EXECUTION_BLOCKED",
+                            message=execution_output.reasoning or "Execution agent blocked the write",
+                            status_code=422,
+                        )
+                    receipt = dict(execution_output.receipt)
+                    executed_sql = execution_output.executed_sql
+                    receipt.setdefault("tool_trace", tool_trace)
+                    execution_status = "succeeded"
+                except IngestionPlanningError as exc:
+                    execution_status = "failed"
+                    failure_message = exc.message
+                    receipt = {
+                        "success": False,
+                        "workspace_id": normalized_workspace_id,
+                        "job_id": normalized_job_id,
+                        "target_table": target_table,
+                        "approved_action": approved_action,
+                        "error": {"code": exc.code, "message": exc.message},
+                    }
+                except Exception as exc:
+                    execution_status = "failed"
+                    failure_message = str(exc)
+                    receipt = {
+                        "success": False,
+                        "workspace_id": normalized_workspace_id,
+                        "job_id": normalized_job_id,
+                        "target_table": target_table,
+                        "approved_action": approved_action,
+                        "error": {"code": "INGESTION_EXECUTION_FAILED", "message": str(exc)},
+                    }
+                finally:
+                    try:
+                        session.duckdb_conn.close()
+                    except Exception:
+                        pass
+
+                finished_at = _utc_now()
+                with self._connect() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO ingestion_executions (
+                            id, job_id, proposal_id, workspace_id, executed_by,
+                            execution_mode, validated_sql, dry_run_summary,
+                            execution_receipt, status, started_at, finished_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            execution_id,
+                            normalized_job_id,
+                            normalized_proposal_id,
+                            normalized_workspace_id,
+                            normalized_executed_by,
+                            execution_mode,
+                            executed_sql,
+                            json.dumps(dry_run_summary, ensure_ascii=False),
+                            json.dumps(receipt, ensure_ascii=False),
+                            execution_status,
+                            started_at,
+                            finished_at,
+                        ),
+                    )
+                    if execution_status == "succeeded":
+                        self._sync_catalog_entry_from_execution(
+                            conn=conn,
+                            workspace_id=normalized_workspace_id,
+                            table_name=target_table,
+                            requested_by=normalized_executed_by,
+                            proposal_payload=proposal_payload,
+                            approved_action=approved_action,
+                        )
+                    final_job_status = "succeeded" if execution_status == "succeeded" else "failed"
+                    self._set_job_status(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        status=final_job_status,
+                        business_type_guess=None,
+                        agent_session_id=None,
+                    )
+                    event_type_db = "execution_succeeded" if execution_status == "succeeded" else "execution_failed"
+                    self._insert_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        event_type=event_type_db,
+                        payload={"execution_id": execution_id, "proposal_id": normalized_proposal_id, "status": execution_status, "receipt": receipt},
+                    )
+                    self._insert_event(
+                        conn=conn,
+                        job_id=normalized_job_id,
+                        event_type="job_status_updated",
+                        payload={"status": final_job_status, "trigger": "ingestion_execute_finalize"},
+                    )
+                    conn.commit()
+
+                if execution_status != "succeeded":
+                    event_queue.put_nowait(("error", {
+                        "job_id": normalized_job_id,
+                        "code": "INGESTION_EXECUTION_FAILED",
+                        "message": f"Execution failed: {failure_message}",
+                    }))
+                else:
+                    event_queue.put_nowait(("decision", {
+                        "status": "succeeded",
+                        "workspace_id": normalized_workspace_id,
+                        "job_id": normalized_job_id,
+                        "proposal_id": normalized_proposal_id,
+                        "execution_id": execution_id,
+                        "receipt": receipt,
+                    }))
+
+            except IngestionPlanningError as exc:
+                event_queue.put_nowait(("error", {
+                    "job_id": normalized_job_id,
+                    "code": exc.code,
+                    "message": exc.message,
+                }))
+            except Exception as exc:
+                event_queue.put_nowait(("error", {
+                    "job_id": normalized_job_id,
+                    "code": "INGESTION_AI_UNAVAILABLE",
+                    "message": f"Execution agent failed: {exc}",
+                }))
+            finally:
+                event_queue.put_nowait(None)
+
+        task = asyncio.ensure_future(_run_execution_and_finalize())
+        try:
+            while True:
+                item = await event_queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
     def _run_execution_agent_loop(
         self,
         *,
@@ -1357,6 +1917,7 @@ class WriteIngestionAgentRuntime:
         conn: sqlite3.Connection,
         session: IngestionExecutionSession,
         tool_trace_sink: list[dict[str, Any]] | None = None,
+        event_queue: asyncio.Queue | None = None,
     ) -> tuple[IngestionExecutionAgentOutput, list[dict[str, Any]]]:
         settings = get_settings()
         tool_trace = tool_trace_sink if tool_trace_sink is not None else []
@@ -1365,6 +1926,7 @@ class WriteIngestionAgentRuntime:
             job_id=session.job_id,
             session=session,
             tool_trace=tool_trace,
+            event_queue=event_queue,
         )
         prompt = self._build_execution_agent_prompt(session=session)
         raw_output: dict[str, Any] | None = None
@@ -1376,6 +1938,13 @@ class WriteIngestionAgentRuntime:
                 async with ClaudeSDKClient(options=options) as client:
                     await client.query(prompt, session_id=session_id)
                     async for sdk_message in client.receive_response():
+                        if event_queue is not None and isinstance(sdk_message, AssistantMessage):
+                            for block in sdk_message.content:
+                                if isinstance(block, TextBlock) and block.text:
+                                    event_queue.put_nowait(("planning", {
+                                        "job_id": session.job_id,
+                                        "text": block.text,
+                                    }))
                         candidate = self._consume_ingestion_sdk_message(
                             message=sdk_message,
                             text_blocks=text_blocks,
@@ -1470,6 +2039,7 @@ class WriteIngestionAgentRuntime:
         job_id: str,
         session: IngestionExecutionSession,
         tool_trace: list[dict[str, Any]],
+        event_queue: asyncio.Queue | None = None,
     ) -> ClaudeAgentOptions:
         settings = get_settings()
 
@@ -1497,6 +2067,7 @@ class WriteIngestionAgentRuntime:
                 job_id=job_id,
                 session=session,
                 tool_trace=tool_trace,
+                event_queue=event_queue,
             ),
         )
         env: dict[str, str] = {
@@ -1543,6 +2114,7 @@ class WriteIngestionAgentRuntime:
         job_id: str,
         session: IngestionExecutionSession,
         tool_trace: list[dict[str, Any]],
+        event_queue: asyncio.Queue | None = None,
     ) -> list[Any]:
         sdk_tools: list[Any] = []
         for definition in INGESTION_EXECUTION_TOOL_DEFINITIONS:
@@ -1558,23 +2130,58 @@ class WriteIngestionAgentRuntime:
             )
 
             async def handler(args: dict[str, Any], _tool_name: str = tool_name) -> dict[str, Any]:
-                result = self._invoke_execution_sdk_tool(
-                    conn=conn,
-                    job_id=job_id,
-                    session=session,
-                    tool_trace=tool_trace,
-                    tool_name=_tool_name,
-                    arguments=args,
-                )
-                return {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(result, ensure_ascii=False, default=str),
-                        }
-                    ],
-                    "is_error": False,
-                }
+                step_id = uuid.uuid4().hex
+                started_at = time.time()
+                if event_queue is not None:
+                    event_queue.put_nowait(("tool_use", {
+                        "job_id": job_id,
+                        "tool_name": _tool_name,
+                        "arguments": args,
+                        "step_id": step_id,
+                        "started_at": started_at,
+                    }))
+                try:
+                    result = self._invoke_execution_sdk_tool(
+                        conn=conn,
+                        job_id=job_id,
+                        session=session,
+                        tool_trace=tool_trace,
+                        tool_name=_tool_name,
+                        arguments=args,
+                    )
+                    completed_at = time.time()
+                    if event_queue is not None:
+                        event_queue.put_nowait(("tool_result", {
+                            "job_id": job_id,
+                            "tool_name": _tool_name,
+                            "status": "success",
+                            "result": result,
+                            "step_id": step_id,
+                            "started_at": started_at,
+                            "completed_at": completed_at,
+                        }))
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        ],
+                        "is_error": False,
+                    }
+                except Exception as exc:
+                    completed_at = time.time()
+                    if event_queue is not None:
+                        event_queue.put_nowait(("tool_result", {
+                            "job_id": job_id,
+                            "tool_name": _tool_name,
+                            "status": "error",
+                            "error": str(exc),
+                            "step_id": step_id,
+                            "started_at": started_at,
+                            "completed_at": completed_at,
+                        }))
+                    raise
 
             sdk_tools.append(
                 tool(
@@ -1857,6 +2464,7 @@ class WriteIngestionAgentRuntime:
         conversation_id: str | None,
         message: str | None,
         tool_trace_sink: list[dict[str, Any]] | None = None,
+        event_queue: asyncio.Queue | None = None,
     ) -> tuple[IngestionAgentPlanOutput, list[dict[str, Any]]]:
         settings = get_settings()
         tool_trace = tool_trace_sink if tool_trace_sink is not None else []
@@ -1864,6 +2472,7 @@ class WriteIngestionAgentRuntime:
             conn=conn,
             job_id=job_id,
             tool_trace=tool_trace,
+            event_queue=event_queue,
         )
         prompt = self._build_ingestion_agent_prompt(
             workspace_id=workspace_id,
@@ -1881,6 +2490,13 @@ class WriteIngestionAgentRuntime:
                 async with ClaudeSDKClient(options=options) as client:
                     await client.query(prompt, session_id=session_id)
                     async for sdk_message in client.receive_response():
+                        if event_queue is not None and isinstance(sdk_message, AssistantMessage):
+                            for block in sdk_message.content:
+                                if isinstance(block, TextBlock) and block.text:
+                                    event_queue.put_nowait(("planning", {
+                                        "job_id": job_id,
+                                        "text": block.text,
+                                    }))
                         candidate = self._consume_ingestion_sdk_message(
                             message=sdk_message,
                             text_blocks=text_blocks,
@@ -1953,6 +2569,7 @@ class WriteIngestionAgentRuntime:
         conn: sqlite3.Connection,
         job_id: str,
         tool_trace: list[dict[str, Any]],
+        event_queue: asyncio.Queue | None = None,
     ) -> ClaudeAgentOptions:
         settings = get_settings()
 
@@ -1976,6 +2593,7 @@ class WriteIngestionAgentRuntime:
                 conn=conn,
                 job_id=job_id,
                 tool_trace=tool_trace,
+                event_queue=event_queue,
             ),
         )
         env: dict[str, str] = {
@@ -2018,6 +2636,7 @@ class WriteIngestionAgentRuntime:
         conn: sqlite3.Connection,
         job_id: str,
         tool_trace: list[dict[str, Any]],
+        event_queue: asyncio.Queue | None = None,
     ) -> list[Any]:
         sdk_tools: list[Any] = []
         for definition in INGESTION_AGENT_TOOL_DEFINITIONS:
@@ -2033,22 +2652,57 @@ class WriteIngestionAgentRuntime:
             )
 
             async def handler(args: dict[str, Any], _tool_name: str = tool_name) -> dict[str, Any]:
-                result = self._invoke_ingestion_sdk_tool(
-                    conn=conn,
-                    job_id=job_id,
-                    tool_trace=tool_trace,
-                    tool_name=_tool_name,
-                    arguments=args,
-                )
-                return {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(result, ensure_ascii=False, default=str),
-                        }
-                    ],
-                    "is_error": False,
-                }
+                step_id = uuid.uuid4().hex
+                started_at = time.time()
+                if event_queue is not None:
+                    event_queue.put_nowait(("tool_use", {
+                        "job_id": job_id,
+                        "tool_name": _tool_name,
+                        "arguments": args,
+                        "step_id": step_id,
+                        "started_at": started_at,
+                    }))
+                try:
+                    result = self._invoke_ingestion_sdk_tool(
+                        conn=conn,
+                        job_id=job_id,
+                        tool_trace=tool_trace,
+                        tool_name=_tool_name,
+                        arguments=args,
+                    )
+                    completed_at = time.time()
+                    if event_queue is not None:
+                        event_queue.put_nowait(("tool_result", {
+                            "job_id": job_id,
+                            "tool_name": _tool_name,
+                            "status": "success",
+                            "result": result,
+                            "step_id": step_id,
+                            "started_at": started_at,
+                            "completed_at": completed_at,
+                        }))
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        ],
+                        "is_error": False,
+                    }
+                except Exception as exc:
+                    completed_at = time.time()
+                    if event_queue is not None:
+                        event_queue.put_nowait(("tool_result", {
+                            "job_id": job_id,
+                            "tool_name": _tool_name,
+                            "status": "error",
+                            "error": str(exc),
+                            "step_id": step_id,
+                            "started_at": started_at,
+                            "completed_at": completed_at,
+                        }))
+                    raise
 
             sdk_tools.append(
                 tool(

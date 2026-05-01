@@ -1,5 +1,7 @@
 import { getAuthorizationHeader } from "@/lib/auth/session";
 import { API_BASE_URL } from "@/lib/api-base";
+import { parseSSEStream } from "@/lib/chat/sse";
+import type { SSEEvent } from "@/lib/chat/sse";
 import type {
   IngestionApprovalResult,
   IngestionBusinessType,
@@ -214,6 +216,88 @@ export async function executeIngestionProposal(input: {
   };
 }
 
+export type IngestionSSEEvent = SSEEvent & {
+  event: "planning" | "tool_use" | "tool_result" | "decision" | "error";
+};
+
+export async function* streamIngestionPlan(input: {
+  workspaceId: string;
+  jobId: string;
+  conversationId?: string;
+  message?: string;
+}): AsyncGenerator<IngestionSSEEvent> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const response = await fetch(`${API_BASE_URL}/ingestion/plan/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({
+      workspace_id: input.workspaceId,
+      job_id: input.jobId,
+      conversation_id: input.conversationId,
+      message: input.message,
+    }),
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    throw toApiError(payload, response.status, "ingestion_plan_stream_failed");
+  }
+  for await (const event of parseSSEStream(response.body)) {
+    yield event as IngestionSSEEvent;
+  }
+}
+
+export async function* streamIngestionSetupConfirm(input: {
+  workspaceId: string;
+  jobId: string;
+  conversationId?: string;
+  message?: string;
+  setup: IngestionCatalogSetupSeed;
+}): AsyncGenerator<IngestionSSEEvent> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const response = await fetch(`${API_BASE_URL}/ingestion/setup/confirm/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({
+      workspace_id: input.workspaceId,
+      job_id: input.jobId,
+      conversation_id: input.conversationId,
+      message: input.message,
+      setup: toApiSetupSeed(input.setup),
+    }),
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    throw toApiError(payload, response.status, "ingestion_setup_stream_failed");
+  }
+  for await (const event of parseSSEStream(response.body)) {
+    yield event as IngestionSSEEvent;
+  }
+}
+
+export async function* streamIngestionExecute(input: {
+  workspaceId: string;
+  jobId: string;
+  proposalId: string;
+}): AsyncGenerator<IngestionSSEEvent> {
+  const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
+  const response = await fetch(`${API_BASE_URL}/ingestion/execute/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({
+      workspace_id: input.workspaceId,
+      job_id: input.jobId,
+      proposal_id: input.proposalId,
+    }),
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    throw toApiError(payload, response.status, "ingestion_execute_stream_failed");
+  }
+  for await (const event of parseSSEStream(response.body)) {
+    yield event as IngestionSSEEvent;
+  }
+}
+
 async function postJson(path: string, body: Record<string, unknown>, fallbackCode: string): Promise<unknown> {
   const headers = await getAuthorizationHeader(API_BASE_URL, DEFAULT_AUTH_CONTEXT);
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -252,7 +336,7 @@ function toApiError(payload: unknown, status: number, fallbackCode: string): Ing
   });
 }
 
-function mapPlanLikePayload(payload: unknown): IngestionPlanResult {
+export function mapPlanLikePayload(payload: unknown): IngestionPlanResult {
   const record = asRecord(payload);
   const status = asString(record.status);
 
