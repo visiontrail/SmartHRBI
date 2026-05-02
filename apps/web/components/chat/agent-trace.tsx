@@ -62,7 +62,10 @@ export function AgentTrace({ messageId, traceSummary }: Props) {
       : `${t("chat.trace.thoughtFor", { duration: durationStr })} · ${t("chat.trace.toolCallsCount", { count: traceSummary!.stepCount })}`;
     return (
       <div className="mb-2">
-        <span className={`text-[10px] select-none ${hasError ? "text-terracotta" : "text-stone-gray"}`}>
+        <span
+          className={`text-[10px] select-none cursor-help ${hasError ? "text-terracotta" : "text-stone-gray"}`}
+          title={t("chat.trace.bodiesUnavailableAfterReload")}
+        >
           {label}
         </span>
       </div>
