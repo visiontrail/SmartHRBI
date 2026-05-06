@@ -36,6 +36,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ChartNodeData, WebDesignPage, WebDesignSidebarItem, WebDesignTextStyle, WebDesignTextZone, WebDesignZone, WorkspaceNode } from "@/types/workspace";
 
 const WEB_DESIGN_ZONE_MIME = "application/x-web-design-zone";
+const WEB_DESIGN_TEXT_ZONE_MIME = "application/x-web-design-text-zone";
 
 export function WebDesignCanvas() {
   const { t } = useI18n();
@@ -312,6 +313,7 @@ export function WebDesignCanvas() {
                       columnIndex={columnIndex}
                       preview={layout.preview}
                       onDropZone={(zoneId) => moveZone(zoneId, columnIndex, rowIndex)}
+                      onDropTextZone={(zoneId) => updateTextZone(zoneId, { column: columnIndex, row: rowIndex })}
                     />
                   ))
                 )}
@@ -487,6 +489,16 @@ function TextGridZone({
   const { t } = useI18n();
   const styleConfig = TEXT_ZONE_STYLE_MAP[zone.style] ?? TEXT_ZONE_STYLE_MAP.body;
 
+  const handleDragStart = (event: DragEvent<HTMLElement>) => {
+    if (preview) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(WEB_DESIGN_TEXT_ZONE_MIME, zone.id);
+    event.dataTransfer.setData("text/plain", zone.id);
+  };
+
   return (
     <section
       aria-label={t("workspace.webDesign.aria.textZone")}
@@ -500,7 +512,11 @@ function TextGridZone({
       }}
     >
       {!preview && (
-        <div className="flex items-center justify-between border-b border-[#d0e4f8] bg-[#eaf3ff] px-2 py-1">
+        <div
+          draggable
+          onDragStart={handleDragStart}
+          className="flex cursor-grab items-center justify-between border-b border-[#d0e4f8] bg-[#eaf3ff] px-2 py-1 active:cursor-grabbing"
+        >
           <div className="flex items-center gap-1">
             <span className="rounded bg-[#d0e4f8] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3a6ea8]">
               {t(`workspace.webDesign.textZone.${zone.style}`)}
@@ -599,12 +615,14 @@ function GridCell({
   columnIndex,
   preview,
   onDropZone,
+  onDropTextZone,
 }: {
   rowId: string;
   rowIndex: number;
   columnIndex: number;
   preview: boolean;
   onDropZone: (zoneId: string) => void;
+  onDropTextZone: (zoneId: string) => void;
 }) {
   const { t } = useI18n();
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
@@ -619,6 +637,11 @@ function GridCell({
     const zoneId = event.dataTransfer.getData(WEB_DESIGN_ZONE_MIME);
     if (zoneId) {
       onDropZone(zoneId);
+      return;
+    }
+    const textZoneId = event.dataTransfer.getData(WEB_DESIGN_TEXT_ZONE_MIME);
+    if (textZoneId) {
+      onDropTextZone(textZoneId);
     }
   };
 
