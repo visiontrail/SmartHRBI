@@ -169,10 +169,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }),
 
   setActiveWorkspace: (workspaceId) => {
+    const currentState = get();
+    // No-op when re-selecting the already-active workspace; avoids wiping canvas state
+    // without a subsequent snapshot reload (TanStack Query won't re-run queryFn when the
+    // key is unchanged, leaving the store permanently empty).
+    if (currentState.activeWorkspaceId === workspaceId) return;
+
     // Flush unsaved changes to localStorage before clearing state for the new workspace.
     // The auto-save debounce (900ms) may not have fired yet, so we save synchronously here
     // to prevent losing canvas format selection and node placement on workspace switch.
-    const currentState = get();
     if (currentState.hasUnsavedChanges && currentState.activeWorkspaceId) {
       const snapshot = currentState.getSnapshot();
       if (snapshot) {

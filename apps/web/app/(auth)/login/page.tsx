@@ -1,14 +1,13 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiEmailLogin, AuthError } from "@/lib/auth/auth-client";
 import { setInMemoryToken, setStoredAppMode } from "@/lib/auth/session";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/";
   const invite = searchParams.get("invite");
@@ -26,11 +25,16 @@ function LoginForm() {
       const result = await apiEmailLogin({ email, password });
       setInMemoryToken(result.access_token, result.expires_at);
       setStoredAppMode("designer");
-      router.push(invite ? `/invites/${invite}` : next);
+      // Use a full page reload so the browser attaches the session cookie set by
+      // the API server on the initial request, allowing the middleware auth check
+      // to pass. router.push() (client-side navigation) can race against the
+      // cookie being available in the Next.js middleware and end up rewriting
+      // back to /login. Loading state is intentionally left as true so the
+      // button stays disabled until the page unloads.
+      window.location.href = invite ? `/invites/${invite}` : next;
     } catch (err) {
-      setError(err instanceof AuthError ? "邮箱或密码错误，请重试" : "登录失败，请稍后重试");
-    } finally {
       setLoading(false);
+      setError(err instanceof AuthError ? "邮箱或密码错误，请重试" : "登录失败，请稍后重试");
     }
   }
 
