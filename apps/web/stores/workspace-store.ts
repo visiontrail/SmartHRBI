@@ -374,7 +374,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         grid: {
           ...page.grid,
           rows: page.grid.rows.map((row) =>
-            row.id === rowId ? { ...row, height: clamp(height, 120, 800) } : row
+            row.id === rowId ? { ...row, height: clamp(height, 40, 800) } : row
           ),
         },
       })),
@@ -695,7 +695,7 @@ function normalizeWebDesignLayout(value: unknown): WebDesignLayout {
     rows: Array.isArray(layout.grid?.rows) && layout.grid.rows.length
       ? layout.grid.rows.map((row, index) => ({
           id: String(row.id || `row-${index + 1}`),
-          height: clamp(Number(row.height ?? 400), 120, 800),
+          height: clamp(Number(row.height ?? 400), 40, 800),
         }))
       : DEFAULT_WEB_DESIGN_LAYOUT.grid.rows,
   };
@@ -923,7 +923,7 @@ function normalizeGrid(grid: WebDesignLayout["grid"]): WebDesignLayout["grid"] {
     rows: Array.isArray(grid.rows) && grid.rows.length
       ? grid.rows.map((row, index) => ({
           id: String(row.id || `row-${index + 1}`),
-          height: clamp(Number(row.height ?? 400), 120, 800),
+          height: clamp(Number(row.height ?? 400), 40, 800),
         }))
       : cloneGrid(DEFAULT_WEB_DESIGN_LAYOUT.grid).rows,
   };

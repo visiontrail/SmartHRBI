@@ -325,6 +325,8 @@ export function WebDesignCanvas() {
                     preview={layout.preview}
                     onResize={(colSpan, rowSpan) => resizeZone(zone.id, colSpan, rowSpan)}
                     onRemove={() => removeZone(zone.id)}
+                    maxColumns={activePage.grid.columns}
+                    maxRows={activePage.grid.rows.length}
                   />
                 ))}
                 {(activePage.textZones ?? []).map((zone) => (
@@ -663,12 +665,16 @@ function GridZone({
   preview,
   onResize,
   onRemove,
+  maxColumns,
+  maxRows,
 }: {
   zone: WebDesignZone;
   node?: WorkspaceNode & { data: ChartNodeData };
   preview: boolean;
   onResize: (colSpan: number, rowSpan: number) => void;
   onRemove: () => void;
+  maxColumns: number;
+  maxRows: number;
 }) {
   const { t } = useI18n();
   if (!node) return null;
@@ -685,62 +691,95 @@ function GridZone({
   return (
     <section
       aria-label={t("workspace.webDesign.aria.chartZone", { title: node.data.title })}
-      draggable={!preview}
-      onDragStart={handleDragStart}
       className={cn(
         "relative z-10 overflow-hidden rounded-md border border-[#cfc5b2] bg-white",
-        !preview && "cursor-grab active:cursor-grabbing"
       )}
       style={{
         gridColumn: `${zone.column + 1} / span ${zone.colSpan}`,
         gridRow: `${zone.row + 1} / span ${zone.rowSpan}`,
       }}
     >
-      {!preview && (
-        <div className="absolute right-2 top-2 z-20 flex gap-1 rounded-md bg-white/90 p-1 shadow">
-          <Button
-            aria-label={t("workspace.webDesign.aria.increaseColumnSpan")}
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onResize(zone.colSpan + 1, zone.rowSpan)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            aria-label={t("workspace.webDesign.aria.decreaseColumnSpan")}
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onResize(zone.colSpan - 1, zone.rowSpan)}
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            aria-label={t("workspace.webDesign.aria.increaseRowSpan")}
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onResize(zone.colSpan, zone.rowSpan + 1)}
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            aria-label={t("workspace.webDesign.aria.decreaseRowSpan")}
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onResize(zone.colSpan, zone.rowSpan - 1)}
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            aria-label={t("workspace.webDesign.aria.removeZone")}
-            variant="ghost"
-            size="icon-sm"
-            onClick={onRemove}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+      {!preview ? (
+        <div
+          draggable
+          onDragStart={handleDragStart}
+          className="flex cursor-grab items-center justify-between border-b border-[#eee8dc] bg-[#faf8f4] px-2 py-1 active:cursor-grabbing"
+        >
+          <div className="flex items-center gap-1">
+            <span className="rounded bg-[#ede8de] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#7a6a4f] truncate max-w-[120px]">
+              {node.data.title}
+            </span>
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(Math.max(1, zone.colSpan - 1), zone.rowSpan)}
+                  >
+                    <Minus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.decreaseColumnSpan")}</TooltipContent>
+              </Tooltip>
+              <span className="text-[10px] text-[#555]">{zone.colSpan}col</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(Math.min(maxColumns - zone.column, zone.colSpan + 1), zone.rowSpan)}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.increaseColumnSpan")}</TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(zone.colSpan, Math.max(1, zone.rowSpan - 1))}
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.decreaseRowSpan")}</TooltipContent>
+              </Tooltip>
+              <span className="text-[10px] text-[#555]">{zone.rowSpan}row</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(zone.colSpan, Math.min(maxRows - zone.row, zone.rowSpan + 1))}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.increaseRowSpan")}</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" className="h-5 w-5" onClick={onRemove}>
+                <Trash2 className="h-3 w-3 text-red-400" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("workspace.webDesign.aria.removeZone")}</TooltipContent>
+          </Tooltip>
         </div>
+      ) : (
+        <div className="border-b border-[#eee8dc] px-3 py-2 text-sm font-semibold">{node.data.title}</div>
       )}
-      <div className="border-b border-[#eee8dc] px-3 py-2 text-sm font-semibold">{node.data.title}</div>
       <ChartPreview spec={node.data.spec} height={Math.max(180, zone.rowSpan * 260)} />
     </section>
   );
