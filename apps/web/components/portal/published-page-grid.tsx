@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChartPreview } from "@/components/charts/chart-preview";
-import { fetchPublishedChartData, type PublishedManifest, type PublishedZone } from "@/lib/portal/api";
+import { fetchPublishedChartData, type PublishedManifest, type PublishedTextZone, type PublishedZone } from "@/lib/portal/api";
 import type { ChartSpec } from "@/types/chart";
 import { useI18n } from "@/lib/i18n/context";
 
@@ -49,6 +49,9 @@ export function PublishedPageGrid({
             selected={activeChartId === chartIdFromZone(zone)}
             onSelect={onSelectChart}
           />
+        ))}
+        {(pageLayout.textZones ?? []).map((zone) => (
+          <PublishedTextZoneBlock key={zone.id} zone={zone} />
         ))}
       </div>
     </div>
@@ -107,6 +110,30 @@ export function PublishedChartZone({
         <div className="flex h-full items-center justify-center text-sm text-[#777166]">{t("portal.loadingChart")}</div>
       )}
     </button>
+  );
+}
+
+const PUBLISHED_TEXT_STYLE_MAP: Record<
+  "title" | "subtitle" | "body",
+  string
+> = {
+  title: "text-2xl font-bold leading-tight text-[#2f332f]",
+  subtitle: "text-lg font-semibold leading-snug text-[#4a4842]",
+  body: "text-sm leading-relaxed text-[#555250]",
+};
+
+function PublishedTextZoneBlock({ zone }: { zone: PublishedTextZone }) {
+  const className = PUBLISHED_TEXT_STYLE_MAP[zone.style] ?? PUBLISHED_TEXT_STYLE_MAP.body;
+  return (
+    <div
+      className="overflow-hidden rounded-md border border-[#c8d8f0] bg-[#f5f9ff] p-4"
+      style={{
+        gridColumn: `${zone.column + 1} / span ${zone.colSpan}`,
+        gridRow: `${zone.row + 1} / span ${zone.rowSpan}`,
+      }}
+    >
+      <p className={`whitespace-pre-wrap ${className}`}>{zone.content}</p>
+    </div>
   );
 }
 

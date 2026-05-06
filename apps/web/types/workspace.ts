@@ -91,6 +91,18 @@ export type WebDesignZone = {
   rowSpan: number;
 };
 
+export type WebDesignTextStyle = "title" | "subtitle" | "body";
+
+export type WebDesignTextZone = {
+  id: string;
+  column: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+  content: string;
+  style: WebDesignTextStyle;
+};
+
 export type WebDesignSidebarItem = {
   id: string;
   label: string;
@@ -104,6 +116,7 @@ export type WebDesignPage = {
   title: string;
   grid: WebDesignGridConfig;
   zones: WebDesignZone[];
+  textZones?: WebDesignTextZone[];
 };
 
 export type WebDesignLayout = {

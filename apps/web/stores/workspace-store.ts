@@ -19,6 +19,8 @@ import type {
   WebDesignLayout,
   WebDesignPage,
   WebDesignSidebarItem,
+  WebDesignTextZone,
+  WebDesignTextStyle,
 } from "@/types/workspace";
 
 const DEFAULT_WEB_DESIGN_LAYOUT: WebDesignLayout = {
@@ -87,6 +89,9 @@ type WorkspaceState = {
   moveWebDesignZone: (zoneId: string, column: number, row: number) => void;
   resizeWebDesignZone: (zoneId: string, colSpan: number, rowSpan: number) => void;
   removeWebDesignZone: (zoneId: string) => void;
+  addWebDesignTextZone: (style: WebDesignTextStyle) => void;
+  updateWebDesignTextZone: (zoneId: string, updates: Partial<Omit<WebDesignTextZone, "id">>) => void;
+  removeWebDesignTextZone: (zoneId: string) => void;
   setWebDesignPreview: (preview: boolean) => void;
   setActiveWebDesignPage: (pageId: string) => void;
   addWebDesignSidebarItem: (parentId?: string, labels?: { sectionLabel: string; childLabel: string }) => void;
@@ -453,6 +458,59 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       hasUnsavedChanges: true,
     })),
 
+  addWebDesignTextZone: (style) =>
+    set((state) => {
+      const activePage = getActiveWebDesignPage(state.webDesign);
+      const allZones = [
+        ...activePage.zones.map((z) => ({ column: z.column, row: z.row, colSpan: z.colSpan, rowSpan: z.rowSpan })),
+        ...(activePage.textZones ?? []).map((z) => ({ column: z.column, row: z.row, colSpan: z.colSpan, rowSpan: z.rowSpan })),
+      ];
+      const placement = findNextFreeCell(activePage.grid, allZones);
+      const rows =
+        placement.row < activePage.grid.rows.length
+          ? activePage.grid.rows
+          : [...activePage.grid.rows, { id: `row-${activePage.grid.rows.length + 1}`, height: 200 }];
+      const defaultContent =
+        style === "title" ? "标题" : style === "subtitle" ? "副标题" : "在此输入分析说明...";
+      const newZone: WebDesignTextZone = {
+        id: `text-zone-${Date.now().toString(36)}`,
+        column: placement.column,
+        row: placement.row,
+        colSpan: style === "title" ? activePage.grid.columns : 1,
+        rowSpan: 1,
+        content: defaultContent,
+        style,
+      };
+      return {
+        webDesign: updateActiveWebDesignPage(state.webDesign, (page) => ({
+          ...page,
+          grid: { ...page.grid, rows },
+          textZones: [...(page.textZones ?? []), newZone],
+        })),
+        hasUnsavedChanges: true,
+      };
+    }),
+
+  updateWebDesignTextZone: (zoneId, updates) =>
+    set((state) => ({
+      webDesign: updateActiveWebDesignPage(state.webDesign, (page) => ({
+        ...page,
+        textZones: (page.textZones ?? []).map((zone) =>
+          zone.id === zoneId ? { ...zone, ...updates } : zone
+        ),
+      })),
+      hasUnsavedChanges: true,
+    })),
+
+  removeWebDesignTextZone: (zoneId) =>
+    set((state) => ({
+      webDesign: updateActiveWebDesignPage(state.webDesign, (page) => ({
+        ...page,
+        textZones: (page.textZones ?? []).filter((zone) => zone.id !== zoneId),
+      })),
+      hasUnsavedChanges: true,
+    })),
+
   setWebDesignPreview: (preview) =>
     set((state) => ({
       webDesign: { ...state.webDesign, preview },
@@ -653,6 +711,26 @@ function normalizeWebDesignLayout(value: unknown): WebDesignLayout {
   });
 }
 
+function findNextFreeCell(
+  grid: WebDesignPage["grid"],
+  zones: { column: number; row: number; colSpan: number; rowSpan: number }[]
+): { column: number; row: number } {
+  const occupied = new Set<string>();
+  for (const zone of zones) {
+    for (let row = zone.row; row < zone.row + zone.rowSpan; row += 1) {
+      for (let column = zone.column; column < zone.column + zone.colSpan; column += 1) {
+        occupied.add(`${column}:${row}`);
+      }
+    }
+  }
+  for (let row = 0; row < grid.rows.length; row += 1) {
+    for (let column = 0; column < grid.columns; column += 1) {
+      if (!occupied.has(`${column}:${row}`)) return { column, row };
+    }
+  }
+  return { column: 0, row: grid.rows.length };
+}
+
 function findNextWebDesignCell(page: Pick<WebDesignPage, "grid" | "zones">): { column: number; row: number } {
   const occupied = new Set<string>();
   for (const zone of page.zones) {
@@ -794,6 +872,7 @@ function ensureWebDesignPages(layout: WebDesignLayout): WebDesignLayout {
         title: existing.title || item.label,
         grid: normalizeGrid(existing.grid ?? fallbackGrid),
         zones: Array.isArray(existing.zones) ? existing.zones : [],
+        textZones: Array.isArray(existing.textZones) ? existing.textZones : [],
       };
     }
     return {
@@ -801,6 +880,7 @@ function ensureWebDesignPages(layout: WebDesignLayout): WebDesignLayout {
       title: item.label,
       grid: cloneGrid(index === 0 ? fallbackGrid : DEFAULT_WEB_DESIGN_LAYOUT.grid),
       zones: index === 0 && Array.isArray(layout.zones) ? layout.zones : [],
+      textZones: [],
     };
   });
   const activePageId = pages.some((page) => page.id === layout.activePageId)
@@ -828,6 +908,7 @@ function normalizePages(
     title: String(page.title || `Section ${index + 1}`),
     grid: normalizeGrid(page.grid ?? fallbackGrid),
     zones: Array.isArray(page.zones) ? page.zones : index === 0 ? fallbackZones : [],
+    textZones: Array.isArray(page.textZones) ? page.textZones : [],
   }));
 }
 

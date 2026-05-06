@@ -27,11 +27,22 @@ export type PublishedManifest = {
   charts: PublishedChartEntry[];
 };
 
+export type PublishedTextZone = {
+  id: string;
+  column: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+  content: string;
+  style: "title" | "subtitle" | "body";
+};
+
 export type PublishedPageLayout = {
   id: string;
   title: string;
   grid: { columns: number; rows: { id: string; height: number }[] };
   zones: PublishedZone[];
+  textZones?: PublishedTextZone[];
 };
 
 export type PublishedZone = {

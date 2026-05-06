@@ -51,7 +51,7 @@ export async function publishWorkspace(
   const chartByNodeId = new Map(chartNodes.map((node) => [node.id, node]));
   const pages = layout.pages?.length
     ? layout.pages
-    : [{ id: layout.activePageId ?? "section-1", title: "Section 1", grid: layout.grid, zones: layout.zones }];
+    : [{ id: layout.activePageId ?? "section-1", title: "Section 1", grid: layout.grid, zones: layout.zones, textZones: [] }];
   const zones = pages.flatMap((page) => page.zones);
   const chartIds = new Set<string>();
   const charts = zones
@@ -80,7 +80,13 @@ export async function publishWorkspace(
       layout: {
         grid: layout.grid,
         zones: layout.zones,
-        pages,
+        pages: pages.map((page) => ({
+          id: page.id,
+          title: page.title,
+          grid: page.grid,
+          zones: page.zones,
+          textZones: page.textZones ?? [],
+        })),
         activePageId: layout.activePageId,
       },
       sidebar: layout.sidebar,

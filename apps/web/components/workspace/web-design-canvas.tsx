@@ -1,21 +1,26 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useMemo, useRef, useState, useEffect, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
+  AlignLeft,
   BotMessageSquare,
   Check,
   ChevronDown,
   ChevronUp,
   Eye,
+  Heading1,
+  Heading2,
   Minus,
   PanelLeft,
   Plus,
   Send,
   Trash2,
+  Type,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChartPreview } from "@/components/charts/chart-preview";
 import { cn } from "@/lib/utils";
@@ -28,7 +33,7 @@ import { ShareDialog } from "@/components/sharing/share-dialog";
 import { useSession } from "@/lib/auth/use-session";
 import { Share2 } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import type { ChartNodeData, WebDesignPage, WebDesignSidebarItem, WebDesignZone, WorkspaceNode } from "@/types/workspace";
+import type { ChartNodeData, WebDesignPage, WebDesignSidebarItem, WebDesignTextStyle, WebDesignTextZone, WebDesignZone, WorkspaceNode } from "@/types/workspace";
 
 const WEB_DESIGN_ZONE_MIME = "application/x-web-design-zone";
 
@@ -44,6 +49,9 @@ export function WebDesignCanvas() {
   const moveZone = useWorkspaceStore((s) => s.moveWebDesignZone);
   const resizeZone = useWorkspaceStore((s) => s.resizeWebDesignZone);
   const removeZone = useWorkspaceStore((s) => s.removeWebDesignZone);
+  const addTextZone = useWorkspaceStore((s) => s.addWebDesignTextZone);
+  const updateTextZone = useWorkspaceStore((s) => s.updateWebDesignTextZone);
+  const removeTextZone = useWorkspaceStore((s) => s.removeWebDesignTextZone);
   const setPreview = useWorkspaceStore((s) => s.setWebDesignPreview);
   const activePage = getActivePage(layout);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -103,7 +111,10 @@ export function WebDesignCanvas() {
     const node = chartNodes.find((item) => item.id === zone.nodeId);
     return !node || extractChartRows(node.data).length === 0;
   });
-  const publishZoneCount = pages.reduce((sum, page) => sum + page.zones.length, 0);
+  const publishZoneCount = pages.reduce(
+    (sum, page) => sum + page.zones.length + (page.textZones?.length ?? 0),
+    0
+  );
 
   const handlePublishClick = () => {
     setPublishPanelOpen((prev) => !prev);
@@ -213,6 +224,7 @@ export function WebDesignCanvas() {
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+                <AddTextZoneMenu onAdd={addTextZone} t={t} />
               </>
             )}
           </div>
@@ -313,6 +325,18 @@ export function WebDesignCanvas() {
                     onRemove={() => removeZone(zone.id)}
                   />
                 ))}
+                {(activePage.textZones ?? []).map((zone) => (
+                  <TextGridZone
+                    key={zone.id}
+                    zone={zone}
+                    preview={layout.preview}
+                    onUpdate={(updates) => updateTextZone(zone.id, updates)}
+                    onResize={(colSpan, rowSpan) => updateTextZone(zone.id, { colSpan, rowSpan })}
+                    onRemove={() => removeTextZone(zone.id)}
+                    maxColumns={activePage.grid.columns}
+                    maxRows={activePage.grid.rows.length}
+                  />
+                ))}
               </div>
               {!layout.preview &&
                 activePage.grid.rows.map((row, index) => {
@@ -346,6 +370,226 @@ export function WebDesignCanvas() {
         />
       )}
     </div>
+  );
+}
+
+function AddTextZoneMenu({
+  onAdd,
+  t,
+}: {
+  onAdd: (style: WebDesignTextStyle) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const options: { style: WebDesignTextStyle; label: string; icon: ReactNode; desc: string }[] = [
+    {
+      style: "title",
+      label: t("workspace.webDesign.textZone.title"),
+      icon: <Heading1 className="h-4 w-4" />,
+      desc: t("workspace.webDesign.textZone.titleDesc"),
+    },
+    {
+      style: "subtitle",
+      label: t("workspace.webDesign.textZone.subtitle"),
+      icon: <Heading2 className="h-4 w-4" />,
+      desc: t("workspace.webDesign.textZone.subtitleDesc"),
+    },
+    {
+      style: "body",
+      label: t("workspace.webDesign.textZone.body"),
+      icon: <AlignLeft className="h-4 w-4" />,
+      desc: t("workspace.webDesign.textZone.bodyDesc"),
+    },
+  ];
+
+  return (
+    <div className="relative" ref={ref}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
+            <Type className="h-3.5 w-3.5" />
+            {t("workspace.webDesign.addTextZone")}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{t("workspace.webDesign.addTextZoneTooltip")}</TooltipContent>
+      </Tooltip>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-52 rounded-md border border-[#d8d1c1] bg-white shadow-md">
+          {options.map((opt) => (
+            <button
+              key={opt.style}
+              type="button"
+              className="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-[#f7f4eb]"
+              onClick={() => {
+                onAdd(opt.style);
+                setOpen(false);
+              }}
+            >
+              <span className="mt-0.5 text-[#996b35]">{opt.icon}</span>
+              <span>
+                <span className="block text-sm font-medium text-[#2f332f]">{opt.label}</span>
+                <span className="block text-xs text-[#777166]">{opt.desc}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TEXT_ZONE_STYLE_MAP: Record<
+  WebDesignTextStyle,
+  { className: string; placeholder: string }
+> = {
+  title: {
+    className: "text-2xl font-bold leading-tight text-[#2f332f]",
+    placeholder: "标题",
+  },
+  subtitle: {
+    className: "text-lg font-semibold leading-snug text-[#4a4842]",
+    placeholder: "副标题",
+  },
+  body: {
+    className: "text-sm leading-relaxed text-[#555250]",
+    placeholder: "在此输入分析说明...",
+  },
+};
+
+function TextGridZone({
+  zone,
+  preview,
+  onUpdate,
+  onResize,
+  onRemove,
+  maxColumns,
+  maxRows,
+}: {
+  zone: WebDesignTextZone;
+  preview: boolean;
+  onUpdate: (updates: Partial<Omit<WebDesignTextZone, "id">>) => void;
+  onResize: (colSpan: number, rowSpan: number) => void;
+  onRemove: () => void;
+  maxColumns: number;
+  maxRows: number;
+}) {
+  const { t } = useI18n();
+  const styleConfig = TEXT_ZONE_STYLE_MAP[zone.style] ?? TEXT_ZONE_STYLE_MAP.body;
+
+  return (
+    <section
+      aria-label={t("workspace.webDesign.aria.textZone")}
+      className={cn(
+        "relative z-10 overflow-hidden rounded-md border border-[#c8d8f0] bg-[#f5f9ff]",
+        !preview && "ring-1 ring-[#c8d8f0]"
+      )}
+      style={{
+        gridColumn: `${zone.column + 1} / span ${zone.colSpan}`,
+        gridRow: `${zone.row + 1} / span ${zone.rowSpan}`,
+      }}
+    >
+      {!preview && (
+        <div className="flex items-center justify-between border-b border-[#d0e4f8] bg-[#eaf3ff] px-2 py-1">
+          <div className="flex items-center gap-1">
+            <span className="rounded bg-[#d0e4f8] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3a6ea8]">
+              {t(`workspace.webDesign.textZone.${zone.style}`)}
+            </span>
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(Math.max(1, zone.colSpan - 1), zone.rowSpan)}
+                  >
+                    <Minus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.decreaseColumnSpan")}</TooltipContent>
+              </Tooltip>
+              <span className="text-[10px] text-[#555]">{zone.colSpan}col</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(Math.min(maxColumns - zone.column, zone.colSpan + 1), zone.rowSpan)}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.increaseColumnSpan")}</TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(zone.colSpan, Math.max(1, zone.rowSpan - 1))}
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.decreaseRowSpan")}</TooltipContent>
+              </Tooltip>
+              <span className="text-[10px] text-[#555]">{zone.rowSpan}row</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-5 w-5"
+                    onClick={() => onResize(zone.colSpan, Math.min(maxRows - zone.row, zone.rowSpan + 1))}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("workspace.webDesign.aria.increaseRowSpan")}</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" className="h-5 w-5" onClick={onRemove}>
+                <Trash2 className="h-3 w-3 text-red-400" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("workspace.webDesign.aria.removeTextZone")}</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+      <div className="h-full p-3">
+        {preview ? (
+          <p className={cn("whitespace-pre-wrap", styleConfig.className)}>{zone.content}</p>
+        ) : (
+          <Textarea
+            className={cn(
+              "h-full min-h-[80px] w-full resize-none border-none bg-transparent p-0 shadow-none focus-visible:ring-0",
+              styleConfig.className
+            )}
+            placeholder={styleConfig.placeholder}
+            value={zone.content}
+            onChange={(e) => onUpdate({ content: e.target.value })}
+          />
+        )}
+      </div>
+    </section>
   );
 }
 
